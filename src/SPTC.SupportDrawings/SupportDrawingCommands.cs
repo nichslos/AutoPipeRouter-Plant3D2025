@@ -14,7 +14,7 @@ using WinForms = System.Windows.Forms;
 namespace SPTC.SupportDrawings;
 
 /// <summary>
-/// SPTC SUPPORT DRAWINGS - REV 11.
+/// SPTC SUPPORT DRAWINGS - REV 12.
 /// Clones a selected support into its own DWG and arranges four true 3D model
 /// viewports on an A3-like paper-space sheet. It is not a flattened fabrication drawing.
 /// </summary>
@@ -22,7 +22,7 @@ public sealed class SupportDrawingCommands : IExtensionApplication
 {
     public void Initialize() =>
         AcadApp.DocumentManager.MdiActiveDocument?.Editor.WriteMessage(
-            "\nSPTC Support Drawings REV11. Run SPTC_ORTHOAUTOPLAN for per-axis OrthoCube and source project verification. SPTC_SUPPORT2D remains interactive.");
+            "\nSPTC Support Drawings REV12. Corrected Piping-part registration validation in SPTC_ORTHOAUTOPLAN; SPTC_SUPPORT2D remains interactive.");
     public void Terminate() { }
 
     [CommandMethod("SPTC_SUPPORTEXPORT", CommandFlags.Modal)]
