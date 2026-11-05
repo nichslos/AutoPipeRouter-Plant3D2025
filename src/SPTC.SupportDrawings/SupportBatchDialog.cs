@@ -22,7 +22,7 @@ internal sealed class SupportBatchDialog : WinForms.Form
 
     public SupportBatchDialog(IReadOnlyList<(ObjectId id, string name)> supports)
     {
-        Text = "SPTC Support Drawing Batch Export - REV 02";
+        Text = "SPTC Support Drawing Batch Export - REV 03";
         Font = new System.Drawing.Font("Segoe UI", 9f);
         StartPosition = WinForms.FormStartPosition.CenterScreen;
         ClientSize = new Size(660, 505);
