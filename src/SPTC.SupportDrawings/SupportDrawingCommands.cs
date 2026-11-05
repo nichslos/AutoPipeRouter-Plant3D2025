@@ -14,7 +14,7 @@ using WinForms = System.Windows.Forms;
 namespace SPTC.SupportDrawings;
 
 /// <summary>
-/// SPTC SUPPORT DRAWINGS - REV 01.
+/// SPTC SUPPORT DRAWINGS - REV 02.
 /// Clones a selected support into its own DWG and arranges four true 3D model
 /// viewports on an A3-like paper-space sheet. It is not a flattened fabrication drawing.
 /// </summary>
@@ -22,7 +22,7 @@ public sealed class SupportDrawingCommands : IExtensionApplication
 {
     public void Initialize() =>
         AcadApp.DocumentManager.MdiActiveDocument?.Editor.WriteMessage(
-            "\nSPTC Support Drawings REV01 ready. SPTC_SUPPORTEXPORT or SPTC_SUPPORTBATCH.");
+            "\nSPTC Support Drawings REV02 ready. SPTC_SUPPORTEXPORT, SPTC_SUPPORTBATCH, SPTC_SUPPORTMANAGER.");
     public void Terminate() { }
 
     [CommandMethod("SPTC_SUPPORTEXPORT", CommandFlags.Modal)]
@@ -58,6 +58,9 @@ public sealed class SupportDrawingCommands : IExtensionApplication
         catch (System.Exception e) { ed.WriteMessage("\nSupport export failed: " + e.Message); }
     }
 
+    [CommandMethod("SPTC_SUPPORTMANAGER", CommandFlags.Modal)]
+    public void OpenManager() => ExportBatch();
+
     [CommandMethod("SPTC_SUPPORTBATCH", CommandFlags.Modal)]
     public void ExportBatch()
     {
@@ -85,19 +88,17 @@ public sealed class SupportDrawingCommands : IExtensionApplication
             ed.WriteMessage("\nNo block inserts selected. For loose steel members, use SPTC_SUPPORTEXPORT.");
             return;
         }
-        using var picker = new WinForms.FolderBrowserDialog
-        {
-            Description = "Select the output folder for support DWG sheets"
-        };
-        if (picker.ShowDialog() != WinForms.DialogResult.OK) return;
+        using var dialog = new SupportBatchDialog(list);
+        if (dialog.ShowDialog() != WinForms.DialogResult.OK) return;
 
         int ok = 0, errors = 0;
-        for (int i = 0; i < list.Count; i++)
+        foreach (int index in dialog.CheckedIndices)
         {
-            var selected = list[i];
+            var selected = list[index];
             string name = SafeFilename(selected.name);
-            string output = Path.Combine(picker.SelectedPath, string.Format(
-                CultureInfo.InvariantCulture, "SUPPORT_{0:000}_{1}.dwg", i + 1, name));
+            string prefix = SafeFilename(dialog.Prefix);
+            string output = Path.Combine(dialog.OutputFolder, string.Format(
+                CultureInfo.InvariantCulture, "{0}_{1:000}_{2}.dwg", prefix, index + 1, name));
             if (File.Exists(output))
             {
                 ed.WriteMessage("\nSKIPPED, already exists: " + output);
@@ -107,7 +108,7 @@ public sealed class SupportDrawingCommands : IExtensionApplication
             try
             {
                 SheetExporter.Export(doc.Database, new[] { selected.id }, output,
-                    string.Format(CultureInfo.InvariantCulture, "SUPPORT {0:000} - {1}", i + 1, selected.name));
+                    string.Format(CultureInfo.InvariantCulture, "SUPPORT {0:000} - {1}", index + 1, selected.name));
                 ok++;
                 ed.WriteMessage("\nCREATED " + output);
             }
@@ -180,17 +181,12 @@ internal static class SheetExporter
             DrawRect(tx, paper, 8, 8, A3Width - 8, A3Height - 8);
             DrawLine(tx, paper, 8, 42, A3Width - 8, 42);
             DrawLine(tx, paper, 265, 8, 265, 42);
-            DrawLine(tx, paper, 345, 8, 345, 42);
-            DrawLine(tx, paper, 8, 27, 412, 27);
-            AddText(tx, paper, "SPTC  |  PIPE SUPPORT DRAWING  |  REV 01", 12, 32, 3.6);
+            DrawLine(tx, paper, 8, 27, 265, 27);
+            AddText(tx, paper, "SPTC  |  PIPE SUPPORT DRAWING  |  REV 02", 12, 32, 3.6);
             AddText(tx, paper, Crop(title, 43), 12, 19, 3.5);
             AddText(tx, paper, string.Format(CultureInfo.InvariantCulture,
-                "OVERALL SIZE (DWG UNITS): X={0:0.##}  Y={1:0.##}  Z={2:0.##}",
+                "ENVELOPE (DWG units): X={0:0.##}  Y={1:0.##}  Z={2:0.##}",
                 model.SizeX, model.SizeY, model.SizeZ), 12, 12, 2.8);
-            AddText(tx, paper, "MODEL VIEWPORTS", 269, 31, 2.7);
-            AddText(tx, paper, "NOT FLATTENED 2D", 269, 19, 2.4);
-            AddText(tx, paper, "A3 / 420 x 297", 348, 31, 2.5);
-            AddText(tx, paper, "VERIFY BEFORE USE", 348, 19, 2.5);
             AddText(tx, paper, "TOP", 20, 277, 3);
             AddText(tx, paper, "SIDE", 225, 277, 3);
             AddText(tx, paper, "FRONT", 20, 141, 3);
@@ -200,6 +196,7 @@ internal static class SheetExporter
             AddViewport(tx, paper, model, "SIDE", 312, 209, 183, 125, new Vector3d(1, 0, 0));
             AddViewport(tx, paper, model, "FRONT", 108, 91, 183, 82, new Vector3d(0, -1, 0));
             AddViewport(tx, paper, model, "ISO", 312, 91, 183, 82, new Vector3d(1, -1, 1));
+            SupportSheetAnnotations.Add(tx, paper, model, source.Insunits.ToString(), itemCounts);
             tx.Commit();
         }
 
