@@ -1,0 +1,39 @@
+name: Build AutoPipeRouter DLL
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compile:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout project
+        uses: actions/checkout@v4
+      - name: Install .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Run route geometry tests
+        shell: pwsh
+        run: dotnet run --project tests/GeometrySmokeTests/GeometrySmokeTests.csproj --configuration Release
+      - name: Compile AutoPipeRouter
+        shell: pwsh
+        run: dotnet build src/SPTC.AutoRoute/SPTC.AutoRoute.csproj --configuration Release
+      - name: Check binary exists
+        shell: pwsh
+        run: |
+          $dll = "src/SPTC.AutoRoute/bin/Release/net8.0-windows/AutoPipeRouter.dll"
+          if (-not (Test-Path $dll)) { throw "AutoPipeRouter.dll was not created." }
+          Get-Item $dll | Select-Object FullName,Length
+      - name: Upload compiled DLL
+        uses: actions/upload-artifact@v4
+        with:
+          name: AutoPipeRouter-Plant3D2025-net8
+          path: src/SPTC.AutoRoute/bin/Release/net8.0-windows/AutoPipeRouter.dll
+          if-no-files-found: error
+          retention-days: 30
