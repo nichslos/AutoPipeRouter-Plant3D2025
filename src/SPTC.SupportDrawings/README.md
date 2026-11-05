@@ -1,45 +1,53 @@
-# SPTC Support Drawings — REV 02
+# SPTC Support Drawings — REV 03
 
-**Target:** AutoCAD Plant 3D 2025 with a **.NET 8** runtime, Windows x64.
+**Target:** AutoCAD Plant 3D 2025 with the **.NET 8** runtime, Windows x64.
 
-This is original prototype code for the kind of automated support drawing export shown in the example video. It does not reproduce or include commercial third-party source code.
+REV 03 adds **read-only support entity auditing** and a native-class identification *candidate* report while keeping all REV 02 drawing export features. This is an original development prototype for the workflow shown in the example video, **not** a copy of the commercial tool.
 
 ## Commands
 
-| Command | Purpose |
-| --- | --- |
-| \`SPTC_SUPPORTEXPORT\` | Select the objects that form one support, choose an output DWG filename, and export. |
-| \`SPTC_SUPPORTBATCH\` | Select support block inserts, review a checked list, choose a destination and file prefix, export selected supports as separate DWGs. |
-| \`SPTC_SUPPORTMANAGER\` | Alias to open the same batch selection and export interface. |
+| Command | Operation |
+|---|---|
+| `SPTC_SUPPORTEXPORT` | Select one support assembly, choose the DWG output, export support model, four model viewports, envelope annotations and CSV sidecars. |
+| `SPTC_SUPPORTBATCH` | Export selected support **block references** through the selection/filter dialog (one DWG per selected block). |
+| `SPTC_SUPPORTMANAGER` | Alias to open the batch review/export dialog. |
+| **`SPTC_SUPPORTINSPECT`** | **New:** Select support objects or support block inserts and save a detailed, read-only `*.csv` object-class audit. |
 
-## REV 02 enhancements
+### New REV 03 audit fields
 
-- A3-style paper-space drawing with four **live 3D model viewports**: TOP, FRONT, SIDE, and ISO.
-- Dimension-style **overall envelope callouts** for X, Y, and Z on orthographic views. Callouts are paper-space graphics using the support's world-axis-aligned bounding box; **not associative fabrication dimensions**. They are not guaranteed to align precisely with visible edges in viewport projections.
-- Compact drawing-side **object type / layer / count schedule**. All types and counts are included in \`*_object_inventory.csv\`. This schedule is **not a materials BOM**.
-- An optional \`*_attribute_material_register.csv\`, only when a selected block contains one of the recognized literal attributes \`PART_NO\`, \`PARTNO\`, \`ITEM_NO\`, \`ITEM\`, \`DESCRIPTION\`, \`DESC\`, \`MATERIAL\`, \`MAT\`, \`MATERIAL_GRADE\`, \`GRADE\`, \`LENGTH\`, \`CUT_LENGTH\`, \`QTY\`, \`QUANTITY\`. All entries come directly from block attributes. Missing data is left blank; no material or quantities are inferred. This is **not** a calculated cut list.
-- Batch dialog with Select All / Clear, selection review, output-folder picker, and filename prefix.
+The inspection report saves: selected entity handle, source block instance handle when relevant, managed type, underlying RX object class, DXF name, CAD layer, block name, geometry scope, entity classification candidate, selected-object bounding extents when available, explicit block attributes, and the source DWG drawing units.
 
-## Install
+- **SELECTED** rows refer to the actual selected objects in the source drawing.
+- **BLOCK_DEFINITION_MEMBER** rows reflect **one level of nested block definition entities** for a selected block, with no instance-transformed extents; they **do not** represent a full flattened instance tree.
+- Class labels such as `PLANT_STRUCTURE_MEMBER_CANDIDATE`, `PLANT_SUPPORT_CANDIDATE`, and `SUPPORT_NAMING_CANDIDATE` are string-based **hints**, not a validated link to Plant 3D PnP support identity.
+- No fabrication material or native Plant 3D database values are inferred from class or layer naming.
+- The command does **not** change the source DWG.
 
-1. Open the GitHub Actions successful run for **Build SPTC Support Drawings DLL**; download the REV 02 build artifact.
-2. Extract \`SPTC.SupportDrawings.dll\`.
-3. Make a backup and open a **test** drawing in Plant 3D 2025.
-4. Enter \`NETLOAD\` and select the extracted DLL. If you previously loaded REV 01 in the same Plant 3D process, **restart Plant 3D first** to avoid older assembly/command registration.
-5. Use \`SPTC_SUPPORTEXPORT\` or \`SPTC_SUPPORTBATCH\` / \`SPTC_SUPPORTMANAGER\`.
-6. Open the exported DWG, switch to its paper-space layout, and check the four viewports, annotations, schedule, and CSV(s).
+Single and batch exports automatically attempt to write an additional `*_entity_audit.csv` next to each DWG (in addition to REV 02 `*_object_inventory.csv` and the optional `*_attribute_material_register.csv`).
 
-## Critical engineering limitations
+## Installation
 
-- The output DWG still contains **3D geometry shown through viewports**, not flattened 2D linework.
-- Overall callouts are non-associative, envelope-based *world-axis* sizes, not dimension entities snapped to actual projected features. View arrows, dimensions, origin and scale must be checked.
-- No automatic cut lengths, hole dimensions, welding symbols, load or structural checks, or validated fabrication BOM.
-- Native/custom Plant 3D/proxy objects may not WBLOCK cleanly; check exported views and object visibility. Source drawing is not modified.
-- The sheet is an A3-shaped title block in paper space; plot configuration/ISO A3 device setup may still be required.
-- Batch mode treats each selected **BLOCK INSERT** as one support. It does not automatically discover unblocked support assemblies.
-- No native Plant 3D project drawing registration or hidden-line extraction is provided.
-- **Build success is not proof of runtime correctness or engineering accuracy.** Test in your installed Plant 3D 2025 before production use.
+1. Download **SPTC-SupportDrawings-Plant3D2025-REV03** from the successful GitHub Actions build and extract `SPTC.SupportDrawings.dll`.
+2. **Restart** Plant 3D if REV 01/REV 02 was previously loaded (a .NET assembly with the same identity cannot reliably be replaced in an active application session).
+3. Open a backup Plant 3D 2025 test drawing.
+4. Type `NETLOAD`, select the REV 03 DLL.
+5. Test `SPTC_SUPPORTINSPECT` with one native pipe support, one structural member, and one regular AutoCAD block, then examine the CSV. Test the existing export commands and inspect the generated DWG + CSV outputs.
 
-## Recommended REV 03
+### .NET/SDK compatibility
 
-Feature detection on actual support components, dimensional associativity / 2D projected linework, configurable DWG template, fuller attribute-based material takeoff, and a dimension review dialog.
+The separate Autodesk SDK ZIP uploaded for reference contained several .NET 10-targeted managed assemblies. The working REV 02 application assemblies and plugin are **.NET 8**, so REV 03 **does not** reference incompatible .NET 10 SDK binaries or redistribute Autodesk DLLs. It uses the AutoCAD 2025 .NET API package already employed by REV 02.
+
+Actual native Plant 3D support ownership, support-to-pipe associations, part properties and authoritative BOM retrieval require the matching **.NET 8 Plant 3D managed assemblies** from the installed application and real-model validation. Until those are available, REV 03 is an API-discovery/diagnostic step.
+
+## Engineering limitations retained from REV 02
+
+- The drawing shows the selected **3D model through four paper-space viewports**, not projected 2D manufacturing geometry.
+- Overall annotations indicate **axis-aligned envelope extents**, not associative fabrication dimensions or precise view-part measurement chains.
+- Inventory shows entity types and layers; attribute register records explicitly stored values only. Neither is a validated material BOM.
+- Batch mode only treats each selected block insert as one support, not arbitrary loose-member assemblies.
+- Some native Plant 3D proxy/custom objects may fail to WBLOCK or expose geometric extents.
+- A successful cloud build cannot confirm in-application operation. Verify on actual supports and keep REV 02 available for rollback.
+
+## Next engineering milestone
+
+Use real entity-audit results from REV 03 to map support types to the compatible Plant 3D API, then implement true projected 2D linework, dimension features, and checked fabrication schedules in a later revision.
