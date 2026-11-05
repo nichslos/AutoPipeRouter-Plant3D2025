@@ -9,7 +9,7 @@ using Autodesk.AutoCAD.Geometry;
 namespace SPTC.SupportDrawings;
 
 /// <summary>
-/// REV05: extracts line/face edges, samples general CAD curves, and attempts
+/// REV06: extracts line/face edges, samples general CAD curves, and attempts
 /// nondestructive entity decomposition before writing real 2D AutoCAD
 /// line entities in three orthographic model-space views. Native piping solids,
 /// curves, ACIS surfaces and other unsupported entities are skipped and reported.
@@ -69,7 +69,7 @@ internal static class Support2DExporter
                 {
                     OrthoPlane view = views[index];
                     string layer = "SPTC_2D_" + view.ToString().ToUpperInvariant();
-                    CreateLayer(output, transaction, layer, (short)(index + 1));
+                    ObjectId layerId = CreateLayer(output, transaction, layer, (short)(index + 1));
 
                     foreach (SketchSegment3 edge in geometry)
                     {
@@ -81,10 +81,13 @@ internal static class Support2DExporter
                             continue;
                         }
 
-                        var line = new Line(new Point3d(a.X, a.Y, 0), new Point3d(b.X, b.Y, 0))
-                        { Layer = layer };
+                        // REV06 eKeyNotFound FIX: do NOT set a layer by its name while
+                        // the new LINE is detached from output. AutoCAD may resolve
+                        // that name in the active source DWG, not in this new database.
+                        var line = new Line(new Point3d(a.X, a.Y, 0), new Point3d(b.X, b.Y, 0));
                         model.AppendEntity(line);
                         transaction.AddNewlyCreatedDBObject(line, true);
+                        line.LayerId = layerId;
                         generated++;
                     }
 
@@ -110,7 +113,7 @@ internal static class Support2DExporter
                 SketchPoint2 titleOrigin = Support2DMath.Project(
                     new SketchPoint3(bounds.MinX, bounds.MinY, bounds.MinZ),
                     bounds, OrthoPlane.Top, gap);
-                AddText(transaction, model, "SPTC REV05 - ORTHOGRAPHIC LINEWORK / APPROX CURVES",
+                AddText(transaction, model, "SPTC REV06 - ORTHOGRAPHIC LINEWORK / APPROX CURVES",
                     titleOrigin.X, titleOrigin.Y + bounds.SizeY + textSize * 7, textSize * 1.7);
                 AddText(transaction, model, "NO HIDDEN-LINE REMOVAL / CURVES APPROXIMATE / NOT FOR FABRICATION",
                     titleOrigin.X, titleOrigin.Y + bounds.SizeY + textSize * 4, textSize);
@@ -130,15 +133,16 @@ internal static class Support2DExporter
         Path.Combine(Path.GetDirectoryName(Path.GetFullPath(outputDwg))!,
             Path.GetFileNameWithoutExtension(outputDwg) + "_projection_report.csv");
 
-    private static void CreateLayer(Database database, Transaction transaction, string name, short color)
+    private static ObjectId CreateLayer(Database database, Transaction transaction, string name, short color)
     {
         var layers = (LayerTable)transaction.GetObject(database.LayerTableId, OpenMode.ForRead);
-        if (layers.Has(name)) return;
+        if (layers.Has(name)) return layers[name];
         layers.UpgradeOpen();
         var layer = new LayerTableRecord { Name = name, Color = Autodesk.AutoCAD.Colors.Color.FromColorIndex(
             Autodesk.AutoCAD.Colors.ColorMethod.ByAci, color) };
-        layers.Add(layer);
+        ObjectId layerId = layers.Add(layer);
         transaction.AddNewlyCreatedDBObject(layer, true);
+        return layerId;
     }
 
     private static void AddText(Transaction tx, BlockTableRecord model, string value,
