@@ -34,5 +34,19 @@ bool emptyRejected = false;
 try { Support2DMath.FromSegments(Array.Empty<SketchSegment3>()); }
 catch (ArgumentException) { emptyRejected = true; }
 Assert(emptyRejected, "missing geometry rejected");
-Console.WriteLine("PASS: REV04 bounds, class hints, 2D orthographic geometry, and empty input checks.");
+var nativePlan = NativeOrthoLayout.Build(box, 1.0);
+Assert(nativePlan.Views.Count == 3, "native Ortho plan has TOP FRONT SIDE");
+Assert(nativePlan.PaddedCube.MinX < box.MinX && nativePlan.PaddedCube.MaxZ > box.MaxZ, "native OrthoCube padding");
+Assert(nativePlan.Padding == 30, "10 percent of longest axis");
+Assert(nativePlan.Views[0].Name == "TOP" && nativePlan.Views[1].Name == "FRONT" && nativePlan.Views[2].Name == "SIDE", "view ordering");
+foreach (var view in nativePlan.Views)
+{
+    Assert(view.CandidateScale > 0 && view.CandidateScale <= 1, "valid paper scale " + view.Name);
+    Assert(view.PaperCenterX - view.PaperWidth / 2 > 0 && view.PaperCenterX + view.PaperWidth / 2 < 420, "within A3 sheet " + view.Name);
+    Assert(view.PaperCenterY - view.PaperHeight / 2 > 40 && view.PaperCenterY + view.PaperHeight / 2 < 297, "above title block " + view.Name);
+}
+bool invalidScaleRejected = false;
+try { NativeOrthoLayout.Build(box, 0); } catch (ArgumentOutOfRangeException) { invalidScaleRejected = true; }
+Assert(invalidScaleRejected, "unrecognized source units rejected");
+Console.WriteLine("PASS: REV10 bounds, classifier, projected edges, and native OrthoCube/A3 stage geometry.");
 static void Assert(bool value, string name) { if (!value) throw new Exception("FAIL: "+name); }
