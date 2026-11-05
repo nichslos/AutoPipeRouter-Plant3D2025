@@ -15,6 +15,11 @@ namespace SPTC.SupportDrawings;
 /// curves, ACIS surfaces and other unsupported entities are skipped and reported.
 /// This is NOT a hidden-line drawing or fabrication deliverable.
 /// </summary>
+internal sealed class Support2DGeometryException : InvalidOperationException
+{
+    internal Support2DGeometryException(string message) : base(message) { }
+}
+
 internal static class Support2DExporter
 {
     private sealed record Warning(string Path, string Type, string Reason, bool Approximate = false);
@@ -39,7 +44,7 @@ internal static class Support2DExporter
             string types = string.Join(", ", warnings.Select(x => x.Type).Distinct().Take(6));
             string failedReport = ReportPath(outputDwg);
             WriteReport(failedReport, source.Insunits.ToString(), 0, 0, 0, warnings);
-            throw new InvalidOperationException("No usable 2D edge geometry could be extracted from this selection. " +
+            throw new Support2DGeometryException("No usable 2D edge geometry could be extracted from this selection. " +
                 "Native Plant 3D piping/solids may require orthographic projection. Unsupported: " + types +
                 ". Diagnostic CSV: " + failedReport);
         }
