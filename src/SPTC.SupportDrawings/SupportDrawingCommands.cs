@@ -14,7 +14,7 @@ using WinForms = System.Windows.Forms;
 namespace SPTC.SupportDrawings;
 
 /// <summary>
-/// SPTC SUPPORT DRAWINGS - REV 02.
+/// SPTC SUPPORT DRAWINGS - REV 03.
 /// Clones a selected support into its own DWG and arranges four true 3D model
 /// viewports on an A3-like paper-space sheet. It is not a flattened fabrication drawing.
 /// </summary>
@@ -22,7 +22,7 @@ public sealed class SupportDrawingCommands : IExtensionApplication
 {
     public void Initialize() =>
         AcadApp.DocumentManager.MdiActiveDocument?.Editor.WriteMessage(
-            "\nSPTC Support Drawings REV02 ready. SPTC_SUPPORTEXPORT, SPTC_SUPPORTBATCH, SPTC_SUPPORTMANAGER.");
+            "\nSPTC Support Drawings REV03 ready. Commands: SPTC_SUPPORTEXPORT, SPTC_SUPPORTBATCH, SPTC_SUPPORTMANAGER, SPTC_SUPPORTINSPECT.");
     public void Terminate() { }
 
     [CommandMethod("SPTC_SUPPORTEXPORT", CommandFlags.Modal)]
@@ -56,6 +56,42 @@ public sealed class SupportDrawingCommands : IExtensionApplication
             ed.WriteMessage("\nOpen the DWG layout and VERIFY geometry, units, orientation, and all dimensions.");
         }
         catch (System.Exception e) { ed.WriteMessage("\nSupport export failed: " + e.Message); }
+    }
+
+    [CommandMethod("SPTC_SUPPORTINSPECT", CommandFlags.Modal)]
+    public void Inspect()
+    {
+        Document? doc = AcadApp.DocumentManager.MdiActiveDocument;
+        if (doc == null) return;
+        Editor ed = doc.Editor;
+        PromptSelectionResult result = ed.GetSelection(new PromptSelectionOptions
+        {
+            MessageForAdding = "\nSelect support objects or block inserts to inspect: "
+        });
+        if (result.Status != PromptStatus.OK) return;
+
+        using var dialog = new WinForms.SaveFileDialog
+        {
+            Title = "SPTC - Save Support Entity Audit",
+            Filter = "CSV File (*.csv)|*.csv",
+            FileName = "SPTC_Support_Entity_Audit.csv",
+            DefaultExt = "csv",
+            AddExtension = true,
+            OverwritePrompt = true
+        };
+        if (dialog.ShowDialog() != WinForms.DialogResult.OK) return;
+        try
+        {
+            SupportEntityAudit.Summary summary =
+                SupportEntityAudit.WriteReport(doc.Database, result.Value.GetObjectIds(), dialog.FileName);
+            ed.WriteMessage($"\nSPTC REV03 audit saved: {dialog.FileName}");
+            ed.WriteMessage($"\nSelected entities: {summary.SelectedEntities}; 1-level block members: {summary.DefinitionEntities}; support candidates: {summary.SupportCandidates}; selected without extents: {summary.MissingExtents}.");
+            ed.WriteMessage("\nClassifications are identification hints, not validated Plant 3D support/BOM data.");
+        }
+        catch (System.Exception ex)
+        {
+            ed.WriteMessage("\nSPTC support audit failed: " + ex.Message);
+        }
     }
 
     [CommandMethod("SPTC_SUPPORTMANAGER", CommandFlags.Modal)]
@@ -182,7 +218,7 @@ internal static class SheetExporter
             DrawLine(tx, paper, 8, 42, A3Width - 8, 42);
             DrawLine(tx, paper, 265, 8, 265, 42);
             DrawLine(tx, paper, 8, 27, 265, 27);
-            AddText(tx, paper, "SPTC  |  PIPE SUPPORT DRAWING  |  REV 02", 12, 32, 3.6);
+            AddText(tx, paper, "SPTC  |  PIPE SUPPORT DRAWING  |  REV 03", 12, 32, 3.6);
             AddText(tx, paper, Crop(title, 43), 12, 19, 3.5);
             AddText(tx, paper, string.Format(CultureInfo.InvariantCulture,
                 "ENVELOPE (DWG units): X={0:0.##}  Y={1:0.##}  Z={2:0.##}",
@@ -206,6 +242,9 @@ internal static class SheetExporter
             Path.GetFileNameWithoutExtension(outputDwg) + "_object_inventory.csv");
         WriteInventory(csv, title, source.Insunits.ToString(), model, itemCounts);
         SupportAttributeRegister.WriteIfAvailable(source, selected, outputDwg);
+        string auditCsv = Path.Combine(Path.GetDirectoryName(outputDwg)!,
+            Path.GetFileNameWithoutExtension(outputDwg) + "_entity_audit.csv");
+        SupportEntityAudit.WriteReport(source, selected, auditCsv);
     }
 
     private static string Crop(string s, int max) => s.Length > max ? s[..max] : s;
