@@ -1,53 +1,61 @@
-# SPTC Support Drawings — REV 03
+# SPTC Support Drawings — REV 04
 
-**Target:** AutoCAD Plant 3D 2025 with the **.NET 8** runtime, Windows x64.
+**Target:** AutoCAD Plant 3D 2025, x64, **.NET 8-based installation**.
 
-REV 03 adds **read-only support entity auditing** and a native-class identification *candidate* report while keeping all REV 02 drawing export features. This is an original development prototype for the workflow shown in the example video, **not** a copy of the commercial tool.
+REV 04 adds an explicit **2D orthographic linework export** for supported geometric edges. It preserves all REV 03 drawing commands and audits. This is a **limited geometry prototype**, not a complete support fabrication detailing solution.
 
 ## Commands
 
-| Command | Operation |
-|---|---|
-| `SPTC_SUPPORTEXPORT` | Select one support assembly, choose the DWG output, export support model, four model viewports, envelope annotations and CSV sidecars. |
-| `SPTC_SUPPORTBATCH` | Export selected support **block references** through the selection/filter dialog (one DWG per selected block). |
-| `SPTC_SUPPORTMANAGER` | Alias to open the batch review/export dialog. |
-| **`SPTC_SUPPORTINSPECT`** | **New:** Select support objects or support block inserts and save a detailed, read-only `*.csv` object-class audit. |
+| Command | Description |
+| --- | --- |
+| `SPTC_SUPPORTEXPORT` | Existing support A3-style DWG: cloned 3D support, four live 3D viewports, overall envelope callouts, and sidecar inventories. |
+| `SPTC_SUPPORTBATCH` | Existing batch export: select block inserts, review and export one DWG for each checked block. |
+| `SPTC_SUPPORTMANAGER` | Existing batch manager alias. |
+| `SPTC_SUPPORTINSPECT` | Existing class/handle/layer/property audit CSV for identifying actual support entity types. |
+| **`SPTC_SUPPORT2D`** | **New:** select one support's *supported edge geometry* or supporting blocks and write true 2D AutoCAD `LINE` objects into top, front and side **model-space** views. |
+| **`SPTC_SUPPORT2DBATCH`** | **New:** select separate support blocks, choose them in the batch manager, and write one 2D linework DWG and report per supported block. |
 
-### New REV 03 audit fields
+## 2D export technical scope
 
-The inspection report saves: selected entity handle, source block instance handle when relevant, managed type, underlying RX object class, DXF name, CAD layer, block name, geometry scope, entity classification candidate, selected-object bounding extents when available, explicit block attributes, and the source DWG drawing units.
+The tool projects from the source's world X/Y/Z coordinates into:
 
-- **SELECTED** rows refer to the actual selected objects in the source drawing.
-- **BLOCK_DEFINITION_MEMBER** rows reflect **one level of nested block definition entities** for a selected block, with no instance-transformed extents; they **do not** represent a full flattened instance tree.
-- Class labels such as `PLANT_STRUCTURE_MEMBER_CANDIDATE`, `PLANT_SUPPORT_CANDIDATE`, and `SUPPORT_NAMING_CANDIDATE` are string-based **hints**, not a validated link to Plant 3D PnP support identity.
-- No fabrication material or native Plant 3D database values are inferred from class or layer naming.
-- The command does **not** change the source DWG.
+- TOP: X horizontal, Y vertical.
+- FRONT: X horizontal, Z vertical.
+- SIDE: Y horizontal, Z vertical.
 
-Single and batch exports automatically attempt to write an additional `*_entity_audit.csv` next to each DWG (in addition to REV 02 `*_object_inventory.csv` and the optional `*_attribute_material_register.csv`).
+It recursively expands ordinary AutoCAD block references up to 8 levels, applying each nested instance's transformation, with recursion detection. It supports edges from:
 
-## Installation
+- `LINE`
+- `POLYLINE` with **straight**, non-bulged segments (curved bulges skipped with a warning)
+- simple straight-segment `POLYLINE3D`
+- `3DFACE` (all face perimeter edges, including potentially hidden edges)
 
-1. Download **SPTC-SupportDrawings-Plant3D2025-REV03** from the successful GitHub Actions build and extract `SPTC.SupportDrawings.dll`.
-2. **Restart** Plant 3D if REV 01/REV 02 was previously loaded (a .NET assembly with the same identity cannot reliably be replaced in an active application session).
-3. Open a backup Plant 3D 2025 test drawing.
-4. Type `NETLOAD`, select the REV 03 DLL.
-5. Test `SPTC_SUPPORTINSPECT` with one native pipe support, one structural member, and one regular AutoCAD block, then examine the CSV. Test the existing export commands and inspect the generated DWG + CSV outputs.
+Each drawing contains three separated model-space projected views, labeled layers `SPTC_2D_TOP`, `SPTC_2D_FRONT`, `SPTC_2D_SIDE`, and a warning/title. It exports a CSV file named `*_projection_report.csv` that counts extracted edges, resulting LINE entities, collapsed edges, and unsupported source objects/segments.
 
-### .NET/SDK compatibility
+**Important limitations:**
 
-The separate Autodesk SDK ZIP uploaded for reference contained several .NET 10-targeted managed assemblies. The working REV 02 application assemblies and plugin are **.NET 8**, so REV 03 **does not** reference incompatible .NET 10 SDK binaries or redistribute Autodesk DLLs. It uses the AutoCAD 2025 .NET API package already employed by REV 02.
+- **AutoCAD 3D solids, regions, surfaces, arcs/circles, Plant 3D custom support objects, pipe bodies, and proxy/ACIS geometry are NOT automatically converted to 2D edges.** They are recorded as unsupported. If no convertible linework exists, the command stops without creating a false/empty drawing.
+- Projected 3DFACE perimeter edges may be *hidden* in a true 3D view. This command has **no hidden-line removal or silhouette computation**, so the result is **not** a fabrication-ready orthographic drawing.
+- The geometry comes from actual supported 3D edges, **not** bounding-box guessed shapes. However no projections of unsupported solids are inferred.
+- The overall projected linework envelopes are informative labels, **not associative dimension entities** or verified part dimensions.
+- Projected geometry stays in source DWG units. It does not automatically set up an A3 paper-space layout or plot scale for these 2D-only DWGs.
+- No steel profile recognition, weld symbols, bolt/hole/plate detailing, cut lists, structural checks, authoritative Plant 3D BOM or native project drawing registration.
+- When batch processing, each selected ordinary block insert is treated as a separate support.
+- Success of the GitHub compilation and math tests does not establish performance on your Plant 3D custom object types.
 
-Actual native Plant 3D support ownership, support-to-pipe associations, part properties and authoritative BOM retrieval require the matching **.NET 8 Plant 3D managed assemblies** from the installed application and real-model validation. Until those are available, REV 03 is an API-discovery/diagnostic step.
+## Installation and test
 
-## Engineering limitations retained from REV 02
+1. Download the **SPTC-SupportDrawings-Plant3D2025-REV04** artifact from the successful GitHub Actions workflow.
+2. Extract `SPTC.SupportDrawings.dll`.
+3. **Restart Plant 3D 2025** if any earlier SPTC.SupportDrawings DLL was loaded.
+4. Open a backup test drawing. `NETLOAD` the REV 04 DLL.
+5. Test `SPTC_SUPPORT2D` using a simple 3D line-based or 3DFACE-based support. Check all three resulting model-space views and `_projection_report.csv`.
+6. Select one real native Plant 3D pipe support and test `SPTC_SUPPORTINSPECT` to generate the entity audit; share that CSV and a representative DWG for the native support projection integration.
 
-- The drawing shows the selected **3D model through four paper-space viewports**, not projected 2D manufacturing geometry.
-- Overall annotations indicate **axis-aligned envelope extents**, not associative fabrication dimensions or precise view-part measurement chains.
-- Inventory shows entity types and layers; attribute register records explicitly stored values only. Neither is a validated material BOM.
-- Batch mode only treats each selected block insert as one support, not arbitrary loose-member assemblies.
-- Some native Plant 3D proxy/custom objects may fail to WBLOCK or expose geometric extents.
-- A successful cloud build cannot confirm in-application operation. Verify on actual supports and keep REV 02 available for rollback.
+## Framework compatibility
 
-## Next engineering milestone
+The earlier provided actual Plant 3D 2025 application assemblies target .NET 8; the uploaded SDK archive contains multiple .NET 10-targeted assemblies. REV 04 keeps the functioning .NET 8 AutoCAD API baseline and does not upload Autodesk SDK binaries to GitHub. Native Plant support solid-edge extraction will require a matching .NET 8 Plant 3D SDK or a carefully validated host/runtime migration. See `docs/Plant3D_2025_SDK_REVIEW.md`.
 
-Use real entity-audit results from REV 03 to map support types to the compatible Plant 3D API, then implement true projected 2D linework, dimension features, and checked fabrication schedules in a later revision.
+## Next milestone
+
+Obtain `*_entity_audit.csv` for a representative pipe support and a sample model (DWG or native support object), map its actual Plant 3D entity type, then implement *true solid edge/hidden-line extraction* using an appropriate API or native orthographic workflow and associative fabrication dimensions after verification.
