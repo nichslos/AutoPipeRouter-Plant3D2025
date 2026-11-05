@@ -1,61 +1,60 @@
-# SPTC Support Drawings — REV 04
+# SPTC Support Drawings — REV 05
 
-**Target:** AutoCAD Plant 3D 2025, x64, **.NET 8-based installation**.
+**Host:** AutoCAD Plant 3D 2025, x64, installed .NET 8-based runtime.
 
-REV 04 adds an explicit **2D orthographic linework export** for supported geometric edges. It preserves all REV 03 drawing commands and audits. This is a **limited geometry prototype**, not a complete support fabrication detailing solution.
+REV 05 responds to actual user test failures of REV 04, which reported `Unsupported: ImpCurve, Pipe` for a single support and the `424242` block in batch mode.
 
-## Commands
+## Commands (all retained)
 
-| Command | Description |
-| --- | --- |
-| `SPTC_SUPPORTEXPORT` | Existing support A3-style DWG: cloned 3D support, four live 3D viewports, overall envelope callouts, and sidecar inventories. |
-| `SPTC_SUPPORTBATCH` | Existing batch export: select block inserts, review and export one DWG for each checked block. |
-| `SPTC_SUPPORTMANAGER` | Existing batch manager alias. |
-| `SPTC_SUPPORTINSPECT` | Existing class/handle/layer/property audit CSV for identifying actual support entity types. |
-| **`SPTC_SUPPORT2D`** | **New:** select one support's *supported edge geometry* or supporting blocks and write true 2D AutoCAD `LINE` objects into top, front and side **model-space** views. |
-| **`SPTC_SUPPORT2DBATCH`** | **New:** select separate support blocks, choose them in the batch manager, and write one 2D linework DWG and report per supported block. |
+- `SPTC_SUPPORTEXPORT`: Existing 3D support sheet / DWG with multiple viewports, overall bounding envelope and sidecar CSVs.
+- `SPTC_SUPPORTBATCH`: Existing checked block support selection and batch 3D support sheet export.
+- `SPTC_SUPPORTMANAGER`: Existing batch manager.
+- `SPTC_SUPPORTINSPECT`: Existing metadata/class audit CSV.
+- `SPTC_SUPPORT2D`: **REV05** attempt actual 2D model-space orthographic linework extraction.
+- `SPTC_SUPPORT2DBATCH`: **REV05** batch 2D attempt for each selected support block.
 
-## 2D export technical scope
+## Changes for reported REV04 error
 
-The tool projects from the source's world X/Y/Z coordinates into:
+The 2D extractor now tries, in order:
 
-- TOP: X horizontal, Y vertical.
-- FRONT: X horizontal, Z vertical.
-- SIDE: Y horizontal, Z vertical.
+1. Exact supported line/face/polyline geometry, as in REV04.
+2. The general AutoCAD `Curve` API where the CAD object supports it. Its points are sampled into **96 chord segments per curve**, and the projected linework is **approximate**. A warning is written to the `*_projection_report.csv` file.
+3. An in-memory, nondestructive `Entity.Explode` attempt for otherwise unsupported objects. Supported pieces are extracted while unsupported pieces are recorded. It does **not** modify, explode or replace source drawing objects.
+4. If nothing yields real 2D segments, the command records a diagnostic projection report and attempts to generate a **different type of output**: `*_3D_VIEWPORT_FALLBACK.dwg` (plus its existing inventory and audit files). This is a **3D model in viewports**, not flattened 2D output, and is visibly labeled as such.
 
-It recursively expands ordinary AutoCAD block references up to 8 levels, applying each nested instance's transformation, with recursion detection. It supports edges from:
+**The appearance of a `Pipe` object does not guarantee that AutoCAD can explode it into actual 2D line geometry.** The tool never fabricates a rectangle from the bounding box and calls it a pipe. Plant 3D-native support and pipe solids require an approved solid projection / Plant orthographic workflow to create true manufacturing views.
 
-- `LINE`
-- `POLYLINE` with **straight**, non-bulged segments (curved bulges skipped with a warning)
-- simple straight-segment `POLYLINE3D`
-- `3DFACE` (all face perimeter edges, including potentially hidden edges)
+### Output naming
 
-Each drawing contains three separated model-space projected views, labeled layers `SPTC_2D_TOP`, `SPTC_2D_FRONT`, `SPTC_2D_SIDE`, and a warning/title. It exports a CSV file named `*_projection_report.csv` that counts extracted edges, resulting LINE entities, collapsed edges, and unsupported source objects/segments.
+When actual 2D supported linework exists:
+- `SUPPORT_2D_PROJECTION.dwg` or `..._2D.dwg`
+- `*_projection_report.csv` (contains counts for approximate curve sampling, skipped entities, collapsed edges)
 
-**Important limitations:**
+When actual 2D supported linework does **not** exist:
+- A diagnostic `*_projection_report.csv` is still created.
+- If `SheetExporter.Export` can clone the selected native objects, it creates `*_3D_VIEWPORT_FALLBACK.dwg` and standard REV03 sidecar CSVs. The original requested `*_2D.dwg` **is not created**.
+- If even the native model clone fails, it prints the error without writing a false drawing.
 
-- **AutoCAD 3D solids, regions, surfaces, arcs/circles, Plant 3D custom support objects, pipe bodies, and proxy/ACIS geometry are NOT automatically converted to 2D edges.** They are recorded as unsupported. If no convertible linework exists, the command stops without creating a false/empty drawing.
-- Projected 3DFACE perimeter edges may be *hidden* in a true 3D view. This command has **no hidden-line removal or silhouette computation**, so the result is **not** a fabrication-ready orthographic drawing.
-- The geometry comes from actual supported 3D edges, **not** bounding-box guessed shapes. However no projections of unsupported solids are inferred.
-- The overall projected linework envelopes are informative labels, **not associative dimension entities** or verified part dimensions.
-- Projected geometry stays in source DWG units. It does not automatically set up an A3 paper-space layout or plot scale for these 2D-only DWGs.
-- No steel profile recognition, weld symbols, bolt/hole/plate detailing, cut lists, structural checks, authoritative Plant 3D BOM or native project drawing registration.
-- When batch processing, each selected ordinary block insert is treated as a separate support.
-- Success of the GitHub compilation and math tests does not establish performance on your Plant 3D custom object types.
+In batch mode, completion prints the distinct counts: **actual 2D DWGs**, **3D visual fallback DWGs**, and **failed/skipped**. An output is never overwritten automatically.
 
-## Installation and test
+## Installation & test
 
-1. Download the **SPTC-SupportDrawings-Plant3D2025-REV04** artifact from the successful GitHub Actions workflow.
-2. Extract `SPTC.SupportDrawings.dll`.
-3. **Restart Plant 3D 2025** if any earlier SPTC.SupportDrawings DLL was loaded.
-4. Open a backup test drawing. `NETLOAD` the REV 04 DLL.
-5. Test `SPTC_SUPPORT2D` using a simple 3D line-based or 3DFACE-based support. Check all three resulting model-space views and `_projection_report.csv`.
-6. Select one real native Plant 3D pipe support and test `SPTC_SUPPORTINSPECT` to generate the entity audit; share that CSV and a representative DWG for the native support projection integration.
+1. Download the **SPTC-SupportDrawings-Plant3D2025-REV05** artifact from the completed GitHub Actions run, extract `SPTC.SupportDrawings.dll`.
+2. **Close and reopen Plant 3D** to unload REV04.
+3. Open a backed-up test piping/support DWG and `NETLOAD` the new DLL.
+4. Run `SPTC_SUPPORT2D` on an `ImpCurve` element, then separately on a `Pipe`. Confirm the command reports either actual 2D linework or the explicit 3D visual fallback.
+5. Run `SPTC_SUPPORT2DBATCH`, select the same support block `424242`. Inspect the DWG and the CSV. Check the new actual/fallback counters.
+6. Run `SPTC_SUPPORTINSPECT` on the same support and share `*_entity_audit.csv` if further support solids extraction is required.
 
-## Framework compatibility
+## Important limitations
 
-The earlier provided actual Plant 3D 2025 application assemblies target .NET 8; the uploaded SDK archive contains multiple .NET 10-targeted assemblies. REV 04 keeps the functioning .NET 8 AutoCAD API baseline and does not upload Autodesk SDK binaries to GitHub. Native Plant support solid-edge extraction will require a matching .NET 8 Plant 3D SDK or a carefully validated host/runtime migration. See `docs/Plant3D_2025_SDK_REVIEW.md`.
+- A sampled `Curve` is an approximation: not equivalent to exact NURBS, arc or solid contour data; **not appropriate for fabrication dimensions**.
+- Exploded pieces may omit geometry and do not implement hidden-line removal.
+- Actual pipe solids, Plant structure members, and other custom entities may not be decomposable by AutoCAD's generic `Explode` API.
+- REV05 does not invoke the native Plant 3D Ortho API, nor does it automatically create true support-to-pipe fabrication drawings from unsupported solids.
+- All earlier support commands are retained; drawing output and support identity should be checked inside your installed Plant 3D version. Compilation alone is not enough.
+- The package keeps the functioning .NET 8 SDK references. Previously supplied alternate Plant 3D SDK ZIP contains multiple .NET 10-targeted binaries, which must not be mixed into this build.
 
-## Next milestone
+## Longer-term solution for the example video's result
 
-Obtain `*_entity_audit.csv` for a representative pipe support and a sample model (DWG or native support object), map its actual Plant 3D entity type, then implement *true solid edge/hidden-line extraction* using an appropriate API or native orthographic workflow and associative fabrication dimensions after verification.
+Use the native Plant 3D orthographic drawing generation system (or an appropriately tested AutoCAD solid/surface `FLATSHOT` conversion), coupled to support geometry classification and an engineering drawing template. Accurate material cutting lengths and dimensioning require model-specific verification and matching Autodesk API references. This is the intended engineering roadmap, **not** a REV05 capability claim.
