@@ -50,6 +50,14 @@ jobs:
           $src = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoStagingCommands.cs' -Raw
           if ($src -notmatch 'CommandMethod\("SPTC_ORTHOAUTOPLAN"') { throw 'Ortho plan command missing' }
           if ($src -match 'SendStringToExecute|\.SaveAs\(|\.Explode\(') { throw 'Ortho plan must not modify Plant project DWG' }
+      - name: Verify REV11 per-axis cube and read-only registration check
+        shell: pwsh
+        run: |
+          $layout = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoLayout.cs' -Raw
+          if ($layout -notmatch 'double padY\s*=') { throw 'Per-axis narrow support clearance missing' }
+          $check = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoProjectCheck.cs' -Raw
+          if ($check -notmatch 'IsValid3dDrawing') { throw 'Native source registration API check missing' }
+          if ($check -match 'AddPnPDrawingFile\(') { throw 'Preflight must never add project drawings' }
       - name: Compile SPTC Support Drawings
         run: dotnet build src/SPTC.SupportDrawings/SPTC.SupportDrawings.csproj -c Release
       - name: Verify compiled DLL
@@ -61,7 +69,7 @@ jobs:
       - name: Upload DLL artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SPTC-SupportDrawings-Plant3D2025-REV10
+          name: SPTC-SupportDrawings-Plant3D2025-REV11
           path: src/SPTC.SupportDrawings/bin/Release/net8.0-windows/SPTC.SupportDrawings.dll
           retention-days: 30
           if-no-files-found: error
