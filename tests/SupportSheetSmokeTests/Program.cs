@@ -11,5 +11,28 @@ Assert(SupportEntityClassifier.Classify("AutoCAD.Database.Entity", "AcPpDb3dPipe
 Assert(SupportEntityClassifier.Classify("Autodesk.AutoCAD.DatabaseServices.BlockReference", "AcDbBlockReference", "INSERT", "PIPE_SUPPORTS", "PS-101") == "SUPPORT_NAMING_CANDIDATE", "named support block");
 Assert(SupportEntityClassifier.Classify("Autodesk.AutoCAD.DatabaseServices.BlockReference", "AcDbBlockReference", "INSERT", "0", "C-1") == "GENERIC_BLOCK", "non-support block");
 Assert(SupportEntityClassifier.Classify("Autodesk.AutoCAD.DatabaseServices.Line", "AcDbLine", "LINE", "0", "") == "UNCLASSIFIED", "non-support line");
-Console.WriteLine("PASS: REV03 support sheet bounds, viewport fitting, and 5 entity-classification tests.");
+var lines3D = new[]
+{
+    new SketchSegment3(new(10,20,30), new(110,20,30)),
+    new SketchSegment3(new(110,20,30), new(110,220,330))
+};
+BoundingBox3 geometryBox = Support2DMath.FromSegments(lines3D);
+Assert(geometryBox == box, "edge envelope matches expected coordinates");
+double projectionGap = Support2DMath.Gap(box);
+Assert(projectionGap > 0, "positive projection gap");
+SketchPoint2 pointTop = Support2DMath.Project(new(110,220,330),box,OrthoPlane.Top,projectionGap);
+SketchPoint2 pointFront = Support2DMath.Project(new(110,220,330),box,OrthoPlane.Front,projectionGap);
+SketchPoint2 pointSide = Support2DMath.Project(new(110,220,330),box,OrthoPlane.Side,projectionGap);
+Assert(pointTop.X == projectionGap + 100, "top projection x axis");
+Assert(pointTop.Y == 2*projectionGap + 300 + 200, "top projection y axis");
+Assert(pointFront.X == projectionGap + 100 && pointFront.Y == projectionGap + 300, "front projection");
+Assert(pointSide.X == 2*projectionGap + 100 + 200 && pointSide.Y == projectionGap + 300, "side projection");
+SketchPoint2 collapsedA = Support2DMath.Project(new(10,20,30),box,OrthoPlane.Top,projectionGap);
+SketchPoint2 collapsedB = Support2DMath.Project(new(10,20,40),box,OrthoPlane.Top,projectionGap);
+Assert(Support2DMath.DistanceSquared(collapsedA,collapsedB) == 0, "top view Z line collapses correctly");
+bool emptyRejected = false;
+try { Support2DMath.FromSegments(Array.Empty<SketchSegment3>()); }
+catch (ArgumentException) { emptyRejected = true; }
+Assert(emptyRejected, "missing geometry rejected");
+Console.WriteLine("PASS: REV04 bounds, class hints, 2D orthographic geometry, and empty input checks.");
 static void Assert(bool value, string name) { if (!value) throw new Exception("FAIL: "+name); }
