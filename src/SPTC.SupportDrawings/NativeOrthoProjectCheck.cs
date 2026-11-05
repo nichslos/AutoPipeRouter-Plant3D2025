@@ -7,7 +7,7 @@ using System.Reflection;
 namespace SPTC.SupportDrawings;
 
 /// <summary>
-/// REV11 read-only Plant 3D 2025 source registration check, using
+/// REV12 read-only Plant 3D 2025 source registration check, using
 /// OrthoDocUtils.IsValid3dDrawing when the installed Ortho API exposes it.
 /// Never adds, renames, or writes a project drawing.
 /// </summary>
@@ -15,7 +15,8 @@ internal static class NativeOrthoProjectCheck
 {
     internal sealed record Result(string ProjectSummary, string OrthoProjectPart,
         bool SourceRegistrationVerified, string RegistrationStatus,
-        IReadOnlyList<string> ExistingOrthoDrawingNames);
+        IReadOnlyList<string> ExistingOrthoDrawingNames,
+        string ValidationProjectPart, string ValidationApiSignature);
 
     internal static Result Inspect(string sourceDwg)
     {
@@ -40,16 +41,29 @@ internal static class NativeOrthoProjectCheck
 
             object? parts = projectType.GetProperty("ProjectParts")?.GetValue(project);
             object? ortho = null;
+            object? piping = null;
             string orthoType = "(not found)";
+            string pipingType = "(not found)";
             if (parts != null)
             {
                 try
                 {
                     PropertyInfo? item = parts.GetType().GetProperty("Item");
-                    ortho = item?.GetValue(parts, new object[] { "Ortho" });
-                    orthoType = ortho?.GetType().FullName ?? "(not found)";
+                    if (item != null)
+                    {
+                        try { ortho = item.GetValue(parts, new object[] { "Ortho" }); }
+                        catch (System.Exception e) { orthoType = "Ortho lookup: " + e.GetType().Name; }
+                        try { piping = item.GetValue(parts, new object[] { "Piping" }); }
+                        catch (System.Exception e) { pipingType = "Piping lookup: " + e.GetType().Name; }
+                    }
+                    if (ortho != null) orthoType = ortho.GetType().FullName ?? "(unknown)";
+                    if (piping != null) pipingType = piping.GetType().FullName ?? "(unknown)";
                 }
-                catch (System.Exception e) { orthoType = "Ortho project part unavailable: " + e.GetType().Name; }
+                catch (System.Exception e)
+                {
+                    orthoType = "ProjectParts API unavailable: " + e.GetType().Name;
+                    pipingType = orthoType;
+                }
             }
 
             if (ortho != null)
@@ -75,29 +89,55 @@ internal static class NativeOrthoProjectCheck
             Type? docUtils = FindType(loaded, "Autodesk.ProcessPower.P3dProjectParts.OrthoDocUtils");
             if (docUtils == null)
                 return new Result(projectSummary, orthoType, false,
-                    "OrthoDocUtils not loaded. Run normal PLANTORTHOCREATE once, cancel, then retry.", existing);
+                    "OrthoDocUtils is not loaded. Open and cancel PLANTORTHOCREATE, then retry.",
+                    existing, pipingType, "(unavailable)");
 
-            MethodInfo? validation = docUtils.GetMethods(publicStatic).FirstOrDefault(m =>
+            // The actual user-supplied .NET 8 Ortho SDK shows that
+            // PlantApplication.CurrentProject is a PlantProject (NOT Project).
+            // OrthoDocUtils.IsValid3dDrawing requires a P3d ProjectPart Project,
+            // specifically the Piping project part for 3D model registration.
+            MethodInfo[] named = docUtils.GetMethods(publicStatic).Where(m =>
+                m.Name == "IsValid3dDrawing").ToArray();
+            MethodInfo? validation = named.FirstOrDefault(m =>
             {
-                if (m.Name != "IsValid3dDrawing" || m.ReturnType != typeof(bool)) return false;
+                if (m.ReturnType != typeof(bool)) return false;
                 ParameterInfo[] args = m.GetParameters();
                 return args.Length == 3 &&
                     args[0].ParameterType == typeof(string) &&
-                    args[1].ParameterType.IsInstanceOfType(project) &&
-                    args[2].ParameterType.IsByRef;
+                    args[2].ParameterType == typeof(string).MakeByRefType();
             });
+            string available = named.Length == 0 ? "(not exposed)" :
+                string.Join(" | ", named.Select(m => m.ToString()));
+
             if (validation == null)
                 return new Result(projectSummary, orthoType, false,
-                    "Read-only IsValid3dDrawing(string, Project, out string) API unavailable/incompatible.", existing);
+                    "IsValid3dDrawing signature unavailable. Discovered: " + available,
+                    existing, pipingType, available);
 
-            object?[] parameters = {sourceDwg, project, ""};
+            ParameterInfo[] signature = validation.GetParameters();
+            if (piping == null)
+                return new Result(projectSummary, orthoType, false,
+                    "Cannot validate a 3D model without the Piping project part; current PlantProject is not the required Project type.",
+                    existing, pipingType, available);
+
+            Type expected = signature[1].ParameterType;
+            if (!expected.IsInstanceOfType(piping))
+                return new Result(projectSummary, orthoType, false,
+                    "Piping project part does not match native API. Required=" +
+                    expected.FullName + "; actual=" + piping.GetType().FullName + ".",
+                    existing, pipingType, available);
+
+            // Actual native method is read-only; do not add, rename or modify DWGs.
+            object?[] parameters = {sourceDwg, piping, ""};
             object? value = validation.Invoke(null, parameters);
-            bool verified = value is bool b && b;
+            bool verified = value is bool success && success;
             string detail = parameters[2]?.ToString() ?? "";
-            string status = (verified ? "VALID registered 3D source drawing." :
-                "NOT VALIDATED as an eligible registered 3D source drawing.") +
+            string status = (verified ?
+                "VALID: native IsValid3dDrawing accepted the source file using the Piping project part." :
+                "NOT VALIDATED: native IsValid3dDrawing returned false using the Piping project part.") +
                 (string.IsNullOrWhiteSpace(detail) ? "" : " API reason: " + detail);
-            return new Result(projectSummary, orthoType, verified, status, existing);
+            return new Result(projectSummary, orthoType, verified, status,
+                existing, pipingType, available);
         }
         catch (TargetInvocationException e)
         {
@@ -135,5 +175,6 @@ internal static class NativeOrthoProjectCheck
 
     private static Result Fail(string reason) =>
         new("(project unavailable)", "(Ortho project part unavailable)",
-            false, reason, Array.Empty<string>());
+            false, reason, Array.Empty<string>(),
+            "(Piping project part unavailable)", "(native signature not inspected)");
 }
