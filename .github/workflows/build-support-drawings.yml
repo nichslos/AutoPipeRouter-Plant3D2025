@@ -30,6 +30,14 @@ jobs:
           $src = Get-Content 'src/SPTC.SupportDrawings/Support2DExporter.cs' -Raw
           if ($src -notmatch 'line\.LayerId\s*=\s*layerId\s*;') { throw 'REV06 LayerId assignment missing' }
           if ($src -match '\{\s*Layer\s*=\s*layer\s*\}') { throw 'REV05 detached Layer name assignment remains' }
+      - name: Verify REV08 native Plant 3D Ortho command handoff
+        shell: pwsh
+        run: |
+          $src = Get-Content 'src/SPTC.SupportDrawings/SupportDrawingCommands.cs' -Raw
+          if ($src -notmatch 'CommandMethod\("SPTC_SUPPORT2D"') { throw 'Native Ortho command entry missing' }
+          if ($src -notmatch 'SendStringToExecute\("_.PLANTORTHOCREATE ') { throw 'Native Ortho handoff missing' }
+          if ($src -notmatch 'CommandMethod\("SPTC_SUPPORT2DLINEWORK"') { throw 'Legacy linework command missing' }
+          if ($src -notmatch 'CommandMethod\("SPTC_SUPPORT2DBATCH"') { throw 'Legacy batch command missing' }
       - name: Compile SPTC Support Drawings
         run: dotnet build src/SPTC.SupportDrawings/SPTC.SupportDrawings.csproj -c Release
       - name: Verify compiled DLL
@@ -41,7 +49,7 @@ jobs:
       - name: Upload DLL artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SPTC-SupportDrawings-Plant3D2025-REV07
+          name: SPTC-SupportDrawings-Plant3D2025-REV08
           path: src/SPTC.SupportDrawings/bin/Release/net8.0-windows/SPTC.SupportDrawings.dll
           retention-days: 30
           if-no-files-found: error
