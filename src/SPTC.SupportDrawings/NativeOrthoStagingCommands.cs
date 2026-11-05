@@ -17,7 +17,7 @@ using WinForms = System.Windows.Forms;
 namespace SPTC.SupportDrawings;
 
 /// <summary>
-/// REV11 native Ortho staging (no write to Plant 3D project).
+/// REV12 native Ortho staging (no write to Plant 3D project).
 /// The emitted plan captures the model, support handles, padded cube, standard
 /// top/front/side view directions, scale candidates, and sheet positions.
 /// Actual native Ortho registration and GenerateOrthos are NOT called.
@@ -33,13 +33,13 @@ public sealed class NativeOrthoStagingCommands
         string drawing = document.Database.Filename ?? "";
         if (string.IsNullOrWhiteSpace(drawing) || !File.Exists(drawing))
         {
-            editor.WriteMessage("\nREV11: Save the source 3D model DWG in the Plant 3D project first.");
+            editor.WriteMessage("\nREV12: Save the source 3D model DWG in the Plant 3D project first.");
             return;
         }
         double unitToMm = UnitFactor(document.Database.Insunits.ToString());
         if (unitToMm <= 0)
         {
-            editor.WriteMessage("\nREV11: Source DWG units are not a supported physical unit. Set DWG UNITS (e.g., Millimeters) before staging.");
+            editor.WriteMessage("\nREV12: Source DWG units are not a supported physical unit. Set DWG UNITS (e.g., Millimeters) before staging.");
             return;
         }
         PromptSelectionResult selection = editor.GetSelection(new PromptSelectionOptions
@@ -80,22 +80,22 @@ public sealed class NativeOrthoStagingCommands
         }
         if (handles.Count == 0 || !bounds.HasValue)
         {
-            editor.WriteMessage("\nREV11: No selected support has readable 3D extents. No Ortho plan generated.");
+            editor.WriteMessage("\nREV12: No selected support has readable 3D extents. No Ortho plan generated.");
             return;
         }
         NativeOrthoLayout.Plan plan;
         try { plan = NativeOrthoLayout.Build(bounds.Value, unitToMm); }
         catch (System.Exception ex)
         {
-            editor.WriteMessage("\nREV11: Invalid support envelope: " + ex.Message);
+            editor.WriteMessage("\nREV12: Invalid support envelope: " + ex.Message);
             return;
         }
 
         using var save = new WinForms.SaveFileDialog
         {
-            Title = "SPTC REV11 — Save native Ortho automation plan (non-mutating)",
+            Title = "SPTC REV12 — Save native Ortho automation plan (non-mutating)",
             Filter = "JSON plan (*.json)|*.json",
-            FileName = "SPTC_ORTHO_AUTOPLAN_REV11.json",
+            FileName = "SPTC_ORTHO_AUTOPLAN_REV12.json",
             DefaultExt = "json", AddExtension = true, OverwritePrompt = true
         };
         if (save.ShowDialog() != WinForms.DialogResult.OK) return;
@@ -104,7 +104,7 @@ public sealed class NativeOrthoStagingCommands
             NativeOrthoProjectCheck.Result nativeProject = NativeOrthoProjectCheck.Inspect(drawing);
             var payload = new
             {
-                Revision = "REV11",
+                Revision = "REV12",
                 Purpose = "Native Plant 3D orthographic creation plan; NOT an actual native Ortho drawing",
                 State = "STAGED_ONLY_PROJECT_NOT_MODIFIED",
                 Source3dModel = drawing,
@@ -112,6 +112,8 @@ public sealed class NativeOrthoStagingCommands
                 SourceRegistrationVerified = nativeProject.SourceRegistrationVerified,
                 SourceRegistrationStatus = nativeProject.RegistrationStatus,
                 OrthoProjectPart = nativeProject.OrthoProjectPart,
+                ValidationProjectPart = nativeProject.ValidationProjectPart,
+                NativeValidationApiSignature = nativeProject.ValidationApiSignature,
                 ExistingProjectOrthoDrawings = nativeProject.ExistingOrthoDrawingNames,
                 SourceDrawingUnits = document.Database.Insunits.ToString(),
                 SourceUnitToMillimeters = unitToMm,
@@ -145,8 +147,9 @@ public sealed class NativeOrthoStagingCommands
             string json = JsonSerializer.Serialize(payload, new JsonSerializerOptions {WriteIndented = true});
             Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(save.FileName))!);
             File.WriteAllText(save.FileName, json, new UTF8Encoding(false));
-            editor.WriteMessage("\nREV11 Ortho automation plan saved: " + save.FileName);
+            editor.WriteMessage("\nREV12 Ortho automation plan saved: " + save.FileName);
             editor.WriteMessage("\nProject source registration check: " + nativeProject.RegistrationStatus);
+            editor.WriteMessage("\nValidation uses: " + nativeProject.ValidationProjectPart);
             editor.WriteMessage(string.Format(CultureInfo.InvariantCulture,
                 "\nAxis-specific margins (DWG units): X={0:0.###}, Y={1:0.###}, Z={2:0.###}",
                 plan.PaddingX, plan.PaddingY, plan.PaddingZ));
@@ -160,7 +163,7 @@ public sealed class NativeOrthoStagingCommands
         }
         catch (System.Exception ex)
         {
-            editor.WriteMessage("\nREV11 Ortho stage failed: " + ex);
+            editor.WriteMessage("\nREV12 Ortho stage failed: " + ex);
         }
     }
 
