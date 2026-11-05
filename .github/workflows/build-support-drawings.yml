@@ -58,6 +58,16 @@ jobs:
           $check = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoProjectCheck.cs' -Raw
           if ($check -notmatch 'IsValid3dDrawing') { throw 'Native source registration API check missing' }
           if ($check -match 'AddPnPDrawingFile\(') { throw 'Preflight must never add project drawings' }
+      - name: Verify REV12 Piping project registration API fix
+        shell: pwsh
+        run: |
+          $check = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoProjectCheck.cs' -Raw
+          if ($check -notmatch 'new object\[\] \{ "Piping" \}') { throw 'Piping project part lookup missing' }
+          if ($check -notmatch 'object\?\[\] parameters = \{sourceDwg, piping, ""\};') { throw 'IsValid3dDrawing must receive Piping part' }
+          if ($check -match 'IsInstanceOfType\(project\)') { throw 'Old PlantProject type mismatch still present' }
+          if ($check -match 'AddPnPDrawingFile\(') { throw 'Validation must not mutate project registration' }
+          $stage = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoStagingCommands.cs' -Raw
+          if ($stage -notmatch 'NativeValidationApiSignature') { throw 'Validation method signature not reported in JSON' }
       - name: Compile SPTC Support Drawings
         run: dotnet build src/SPTC.SupportDrawings/SPTC.SupportDrawings.csproj -c Release
       - name: Verify compiled DLL
@@ -69,7 +79,7 @@ jobs:
       - name: Upload DLL artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SPTC-SupportDrawings-Plant3D2025-REV11
+          name: SPTC-SupportDrawings-Plant3D2025-REV12
           path: src/SPTC.SupportDrawings/bin/Release/net8.0-windows/SPTC.SupportDrawings.dll
           retention-days: 30
           if-no-files-found: error
