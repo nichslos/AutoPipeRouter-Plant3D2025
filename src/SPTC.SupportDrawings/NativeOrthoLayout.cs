@@ -5,7 +5,7 @@ using System.Globalization;
 namespace SPTC.SupportDrawings;
 
 /// <summary>
-/// REV10 pure geometry/sheet-layout plan for later native Plant 3D Ortho API use.
+/// REV11 pure geometry/sheet-layout plan for later native Plant 3D Ortho API use.
 /// No project database or drawing mutations.
 /// Scale is computed only for supported unit-to-mm conversions.
 /// </summary>
@@ -19,7 +19,8 @@ public static class NativeOrthoLayout
         double ModelWidth, double ModelHeight);
 
     public sealed record Plan(
-        BoundingBox3 OriginalBounds, BoundingBox3 PaddedCube, double Padding,
+        BoundingBox3 OriginalBounds, BoundingBox3 PaddedCube,
+        double PaddingX, double PaddingY, double PaddingZ,
         double SheetWidthMm, double SheetHeightMm, double SourceUnitToMm,
         IReadOnlyList<ViewPlan> Views);
 
@@ -35,11 +36,17 @@ public static class NativeOrthoLayout
 
         double longest = Math.Max(original.SizeX, Math.Max(original.SizeY, original.SizeZ));
         if (longest <= 0) throw new ArgumentException("Model envelope is empty.", nameof(original));
-        double pad = Math.Max(0.001 / sourceUnitToMm, longest * marginPercent / 100.0);
+        // REV11: axis-specific clearance. The old longest-axis padding made a
+        // 75 mm-thick support 319.88 mm wide, capturing nearby plant geometry.
+        // Keep at least 10 mm each side (in DWG units), then expand 10% per axis.
+        double minimum = 10.0 / sourceUnitToMm;
+        double padX = Math.Max(minimum, original.SizeX * marginPercent / 100.0);
+        double padY = Math.Max(minimum, original.SizeY * marginPercent / 100.0);
+        double padZ = Math.Max(minimum, original.SizeZ * marginPercent / 100.0);
 
         var expanded = new BoundingBox3(
-            original.MinX - pad, original.MinY - pad, original.MinZ - pad,
-            original.MaxX + pad, original.MaxY + pad, original.MaxZ + pad);
+            original.MinX - padX, original.MinY - padY, original.MinZ - padZ,
+            original.MaxX + padX, original.MaxY + padY, original.MaxZ + padZ);
         // A3 landscape (420×297 mm). All four view centers/tiles are in paper mm.
         // Independent top/front/side views; no authoritative native scale yet.
         var views = new List<ViewPlan>
@@ -48,7 +55,7 @@ public static class NativeOrthoLayout
             View("FRONT", 0,-1,0, 0,0,1, 112,95, 176,84, expanded.SizeX,expanded.SizeZ,sourceUnitToMm),
             View("SIDE", 1,0,0, 0,0,1, 313,95, 176,84, expanded.SizeY,expanded.SizeZ,sourceUnitToMm)
         };
-        return new Plan(original, expanded, pad, 420, 297, sourceUnitToMm, views);
+        return new Plan(original, expanded, padX, padY, padZ, 420, 297, sourceUnitToMm, views);
     }
 
     private static ViewPlan View(string name, double dx, double dy, double dz,
