@@ -414,8 +414,18 @@ internal static class Support2DExporter
             }
             finally
             {
+                // Custom Plant 3D exploded transient objects can fail on dispose.
+                // An isolated disposal error must not mask the original geometry
+                // result or abort a successfully constructed 2D export.
                 foreach (DBObject part in exploded)
-                    part.Dispose();
+                {
+                    try { part.Dispose(); }
+                    catch (System.Exception ex)
+                    {
+                        warnings.Add(new Warning(label, part.GetType().Name,
+                            "Transient Explode cleanup error: " + ex.GetType().Name));
+                    }
+                }
             }
         }
 
