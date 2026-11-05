@@ -1,0 +1,286 @@
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
+using System.Linq;
+using Autodesk.AutoCAD.ApplicationServices;
+using Autodesk.AutoCAD.DatabaseServices;
+using Autodesk.AutoCAD.EditorInput;
+using Autodesk.AutoCAD.Geometry;
+using Autodesk.AutoCAD.Runtime;
+using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
+using WinForms = System.Windows.Forms;
+
+namespace SPTC.SupportDrawings;
+
+/// <summary>
+/// SPTC SUPPORT DRAWINGS - REV 01.
+/// Clones a selected support into its own DWG and arranges four true 3D model
+/// viewports on an A3-like paper-space sheet. It is not a flattened fabrication drawing.
+/// </summary>
+public sealed class SupportDrawingCommands : IExtensionApplication
+{
+    public void Initialize() =>
+        AcadApp.DocumentManager.MdiActiveDocument?.Editor.WriteMessage(
+            "\nSPTC Support Drawings REV01 ready. SPTC_SUPPORTEXPORT or SPTC_SUPPORTBATCH.");
+    public void Terminate() { }
+
+    [CommandMethod("SPTC_SUPPORTEXPORT", CommandFlags.Modal)]
+    public void ExportOne()
+    {
+        Document? doc = AcadApp.DocumentManager.MdiActiveDocument;
+        if (doc == null) return;
+        Editor ed = doc.Editor;
+        PromptSelectionResult res = ed.GetSelection(new PromptSelectionOptions
+        {
+            MessageForAdding = "\nSelect all objects forming ONE pipe support: "
+        });
+        if (res.Status != PromptStatus.OK) return;
+
+        using var dialog = new WinForms.SaveFileDialog
+        {
+            Title = "SPTC - Export Support Drawing",
+            Filter = "AutoCAD Drawing (*.dwg)|*.dwg",
+            FileName = "SUPPORT_001.dwg",
+            AddExtension = true,
+            DefaultExt = "dwg",
+            OverwritePrompt = true
+        };
+        if (dialog.ShowDialog() != WinForms.DialogResult.OK) return;
+        try
+        {
+            string name = Path.GetFileNameWithoutExtension(dialog.FileName);
+            SheetExporter.Export(doc.Database, res.Value.GetObjectIds(), dialog.FileName, name);
+            ed.WriteMessage("\nSupport drawing created: " + dialog.FileName);
+            ed.WriteMessage("\nIncludes four model viewports, overall envelope, and object inventory CSV.");
+            ed.WriteMessage("\nOpen the DWG layout and VERIFY geometry, units, orientation, and all dimensions.");
+        }
+        catch (System.Exception e) { ed.WriteMessage("\nSupport export failed: " + e.Message); }
+    }
+
+    [CommandMethod("SPTC_SUPPORTBATCH", CommandFlags.Modal)]
+    public void ExportBatch()
+    {
+        Document? doc = AcadApp.DocumentManager.MdiActiveDocument;
+        if (doc == null) return;
+        Editor ed = doc.Editor;
+        ed.WriteMessage("\nBatch mode: each selected BLOCK INSERT must contain one complete support.");
+        PromptSelectionResult res = ed.GetSelection(new PromptSelectionOptions
+        {
+            MessageForAdding = "\nSelect support block inserts for individual drawings: "
+        });
+        if (res.Status != PromptStatus.OK) return;
+
+        var list = new List<(ObjectId id, string name)>();
+        using (var transaction = doc.Database.TransactionManager.StartTransaction())
+        {
+            foreach (ObjectId id in res.Value.GetObjectIds())
+            {
+                var ent = transaction.GetObject(id, OpenMode.ForRead, false) as BlockReference;
+                if (ent != null) list.Add((id, ent.Name));
+            }
+        }
+        if (list.Count == 0)
+        {
+            ed.WriteMessage("\nNo block inserts selected. For loose steel members, use SPTC_SUPPORTEXPORT.");
+            return;
+        }
+        using var picker = new WinForms.FolderBrowserDialog
+        {
+            Description = "Select the output folder for support DWG sheets"
+        };
+        if (picker.ShowDialog() != WinForms.DialogResult.OK) return;
+
+        int ok = 0, errors = 0;
+        for (int i = 0; i < list.Count; i++)
+        {
+            var selected = list[i];
+            string name = SafeFilename(selected.name);
+            string output = Path.Combine(picker.SelectedPath, string.Format(
+                CultureInfo.InvariantCulture, "SUPPORT_{0:000}_{1}.dwg", i + 1, name));
+            if (File.Exists(output))
+            {
+                ed.WriteMessage("\nSKIPPED, already exists: " + output);
+                errors++;
+                continue;
+            }
+            try
+            {
+                SheetExporter.Export(doc.Database, new[] { selected.id }, output,
+                    string.Format(CultureInfo.InvariantCulture, "SUPPORT {0:000} - {1}", i + 1, selected.name));
+                ok++;
+                ed.WriteMessage("\nCREATED " + output);
+            }
+            catch (System.Exception ex)
+            {
+                errors++;
+                ed.WriteMessage("\nFAILED " + selected.name + ": " + ex.Message);
+            }
+        }
+        ed.WriteMessage(string.Format(CultureInfo.InvariantCulture,
+            "\nBatch finished: {0} DWG(s) created, {1} skipped/failed. Check all sheets.", ok, errors));
+    }
+
+    private static string SafeFilename(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return "UNNAMED";
+        string result = new string(value.Select(ch =>
+            Path.GetInvalidFileNameChars().Contains(ch) || ch == '*' || ch == '?' ? '_' : ch).ToArray());
+        return result.Length > 50 ? result[..50] : result;
+    }
+}
+
+internal static class SheetExporter
+{
+    private const double A3Width = 420.0;
+    private const double A3Height = 297.0;
+    private record ObjectSummary(string EntityType, string Layer, int Count);
+
+    internal static void Export(Database source, ObjectId[] selected, string outputDwg, string title)
+    {
+        if (selected.Length == 0) throw new InvalidOperationException("No support geometry selected.");
+        BoundingBox3? bbox = null;
+        var itemCounts = new Dictionary<(string Type, string Layer), int>();
+
+        using (var tx = source.TransactionManager.StartTransaction())
+        {
+            foreach (ObjectId id in selected.Distinct())
+            {
+                Entity? entity = tx.GetObject(id, OpenMode.ForRead, false) as Entity;
+                if (entity == null) continue;
+                var key = (entity.GetType().Name, entity.Layer);
+                itemCounts[key] = itemCounts.GetValueOrDefault(key) + 1;
+                try
+                {
+                    Extents3d extents = entity.GeometricExtents;
+                    var next = new BoundingBox3(
+                        extents.MinPoint.X, extents.MinPoint.Y, extents.MinPoint.Z,
+                        extents.MaxPoint.X, extents.MaxPoint.Y, extents.MaxPoint.Z);
+                    bbox = bbox.HasValue ? bbox.Value.Include(next) : next;
+                }
+                catch (Autodesk.AutoCAD.Runtime.Exception) { /* Some proxy objects have no extents. */ }
+            }
+        }
+        if (!bbox.HasValue)
+            throw new InvalidOperationException("Selected objects have no readable 3D extents.");
+        BoundingBox3 model = bbox.Value;
+
+        // Preserve the original 3D support geometry. Wblock copies selected entities
+        // and their dependencies into an independent drawing database.
+        using var sheet = new Database(true, false);
+        source.Wblock(sheet, new ObjectIdCollection(selected.Distinct().ToArray()),
+            Point3d.Origin, DuplicateRecordCloning.Ignore);
+
+        using (var tx = sheet.TransactionManager.StartTransaction())
+        {
+            var blocks = (BlockTable)tx.GetObject(sheet.BlockTableId, OpenMode.ForRead);
+            var paper = (BlockTableRecord)tx.GetObject(
+                blocks[BlockTableRecord.PaperSpace], OpenMode.ForWrite);
+
+            DrawRect(tx, paper, 8, 8, A3Width - 8, A3Height - 8);
+            DrawLine(tx, paper, 8, 42, A3Width - 8, 42);
+            DrawLine(tx, paper, 265, 8, 265, 42);
+            DrawLine(tx, paper, 345, 8, 345, 42);
+            DrawLine(tx, paper, 8, 27, 412, 27);
+            AddText(tx, paper, "SPTC  |  PIPE SUPPORT DRAWING  |  REV 01", 12, 32, 3.6);
+            AddText(tx, paper, Crop(title, 43), 12, 19, 3.5);
+            AddText(tx, paper, string.Format(CultureInfo.InvariantCulture,
+                "OVERALL SIZE (DWG UNITS): X={0:0.##}  Y={1:0.##}  Z={2:0.##}",
+                model.SizeX, model.SizeY, model.SizeZ), 12, 12, 2.8);
+            AddText(tx, paper, "MODEL VIEWPORTS", 269, 31, 2.7);
+            AddText(tx, paper, "NOT FLATTENED 2D", 269, 19, 2.4);
+            AddText(tx, paper, "A3 / 420 x 297", 348, 31, 2.5);
+            AddText(tx, paper, "VERIFY BEFORE USE", 348, 19, 2.5);
+            AddText(tx, paper, "TOP", 20, 277, 3);
+            AddText(tx, paper, "SIDE", 225, 277, 3);
+            AddText(tx, paper, "FRONT", 20, 141, 3);
+            AddText(tx, paper, "ISOMETRIC", 225, 141, 3);
+
+            AddViewport(tx, paper, model, "TOP", 108, 209, 183, 125, new Vector3d(0, 0, 1));
+            AddViewport(tx, paper, model, "SIDE", 312, 209, 183, 125, new Vector3d(1, 0, 0));
+            AddViewport(tx, paper, model, "FRONT", 108, 91, 183, 82, new Vector3d(0, -1, 0));
+            AddViewport(tx, paper, model, "ISO", 312, 91, 183, 82, new Vector3d(1, -1, 1));
+            tx.Commit();
+        }
+
+        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outputDwg))!);
+        sheet.SaveAs(outputDwg, DwgVersion.Current);
+        string csv = Path.Combine(Path.GetDirectoryName(outputDwg)!,
+            Path.GetFileNameWithoutExtension(outputDwg) + "_object_inventory.csv");
+        WriteInventory(csv, title, source.Insunits.ToString(), model, itemCounts);
+    }
+
+    private static string Crop(string s, int max) => s.Length > max ? s[..max] : s;
+
+    private static void AddViewport(Transaction tx, BlockTableRecord paper,
+        BoundingBox3 box, string view, double x, double y, double w, double h, Vector3d direction)
+    {
+        var vp = new Viewport
+        {
+            CenterPoint = new Point3d(x, y, 0),
+            Width = w,
+            Height = h,
+            ViewTarget = new Point3d(box.MidX, box.MidY, box.MidZ),
+            ViewDirection = direction,
+            ViewCenter = new Point2d(0, 0),
+            ViewHeight = SupportSheetMath.ViewHeight(box, view, w, h),
+            GridOn = false
+        };
+        paper.AppendEntity(vp);
+        tx.AddNewlyCreatedDBObject(vp, true);
+        vp.On = true;
+        vp.Locked = true;
+    }
+
+    private static void DrawLine(Transaction tx, BlockTableRecord paper,
+        double x1, double y1, double x2, double y2)
+    {
+        var line = new Line(new Point3d(x1, y1, 0), new Point3d(x2, y2, 0));
+        paper.AppendEntity(line);
+        tx.AddNewlyCreatedDBObject(line, true);
+    }
+
+    private static void DrawRect(Transaction tx, BlockTableRecord paper,
+        double x1, double y1, double x2, double y2)
+    {
+        DrawLine(tx, paper, x1, y1, x2, y1);
+        DrawLine(tx, paper, x2, y1, x2, y2);
+        DrawLine(tx, paper, x2, y2, x1, y2);
+        DrawLine(tx, paper, x1, y2, x1, y1);
+    }
+
+    private static void AddText(Transaction tx, BlockTableRecord paper,
+        string value, double x, double y, double height)
+    {
+        var text = new DBText
+        {
+            TextString = value,
+            Position = new Point3d(x, y, 0),
+            Height = height
+        };
+        paper.AppendEntity(text);
+        tx.AddNewlyCreatedDBObject(text, true);
+    }
+
+    private static void WriteInventory(string path, string name, string units,
+        BoundingBox3 box, Dictionary<(string Type, string Layer), int> counts)
+    {
+        using var output = new StreamWriter(path, false);
+        output.WriteLine("Support,DimensionX,DimensionY,DimensionZ,DrawingUnits,ObjectType,Layer,Quantity");
+        foreach (var entry in counts.OrderBy(x => x.Key.Type).ThenBy(x => x.Key.Layer))
+            output.WriteLine(string.Join(",",
+                Csv(name),
+                box.SizeX.ToString("0.###", CultureInfo.InvariantCulture),
+                box.SizeY.ToString("0.###", CultureInfo.InvariantCulture),
+                box.SizeZ.ToString("0.###", CultureInfo.InvariantCulture),
+                Csv(units), Csv(entry.Key.Type), Csv(entry.Key.Layer),
+                entry.Value.ToString(CultureInfo.InvariantCulture)));
+    }
+
+    private static string Csv(string value)
+    {
+        // Ensure Excel interprets potentially user-controlled CAD names as text.
+        if (value.Length > 0 && "=+-@\t\r".Contains(value[0])) value = "'" + value;
+        return "\"" + value.Replace("\"", "\"\"") + "\"";
+    }
+}
