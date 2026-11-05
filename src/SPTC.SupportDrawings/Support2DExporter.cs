@@ -5,7 +5,7 @@ using System.IO;
 using System.Linq;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.Geometry;
-using Autodesk.AutoCAD.BoundaryRepresentation;
+using Brep = Autodesk.AutoCAD.BoundaryRepresentation.Brep;
 
 namespace SPTC.SupportDrawings;
 
