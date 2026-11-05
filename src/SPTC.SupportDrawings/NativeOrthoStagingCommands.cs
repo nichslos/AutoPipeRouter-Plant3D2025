@@ -160,7 +160,7 @@ public sealed class NativeOrthoStagingCommands
         }
         catch (System.Exception ex)
         {
-            editor.WriteMessage("\nREV10 Ortho stage failed: " + ex);
+            editor.WriteMessage("\nREV11 Ortho stage failed: " + ex);
         }
     }
 
