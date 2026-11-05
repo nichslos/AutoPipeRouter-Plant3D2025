@@ -205,6 +205,7 @@ internal static class SheetExporter
         string csv = Path.Combine(Path.GetDirectoryName(outputDwg)!,
             Path.GetFileNameWithoutExtension(outputDwg) + "_object_inventory.csv");
         WriteInventory(csv, title, source.Insunits.ToString(), model, itemCounts);
+        SupportAttributeRegister.WriteIfAvailable(source, selected, outputDwg);
     }
 
     private static string Crop(string s, int max) => s.Length > max ? s[..max] : s;
