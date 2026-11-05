@@ -44,6 +44,12 @@ jobs:
           $src = Get-Content 'src/SPTC.SupportDrawings/SupportNativeOrthoProbe.cs' -Raw
           if ($src -notmatch 'CommandMethod\("SPTC_ORTHOAUTOPROBE"') { throw 'Ortho API probe command missing' }
           if ($src -match 'SendStringToExecute|\.Explode\(|\.SaveAs\(') { throw 'Probe must not mutate or queue Ortho commands' }
+      - name: Verify REV10 source-model plan is read-only
+        shell: pwsh
+        run: |
+          $src = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoStagingCommands.cs' -Raw
+          if ($src -notmatch 'CommandMethod\("SPTC_ORTHOAUTOPLAN"') { throw 'Ortho plan command missing' }
+          if ($src -match 'SendStringToExecute|\.SaveAs\(|\.Explode\(') { throw 'Ortho plan must not modify Plant project DWG' }
       - name: Compile SPTC Support Drawings
         run: dotnet build src/SPTC.SupportDrawings/SPTC.SupportDrawings.csproj -c Release
       - name: Verify compiled DLL
@@ -55,7 +61,7 @@ jobs:
       - name: Upload DLL artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SPTC-SupportDrawings-Plant3D2025-REV09
+          name: SPTC-SupportDrawings-Plant3D2025-REV10
           path: src/SPTC.SupportDrawings/bin/Release/net8.0-windows/SPTC.SupportDrawings.dll
           retention-days: 30
           if-no-files-found: error
