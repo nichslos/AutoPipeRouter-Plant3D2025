@@ -7,5 +7,6 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="../../src/SPTC.SupportDrawings/SupportSheetMath.cs" Link="SupportSheetMath.cs" />
+    <Compile Include="../../src/SPTC.SupportDrawings/SupportEntityClassifier.cs" Link="SupportEntityClassifier.cs" />
   </ItemGroup>
 </Project>
