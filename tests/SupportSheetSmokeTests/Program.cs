@@ -37,7 +37,15 @@ Assert(emptyRejected, "missing geometry rejected");
 var nativePlan = NativeOrthoLayout.Build(box, 1.0);
 Assert(nativePlan.Views.Count == 3, "native Ortho plan has TOP FRONT SIDE");
 Assert(nativePlan.PaddedCube.MinX < box.MinX && nativePlan.PaddedCube.MaxZ > box.MaxZ, "native OrthoCube padding");
-Assert(nativePlan.Padding == 30, "10 percent of longest axis");
+Assert(nativePlan.PaddingX == 10 && nativePlan.PaddingY == 20 && nativePlan.PaddingZ == 30, "10 percent per axis");
+Assert(nativePlan.PaddedCube.SizeX == 120 && nativePlan.PaddedCube.SizeY == 240 &&
+    nativePlan.PaddedCube.SizeZ == 360, "axis-specific OrthoCube sizes");
+var thinSupport = new BoundingBox3(-1023.392,-2784.801,0,201,-2709.801,1149.392);
+var tightPlan = NativeOrthoLayout.Build(thinSupport, 1.0);
+Assert(Math.Abs(tightPlan.PaddingY - 10) < 1e-9, "thin Y dimension uses minimum 10mm padding");
+Assert(Math.Abs(tightPlan.PaddedCube.SizeY - 95) < 1e-9, "thin Y OrthoCube reduced to 95mm");
+Assert(tightPlan.Views[0].ScaleDenominator == 10, "TOP scale for steel support");
+Assert(tightPlan.Views[1].ScaleDenominator == 20 && tightPlan.Views[2].ScaleDenominator == 20, "FRONT and SIDE scales");
 Assert(nativePlan.Views[0].Name == "TOP" && nativePlan.Views[1].Name == "FRONT" && nativePlan.Views[2].Name == "SIDE", "view ordering");
 foreach (var view in nativePlan.Views)
 {
@@ -48,5 +56,5 @@ foreach (var view in nativePlan.Views)
 bool invalidScaleRejected = false;
 try { NativeOrthoLayout.Build(box, 0); } catch (ArgumentOutOfRangeException) { invalidScaleRejected = true; }
 Assert(invalidScaleRejected, "unrecognized source units rejected");
-Console.WriteLine("PASS: REV10 bounds, classifier, projected edges, and native OrthoCube/A3 stage geometry.");
+Console.WriteLine("PASS: REV11 axis-specific OrthoCube padding, model bounds, 3-view scale and placement checks.");
 static void Assert(bool value, string name) { if (!value) throw new Exception("FAIL: "+name); }
