@@ -1,48 +1,59 @@
-# SPTC Support Drawings — REV 08
+# SPTC Support Drawings — REV 09 (Native Ortho automation readiness)
 
-**Host:** AutoCAD Plant 3D 2025, 64-bit, compatible .NET 8 installation.
+Target: AutoCAD Plant 3D 2025, Windows x64, compatible .NET 8 host.
 
-## Change requested
+## User requirement
 
-The user wants the workflow shown in the example automatic export video: select support members in the live Plant 3D 3D model, **generate a project-native orthographic drawing DWG**, and eventually batch-create fully detailed support sheets. REV07's standalone projected-linework DWG was **not** a native Plant 3D Ortho and did not maintain project ortho view dependencies.
+One-click SPTC_SUPPORT2D should:
+1. Identify the source 3D model and selected support members.
+2. Automatically create/select a **project-registered Ortho DWG** with no drawing selection dialog.
+3. Automatically set OrthoCube extents to the support and orientation/scale to the desired view.
+4. Generate, insert and save a native Plant 3D orthographic view, without manual placement.
+5. Eventually batch-generate Top/Front/Side views, dimension and material schedules.
 
-REV08 changes **`SPTC_SUPPORT2D` into a supported, INTERACTIVE handoff** to the native Plant 3D `PLANTORTHOCREATE` command. This uses the Plant 3D model and its OrthoCube/Ortho drawing generation engine, not our custom projection DWG. The user selects support members for reference, chooses a new or existing project Ortho DWG, positions/resizes the OrthoCube around them, selects a view/scale, confirms Create, and places the view. Plant 3D creates the resulting native orthographic view.
+**REV09 does not claim this is complete.** The native PLANTORTHOCREATE command remains interactive, as documented by Autodesk. Blind keystroke/click automation or writing directly into Plant project SQLite files would put the project at risk and is deliberately not implemented.
 
-**Important: It is a user-assisted handoff, NOT automatic one-click batch ortho drawing generation.** The selected members define guidance coordinates that are printed in the command line but the native OrthoCube is not automatically filtered to only those objects. Geometry of nearby pipes/supports may also appear if included in the OrthoCube region. No command-line scripting of undocumented interactive Ortho dialogs has been attempted. Full video-like unattended batch requires verified, matching **Plant 3D Ortho SDK APIs** and integration testing in the exact installed version.
+## SDK evidence
 
-## Commands
+The user supplied sdk.zip, which includes inc-x64/PnP3dOrthoProjectPart.dll, but **not PnP3dOrthoDrawingsUI.dll**. The latter is reported by Autodesk developer forum users as containing PlantOrthoView.CreateOrthos(). The signature has been discussed, but third-party developers report unresolved automatic *viewport insertion point* control. The generic AutoCAD .NET API does not provide a documented, complete replacement for the Plant 3D Ortho pipeline. Some supplied SDK binaries target .NET 10 and must not be used as .NET 8 references.
 
-| Command | REV08 behavior |
-| --- | --- |
-| **`SPTC_SUPPORT2D`** | **NEW:** select steel/support objects in the *project source model*, print their combined extents, then launch **`PLANTORTHOCREATE`** interactively after the managed command returns. |
-| `SPTC_SUPPORT2DLINEWORK` | Legacy REV07 line/BRep projection into a **standalone, NON-native** DWG; available as an explicitly separate diagnostic tool. |
-| `SPTC_SUPPORT2DBATCH` | Legacy standalone 2D linework block-batch export; **NOT** native Plant 3D Ortho batch. |
-| `SPTC_SUPPORTEXPORT` | Existing 3D model viewport sheet plus reports. |
-| `SPTC_SUPPORTBATCH` / `SPTC_SUPPORTMANAGER` | Existing block batch viewport sheet export. |
-| `SPTC_SUPPORTINSPECT` | Existing CAD/native class and metadata audit CSV. |
+## Added REV09 diagnostic
 
-## How to test REV08
+**SPTC_ORTHOAUTOPROBE** is a new, read-only command:
 
-1. Save a backup of your project and confirm the source DWG is registered under **Plant 3D Drawings** in Project Manager. A standalone drawing outside the project is not an Ortho source.
-2. Restart Plant 3D 2025 if REV07 was loaded (same plugin assembly identity). Use `NETLOAD` to load REV08.
-3. From the **source 3D model drawing**, type `SPTC_SUPPORT2D`.
-4. Select the two Structure Member angle-steel support objects and press Enter.
-5. REV08 reports their combined bounding coordinates and queues native `PLANTORTHOCREATE`.
-6. In **Select Orthographic Drawing**, choose **Create New** or an existing **Orthographic DWG in the current project**.
-7. In Plant 3D **Ortho Editor**, use the OrthoCube to frame the support (selection alone does not exclude nearby objects), select **Front** or **Top** or **Side** and scale, press **Create**.
-8. Place the native projected view onto the drawing sheet (paper-space viewport insertion point). Generate other views using Plant 3D's Ortho View tools. The output now lives under the Project Manager **Orthographic DWG** tab.
-9. Verify exact source geometry and hidden lines in the native Ortho; add dimensions, notes, and BOM through Plant 3D's tools as needed.
+1. Open the **registered source Plant 3D model DWG**, with the project active.
+2. Run SPTC_ORTHOAUTOPROBE.
+3. Select the same pipe-support steel members you want automatically projected.
+4. Save the report as SPTC_Ortho_API_Probe_REV09.txt.
+5. The report contains source drawing path, source-unit label, selected bounds plus 10% suggested OrthoCube padding, loaded Ortho assembly names and public method signatures, installed Ortho DLL filenames/versions, and available **read-only** Ortho project information.
 
-## Compatibility and limitations
+If PnP3dOrthoDrawingsUI methods are absent from loaded-assembly listings, first open Plant 3D's normal **Create Ortho View** dialog, cancel it, and run the probe again. The probe **does not load unknown DLLs, write to project files, create an Ortho DWG, or click any dialogs**.
 
-- This build still uses the same successfully compiling AutoCAD 2025 .NET 8 managed API; we do **not** redistribute Autodesk SDK DLLs.
-- `PLANTORTHOCREATE` is a **Plant 3D-specific** command and requires its loaded toolset, a compatible project-registered source model drawing and Plant 3D's Ortho editor environment. Generic AutoCAD alone is not enough.
-- The deferred call uses `Document.SendStringToExecute("_.PLANTORTHOCREATE ", true, false, false)` so it launches after `SPTC_SUPPORT2D` finishes. The OrthoCube creation dialog and placement must be completed interactively. Runtime verification in the user's exact Plant 3D setup is still required.
-- This revision does **not** programmatically create project Ortho drawing records, set OrthoCube coordinates, place views, trigger hidden-line generation unattended, automatically generate a material BOM, or batch-create fabricated support drawings. Do not claim it duplicates the commercial extension.
-- `SPTC_SUPPORT2DLINEWORK` and `SPTC_SUPPORT2DBATCH` remain experimental standalone extraction tools and are not project Ortho DWGs.
+## Retained commands
 
-## Autodesk sources
+- SPTC_SUPPORT2D: legacy REV08 interactive launch of PLANTORTHOCREATE (requires choose/create DWG, OrthoCube, place view).
+- SPTC_SUPPORT2DLINEWORK: standalone experimental REV07 solid/curve projected lines, **not a native Ortho drawing**.
+- SPTC_SUPPORT2DBATCH: standalone block batch 2D linework, **not native Ortho batch**.
+- SPTC_SUPPORTEXPORT, SPTC_SUPPORTBATCH, SPTC_SUPPORTMANAGER: existing 3D viewport sheets and CSV.
+- SPTC_SUPPORTINSPECT: existing support object-class audit.
 
-- [AutoCAD Plant 3D 2025: To Create an Orthographic View](https://help.autodesk.com/cloudhelp/2025/ENU/Plant3D-UserGuide/files/GUID-09E67A9E-45F7-4392-BFB6-EF1ADAB1D46B.htm)
-- [AutoCAD Plant 3D 2025: PLANTORTHOCREATE](https://help.autodesk.com/cloudhelp/2025/ENU/Plant3D-UserGuide/files/GUID-EBBC59CB-38BB-479A-97A9-BB7606E3426C.htm)
-- [Autodesk: Need Plant 3D SDK for Ortho API updates](https://www.autodesk.com/support/technical/article/caas/sfdcarticles/sfdcarticles/Is-it-possible-to-update-AutoCAD-Plant-3D-ortho-views-by-the-API-of-AutoCAD-or-ACC-API.html)
+## What is necessary before removing the dialogs
+
+1. Verify actual **matching .NET 8** installed Plant 3D ortho runtime DLL(s), including PnP3dOrthoDrawingsUI.dll.
+2. Identify a safe, public project Ortho drawing creation/registration API and view creation API.
+3. Verify that CreateOrthos() (or another supported API) can **commit a native project-linked view at a specified point** without starting an interactive placement prompt. If it cannot, further runtime integration is needed; do not substitute guessed UI controls.
+4. Test against a copy of the user's Plant 3D 2025 project, including view updates and model-to-ortho dependencies.
+
+## Setup and test
+
+- Download the successful SPTC-SupportDrawings-Plant3D2025-REV09 GitHub Actions artifact.
+- Restart Plant 3D to unload the prior SPTC.SupportDrawings.dll and NETLOAD REV09.
+- Run SPTC_ORTHOAUTOPROBE and inspect the TXT report.
+- Keep REV08 for rollback. REV09 should not change project DWG geometry while gathering diagnostics.
+
+## Official and community references
+
+- [Autodesk — To Create an Orthographic View](https://help.autodesk.com/cloudhelp/2025/ENU/Plant3D-UserGuide/files/GUID-09E67A9E-45F7-4392-BFB6-EF1ADAB1D46B.htm)
+- [Autodesk — PLANTORTHOCREATE](https://help.autodesk.com/cloudhelp/2025/ENU/Plant3D-UserGuide/files/GUID-EBBC59CB-38BB-479A-97A9-BB7606E3426C.htm)
+- [Autodesk Community — Create an orthographic view via C# API](https://forums.autodesk.com/t5/autocad-plant-3d-forum/create-an-orthographic-view-via-the-c-api/m-p/13629352)
+- [Autodesk — SDK required to update native Ortho views](https://www.autodesk.com/support/technical/article/caas/sfdcarticles/sfdcarticles/Is-it-possible-to-update-AutoCAD-Plant-3D-ortho-views-by-the-API-of-AutoCAD-or-ACC-API.html)
