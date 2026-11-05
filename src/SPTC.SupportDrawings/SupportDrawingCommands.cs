@@ -14,7 +14,7 @@ using WinForms = System.Windows.Forms;
 namespace SPTC.SupportDrawings;
 
 /// <summary>
-/// SPTC SUPPORT DRAWINGS - REV 08.
+/// SPTC SUPPORT DRAWINGS - REV 09.
 /// Clones a selected support into its own DWG and arranges four true 3D model
 /// viewports on an A3-like paper-space sheet. It is not a flattened fabrication drawing.
 /// </summary>
@@ -22,7 +22,7 @@ public sealed class SupportDrawingCommands : IExtensionApplication
 {
     public void Initialize() =>
         AcadApp.DocumentManager.MdiActiveDocument?.Editor.WriteMessage(
-            "\nSPTC Support Drawings REV08. SPTC_SUPPORT2D starts native Ortho; SPTC_SUPPORT2DLINEWORK retains legacy 2D export.");
+            "\nSPTC Support Drawings REV09. Use SPTC_ORTHOAUTOPROBE to inspect installed Ortho SDK APIs; SPTC_SUPPORT2D is still interactive.");
     public void Terminate() { }
 
     [CommandMethod("SPTC_SUPPORTEXPORT", CommandFlags.Modal)]
@@ -70,11 +70,11 @@ public sealed class SupportDrawingCommands : IExtensionApplication
 
         if (string.IsNullOrWhiteSpace(doc.Database.Filename))
         {
-            editor.WriteMessage("\nREV08: Save the source model DWG inside the active Plant 3D project first.");
+            editor.WriteMessage("\nREV09: Save the source model DWG inside the active Plant 3D project first.");
             return;
         }
 
-        editor.WriteMessage("\nSPTC REV08: Select the support members to frame with Plant 3D OrthoCube.");
+        editor.WriteMessage("\nSPTC REV09: Select the support members to frame with Plant 3D OrthoCube.");
         editor.WriteMessage("\nIMPORTANT: Native PLANTORTHOCREATE uses the model and OrthoCube. Selection is guidance, not an automatic Ortho-only filter.");
         PromptSelectionResult selection = editor.GetSelection(new PromptSelectionOptions
         {
@@ -111,11 +111,11 @@ public sealed class SupportDrawingCommands : IExtensionApplication
         }
         if (count == 0)
         {
-            editor.WriteMessage("\nREV08: No valid source entities selected. Ortho was not started.");
+            editor.WriteMessage("\nREV09: No valid source entities selected. Ortho was not started.");
             return;
         }
 
-        editor.WriteMessage($"\\nREV08 selected {count} support entities.");
+        editor.WriteMessage($"\nREV09 selected {count} support entities.");
         if (selectedBounds.HasValue)
         {
             Extents3d ext = selectedBounds.Value;
@@ -128,7 +128,8 @@ public sealed class SupportDrawingCommands : IExtensionApplication
         editor.WriteMessage("\nNext: choose Create New Ortho DWG (or an existing project Ortho),");
         editor.WriteMessage("\nposition and resize the OrthoCube around ONLY these supports, select Front/Top/Side,");
         editor.WriteMessage("\nchoose scale, press Create, then place the Ortho viewport in the drawing.");
-        editor.WriteMessage("\nPlant 3D generates the project-linked 2D DWG. This is not an unattended batch generator.");
+        editor.WriteMessage("\nPlant 3D generates the project-linked 2D DWG. This remains INTERACTIVE.");
+        editor.WriteMessage("\nFor fully unattended automation API feasibility, run SPTC_ORTHOAUTOPROBE and review its report.");
 
         try
         {
@@ -138,7 +139,7 @@ public sealed class SupportDrawingCommands : IExtensionApplication
         }
         catch (System.Exception ex)
         {
-            editor.WriteMessage("\nREV08 unable to start PLANTORTHOCREATE: " + ex.Message);
+            editor.WriteMessage("\nREV09 unable to start PLANTORTHOCREATE: " + ex.Message);
             editor.WriteMessage("\nTry running PLANTORTHOCREATE manually in the original project model DWG.");
         }
     }
