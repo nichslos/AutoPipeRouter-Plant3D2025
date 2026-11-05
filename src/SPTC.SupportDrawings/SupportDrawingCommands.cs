@@ -14,7 +14,7 @@ using WinForms = System.Windows.Forms;
 namespace SPTC.SupportDrawings;
 
 /// <summary>
-/// SPTC SUPPORT DRAWINGS - REV 03.
+/// SPTC SUPPORT DRAWINGS - REV 04.
 /// Clones a selected support into its own DWG and arranges four true 3D model
 /// viewports on an A3-like paper-space sheet. It is not a flattened fabrication drawing.
 /// </summary>
@@ -22,7 +22,7 @@ public sealed class SupportDrawingCommands : IExtensionApplication
 {
     public void Initialize() =>
         AcadApp.DocumentManager.MdiActiveDocument?.Editor.WriteMessage(
-            "\nSPTC Support Drawings REV03 ready. Commands: SPTC_SUPPORTEXPORT, SPTC_SUPPORTBATCH, SPTC_SUPPORTMANAGER, SPTC_SUPPORTINSPECT.");
+            "\nSPTC Support Drawings REV04 ready. Commands: SPTC_SUPPORTEXPORT, SPTC_SUPPORTBATCH, SPTC_SUPPORTMANAGER, SPTC_SUPPORTINSPECT, SPTC_SUPPORT2D, SPTC_SUPPORT2DBATCH.");
     public void Terminate() { }
 
     [CommandMethod("SPTC_SUPPORTEXPORT", CommandFlags.Modal)]
@@ -56,6 +56,101 @@ public sealed class SupportDrawingCommands : IExtensionApplication
             ed.WriteMessage("\nOpen the DWG layout and VERIFY geometry, units, orientation, and all dimensions.");
         }
         catch (System.Exception e) { ed.WriteMessage("\nSupport export failed: " + e.Message); }
+    }
+
+    [CommandMethod("SPTC_SUPPORT2D", CommandFlags.Modal)]
+    public void Export2D()
+    {
+        Document? doc = AcadApp.DocumentManager.MdiActiveDocument;
+        if (doc == null) return;
+        Editor editor = doc.Editor;
+        PromptSelectionResult selection = editor.GetSelection(new PromptSelectionOptions
+        {
+            MessageForAdding = "\nSelect support linework or blocks for projected 2D geometry: "
+        });
+        if (selection.Status != PromptStatus.OK) return;
+
+        using var dialog = new WinForms.SaveFileDialog
+        {
+            Title = "SPTC REV04 - Save 2D Orthographic Linework",
+            Filter = "AutoCAD Drawing (*.dwg)|*.dwg",
+            FileName = "SUPPORT_2D_PROJECTION.dwg",
+            DefaultExt = "dwg",
+            AddExtension = true,
+            OverwritePrompt = true
+        };
+        if (dialog.ShowDialog() != WinForms.DialogResult.OK) return;
+        try
+        {
+            Support2DExporter.Result result =
+                Support2DExporter.Export(doc.Database, selection.Value.GetObjectIds(), dialog.FileName);
+            editor.WriteMessage($"\nREV04 projected DWG: {dialog.FileName}");
+            editor.WriteMessage($"\nGenerated {result.Lines2D} 2D LINE entities from {result.ExtractedSegments} 3D edges; " +
+                $"collapsed {result.SkippedCollapsed}, unsupported {result.Unsupported}.");
+            editor.WriteMessage($"\nReview unsupported geometry report: {result.Report}");
+            editor.WriteMessage("\nWARNING: no 3D solid outline extraction, occlusion filtering, or fabrication validation.");
+        }
+        catch (System.Exception ex)
+        {
+            editor.WriteMessage("\nREV04 2D export stopped: " + ex.Message);
+        }
+    }
+
+    [CommandMethod("SPTC_SUPPORT2DBATCH", CommandFlags.Modal)]
+    public void Export2DBatch()
+    {
+        Document? doc = AcadApp.DocumentManager.MdiActiveDocument;
+        if (doc == null) return;
+        Editor editor = doc.Editor;
+        editor.WriteMessage("\nREV04 batch 2D mode: one selected support block reference per output DWG.");
+        PromptSelectionResult selection = editor.GetSelection(new PromptSelectionOptions
+        {
+            MessageForAdding = "\nSelect individual support block inserts for 2D output: "
+        });
+        if (selection.Status != PromptStatus.OK) return;
+        var blocks = new List<(ObjectId id, string name)>();
+        using (Transaction tx = doc.Database.TransactionManager.StartTransaction())
+        {
+            foreach (ObjectId id in selection.Value.GetObjectIds())
+                if (tx.GetObject(id, OpenMode.ForRead, false) is BlockReference block)
+                    blocks.Add((id, block.Name));
+        }
+        if (blocks.Count == 0)
+        {
+            editor.WriteMessage("\nNo block inserts were selected; use SPTC_SUPPORT2D for loose linework.");
+            return;
+        }
+
+        using var dialog = new SupportBatchDialog(blocks);
+        if (dialog.ShowDialog() != WinForms.DialogResult.OK) return;
+        int passed = 0, failed = 0;
+        foreach (int index in dialog.CheckedIndices)
+        {
+            (ObjectId id, string name) selected = blocks[index];
+            string filename = string.Format(CultureInfo.InvariantCulture,
+                "{0}_{1:000}_{2}_2D.dwg", SafeFilename(dialog.Prefix), index + 1,
+                SafeFilename(selected.name));
+            string path = Path.Combine(dialog.OutputFolder, filename);
+            if (File.Exists(path))
+            {
+                failed++;
+                editor.WriteMessage("\nSKIPPED existing 2D DWG: " + path);
+                continue;
+            }
+            try
+            {
+                Support2DExporter.Result result =
+                    Support2DExporter.Export(doc.Database, new[] { selected.id }, path);
+                passed++;
+                editor.WriteMessage($"\nCREATED {path}: {result.Lines2D} line entities, {result.Unsupported} unsupported objects/segments.");
+            }
+            catch (System.Exception ex)
+            {
+                failed++;
+                editor.WriteMessage("\nSKIPPED/FAILED " + selected.name + ": " + ex.Message);
+            }
+        }
+        editor.WriteMessage($"\nREV04 batch 2D finished: {passed} created, {failed} failed/skipped. Check reports before use.");
     }
 
     [CommandMethod("SPTC_SUPPORTINSPECT", CommandFlags.Modal)]
@@ -218,7 +313,7 @@ internal static class SheetExporter
             DrawLine(tx, paper, 8, 42, A3Width - 8, 42);
             DrawLine(tx, paper, 265, 8, 265, 42);
             DrawLine(tx, paper, 8, 27, 265, 27);
-            AddText(tx, paper, "SPTC  |  PIPE SUPPORT DRAWING  |  REV 03", 12, 32, 3.6);
+            AddText(tx, paper, "SPTC  |  PIPE SUPPORT DRAWING  |  REV 04", 12, 32, 3.6);
             AddText(tx, paper, Crop(title, 43), 12, 19, 3.5);
             AddText(tx, paper, string.Format(CultureInfo.InvariantCulture,
                 "ENVELOPE (DWG units): X={0:0.##}  Y={1:0.##}  Z={2:0.##}",
