@@ -14,7 +14,7 @@ using WinForms = System.Windows.Forms;
 namespace SPTC.SupportDrawings;
 
 /// <summary>
-/// SPTC SUPPORT DRAWINGS - REV 07.
+/// SPTC SUPPORT DRAWINGS - REV 08.
 /// Clones a selected support into its own DWG and arranges four true 3D model
 /// viewports on an A3-like paper-space sheet. It is not a flattened fabrication drawing.
 /// </summary>
@@ -22,7 +22,7 @@ public sealed class SupportDrawingCommands : IExtensionApplication
 {
     public void Initialize() =>
         AcadApp.DocumentManager.MdiActiveDocument?.Editor.WriteMessage(
-            "\nSPTC Support Drawings REV07 ready. Commands: SPTC_SUPPORTEXPORT, SPTC_SUPPORTBATCH, SPTC_SUPPORTMANAGER, SPTC_SUPPORTINSPECT, SPTC_SUPPORT2D, SPTC_SUPPORT2DBATCH.");
+            "\nSPTC Support Drawings REV08. SPTC_SUPPORT2D starts native Ortho; SPTC_SUPPORT2DLINEWORK retains legacy 2D export.");
     public void Terminate() { }
 
     [CommandMethod("SPTC_SUPPORTEXPORT", CommandFlags.Modal)]
@@ -58,7 +58,92 @@ public sealed class SupportDrawingCommands : IExtensionApplication
         catch (System.Exception e) { ed.WriteMessage("\nSupport export failed: " + e.Message); }
     }
 
+    // REV08: Native Plant 3D Ortho creation is an interactive project workflow.
+    // Start from the registered 3D model, not from our independent linework DWG.
+    // Avoid driving the OrthoCube and project dialogs with blind keystrokes.
     [CommandMethod("SPTC_SUPPORT2D", CommandFlags.Modal)]
+    public void StartNativeOrtho()
+    {
+        Document? doc = AcadApp.DocumentManager.MdiActiveDocument;
+        if (doc == null) return;
+        Editor editor = doc.Editor;
+
+        if (string.IsNullOrWhiteSpace(doc.Database.Filename))
+        {
+            editor.WriteMessage("\nREV08: Save the source model DWG inside the active Plant 3D project first.");
+            return;
+        }
+
+        editor.WriteMessage("\nSPTC REV08: Select the support members to frame with Plant 3D OrthoCube.");
+        editor.WriteMessage("\nIMPORTANT: Native PLANTORTHOCREATE uses the model and OrthoCube. Selection is guidance, not an automatic Ortho-only filter.");
+        PromptSelectionResult selection = editor.GetSelection(new PromptSelectionOptions
+        {
+            MessageForAdding = "\nSelect support steel members in the SOURCE project 3D model: "
+        });
+        if (selection.Status != PromptStatus.OK) return;
+
+        int count = 0;
+        Extents3d? selectedBounds = null;
+        using (Transaction transaction = doc.Database.TransactionManager.StartTransaction())
+        {
+            foreach (ObjectId id in selection.Value.GetObjectIds())
+            {
+                if (transaction.GetObject(id, OpenMode.ForRead, false) is not Entity entity)
+                    continue;
+                count++;
+                try
+                {
+                    Extents3d ext = entity.GeometricExtents;
+                    if (selectedBounds.HasValue)
+                    {
+                        Extents3d current = selectedBounds.Value;
+                        current.AddExtents(ext);
+                        selectedBounds = current;
+                    }
+                    else selectedBounds = ext;
+                }
+                catch (Autodesk.AutoCAD.Runtime.Exception)
+                {
+                    // Native Plant 3D objects may expose only approximate or no
+                    // AutoCAD extents. This must not prevent the native Ortho dialog.
+                }
+            }
+        }
+        if (count == 0)
+        {
+            editor.WriteMessage("\nREV08: No valid source entities selected. Ortho was not started.");
+            return;
+        }
+
+        editor.WriteMessage($"\\nREV08 selected {count} support entities.");
+        if (selectedBounds.HasValue)
+        {
+            Extents3d ext = selectedBounds.Value;
+            editor.WriteMessage(string.Format(CultureInfo.InvariantCulture,
+                "\nSource bounding box: MIN({0:0.###}, {1:0.###}, {2:0.###}) MAX({3:0.###}, {4:0.###}, {5:0.###}), source drawing units.",
+                ext.MinPoint.X, ext.MinPoint.Y, ext.MinPoint.Z,
+                ext.MaxPoint.X, ext.MaxPoint.Y, ext.MaxPoint.Z));
+        }
+
+        editor.WriteMessage("\nNext: choose Create New Ortho DWG (or an existing project Ortho),");
+        editor.WriteMessage("\nposition and resize the OrthoCube around ONLY these supports, select Front/Top/Side,");
+        editor.WriteMessage("\nchoose scale, press Create, then place the Ortho viewport in the drawing.");
+        editor.WriteMessage("\nPlant 3D generates the project-linked 2D DWG. This is not an unattended batch generator.");
+
+        try
+        {
+            // Queue the native Plant 3D command after our modal managed
+            // command ends; interactive UI and OrthoCube belong to Plant 3D.
+            doc.SendStringToExecute("_.PLANTORTHOCREATE ", true, false, false);
+        }
+        catch (System.Exception ex)
+        {
+            editor.WriteMessage("\nREV08 unable to start PLANTORTHOCREATE: " + ex.Message);
+            editor.WriteMessage("\nTry running PLANTORTHOCREATE manually in the original project model DWG.");
+        }
+    }
+
+    [CommandMethod("SPTC_SUPPORT2DLINEWORK", CommandFlags.Modal)]
     public void Export2D()
     {
         Document? doc = AcadApp.DocumentManager.MdiActiveDocument;
@@ -393,7 +478,7 @@ internal static class SheetExporter
             DrawLine(tx, paper, 8, 42, A3Width - 8, 42);
             DrawLine(tx, paper, 265, 8, 265, 42);
             DrawLine(tx, paper, 8, 27, 265, 27);
-            AddText(tx, paper, "SPTC  |  PIPE SUPPORT DRAWING  |  REV 07", 12, 32, 3.6);
+            AddText(tx, paper, "SPTC  |  PIPE SUPPORT DRAWING  |  REV 08", 12, 32, 3.6);
             AddText(tx, paper, Crop(title, 43), 12, 19, 3.5);
             AddText(tx, paper, string.Format(CultureInfo.InvariantCulture,
                 "ENVELOPE (DWG units): X={0:0.##}  Y={1:0.##}  Z={2:0.##}",
