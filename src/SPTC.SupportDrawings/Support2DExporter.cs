@@ -382,7 +382,7 @@ internal static class Support2DExporter
                             SampleCurve(curve, transforms, childLabel);
                         }
                         else if (piece.GetType() != original.GetType() &&
-                                 piece is not Solid3d && piece is not Region)
+                                 piece is not Solid3d && piece is not Autodesk.AutoCAD.DatabaseServices.Region)
                         {
                             TryDecompose(piece, transforms, childLabel, depth + 1);
                         }
