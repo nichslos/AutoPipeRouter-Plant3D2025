@@ -9,17 +9,18 @@ using Autodesk.AutoCAD.Geometry;
 namespace SPTC.SupportDrawings;
 
 /// <summary>
-/// REV04: converts only supported 3D line and face edges into real 2D AutoCAD
+/// REV05: extracts line/face edges, samples general CAD curves, and attempts
+/// nondestructive entity decomposition before writing real 2D AutoCAD
 /// line entities in three orthographic model-space views. Native piping solids,
 /// curves, ACIS surfaces and other unsupported entities are skipped and reported.
 /// This is NOT a hidden-line drawing or fabrication deliverable.
 /// </summary>
 internal static class Support2DExporter
 {
-    private sealed record Warning(string Path, string Type, string Reason);
+    private sealed record Warning(string Path, string Type, string Reason, bool Approximate = false);
 
     internal sealed record Result(int ExtractedSegments, int Lines2D,
-        int SkippedCollapsed, int Unsupported, string Report);
+        int SkippedCollapsed, int Unsupported, string Report, int Approximated = 0);
 
     internal static Result Export(Database source, ObjectId[] selected, string outputDwg)
     {
@@ -36,8 +37,11 @@ internal static class Support2DExporter
         if (geometry.Count == 0)
         {
             string types = string.Join(", ", warnings.Select(x => x.Type).Distinct().Take(6));
-            throw new InvalidOperationException("No supported LINE, straight POLYLINE, simple 3D POLYLINE, or 3DFACE edges were found. " +
-                "The selection may consist of Plant 3D solids/structure members. No 2D DWG was written. Unsupported: " + types);
+            string failedReport = ReportPath(outputDwg);
+            WriteReport(failedReport, source.Insunits.ToString(), 0, 0, 0, warnings);
+            throw new InvalidOperationException("No usable 2D edge geometry could be extracted from this selection. " +
+                "Native Plant 3D piping/solids may require orthographic projection. Unsupported: " + types +
+                ". Diagnostic CSV: " + failedReport);
         }
 
         BoundingBox3 bounds = Support2DMath.FromSegments(geometry);
@@ -101,9 +105,9 @@ internal static class Support2DExporter
                 SketchPoint2 titleOrigin = Support2DMath.Project(
                     new SketchPoint3(bounds.MinX, bounds.MinY, bounds.MinZ),
                     bounds, OrthoPlane.Top, gap);
-                AddText(transaction, model, "SPTC REV04 - ORTHOGRAPHIC LINEWORK ONLY",
+                AddText(transaction, model, "SPTC REV05 - ORTHOGRAPHIC LINEWORK / APPROX CURVES",
                     titleOrigin.X, titleOrigin.Y + bounds.SizeY + textSize * 7, textSize * 1.7);
-                AddText(transaction, model, "NO HIDDEN-LINE REMOVAL / NO SOLID EDGE EXTRACTION / NOT FOR FABRICATION",
+                AddText(transaction, model, "NO HIDDEN-LINE REMOVAL / CURVES APPROXIMATE / NOT FOR FABRICATION",
                     titleOrigin.X, titleOrigin.Y + bounds.SizeY + textSize * 4, textSize);
                 transaction.Commit();
             }
@@ -112,11 +116,14 @@ internal static class Support2DExporter
             output.SaveAs(outputDwg, DwgVersion.Current);
         }
 
-        string report = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(outputDwg))!,
-            Path.GetFileNameWithoutExtension(outputDwg) + "_projection_report.csv");
+        string report = ReportPath(outputDwg);
         WriteReport(report, source.Insunits.ToString(), geometry.Count, generated, collapsed, warnings);
-        return new Result(geometry.Count, generated, collapsed, warnings.Count, report);
+        return new Result(geometry.Count, generated, collapsed, warnings.Count(x => !x.Approximate), report, warnings.Count(x => x.Approximate));
     }
+
+    private static string ReportPath(string outputDwg) =>
+        Path.Combine(Path.GetDirectoryName(Path.GetFullPath(outputDwg))!,
+            Path.GetFileNameWithoutExtension(outputDwg) + "_projection_report.csv");
 
     private static void CreateLayer(Database database, Transaction transaction, string name, short color)
     {
@@ -150,9 +157,10 @@ internal static class Support2DExporter
         writer.WriteLine(Row("SUMMARY", "", "", "3D extracted line segments", segments, units));
         writer.WriteLine(Row("SUMMARY", "", "", "Created 2D LINE entities (all views)", lines, units));
         writer.WriteLine(Row("SUMMARY", "", "", "Projection-collapsed segments", collapsed, units));
-        writer.WriteLine(Row("SUMMARY", "", "", "Unsupported or skipped entities/curved segments", warnings.Count, units));
+        writer.WriteLine(Row("SUMMARY", "", "", "Unsupported or skipped items", warnings.Count(x => !x.Approximate), units));
+        writer.WriteLine(Row("SUMMARY", "", "", "Approximate curve sampling events", warnings.Count(x => x.Approximate), units));
         foreach (Warning warning in warnings)
-            writer.WriteLine(Row("UNSUPPORTED", warning.Path, warning.Type, warning.Reason, 1, units));
+            writer.WriteLine(Row(warning.Approximate ? "APPROXIMATED" : "UNSUPPORTED", warning.Path, warning.Type, warning.Reason, 1, units));
     }
 
     private static string Row(string cat, string path, string type,
@@ -268,13 +276,137 @@ internal static class Support2DExporter
                     return;
                 }
 
+                // General AutoCAD Curve support. An ImpCurve may or may not implement
+                // Curve; we verify at runtime rather than assuming its class inheritance.
+                if (entity is Curve curve && SampleCurve(curve, transforms, label))
+                    return;
+
+                // Some Plant 3D/custom entities can expose ordinary AutoCAD geometry
+                // by Explode(). The source entity is never altered. Unsupported solids
+                // are NOT projected from their bounding boxes.
+                if (TryDecompose(entity, transforms, label, 0))
+                    return;
+
                 warnings.Add(new Warning(label, entity.GetType().Name,
-                    "Unsupported geometry - no SOLID/ACIS/ARC/CIRCLE/proxy outline inference"));
+                    "No supported linework after Curve and safe Explode attempts; native Ortho/solid projection needed"));
             }
             catch (System.Exception ex)
             {
                 warnings.Add(new Warning(label, entity.GetType().Name,
                     "Geometry unavailable: " + ex.GetType().Name));
+            }
+        }
+
+        private bool SampleCurve(Curve curve, IReadOnlyList<Matrix3d> transforms, string label)
+        {
+            // Parameter-spaced 96 segments are explicitly APPROXIMATE, not
+            // manufacturing tolerances. Do not silently treat this as exact geometry.
+            try
+            {
+                double start = curve.StartParam;
+                double end = curve.EndParam;
+                if (!double.IsFinite(start) || !double.IsFinite(end) || end <= start ||
+                    end - start > 1e9) return false;
+                const int samples = 96;
+                var points = new List<Point3d>(samples + 1);
+                for (int i = 0; i <= samples; i++)
+                {
+                    double t = start + (end - start) * i / samples;
+                    Point3d point = curve.GetPointAtParameter(t);
+                    if (!double.IsFinite(point.X) || !double.IsFinite(point.Y) ||
+                        !double.IsFinite(point.Z)) return false;
+                    points.Add(point);
+                }
+                int before = segments.Count;
+                for (int i = 1; i < points.Count; i++)
+                    Add(points[i - 1], points[i], transforms);
+                if (segments.Count == before) return false;
+                warnings.Add(new Warning(label, curve.GetType().Name,
+                    "APPROXIMATE: curve sampled at 96 parameter intervals; check shape and engineering tolerance", true));
+                return true;
+            }
+            catch (System.Exception ex)
+            {
+                warnings.Add(new Warning(label, curve.GetType().Name,
+                    "Curve evaluation unavailable: " + ex.GetType().Name));
+                return false;
+            }
+        }
+
+        private bool TryDecompose(Entity original, IReadOnlyList<Matrix3d> transforms,
+            string label, int depth)
+        {
+            if (depth >= 4) return false;
+            DBObjectCollection exploded = new DBObjectCollection();
+            try
+            {
+                original.Explode(exploded);
+                if (exploded.Count == 0) return false;
+                int before = segments.Count;
+                int index = 0;
+                foreach (DBObject obj in exploded)
+                {
+                    if (obj is Entity piece)
+                    {
+                        string childLabel = label + "/EXP" + (++index).ToString(
+                            System.Globalization.CultureInfo.InvariantCulture);
+                        if (piece is Line line)
+                        {
+                            Add(line.StartPoint, line.EndPoint, transforms);
+                        }
+                        else if (piece is Polyline pline)
+                        {
+                            for (int i = 0; i < pline.NumberOfVertices - 1; i++)
+                                AddPolylineLeg(pline, i, i + 1, transforms, childLabel);
+                            if (pline.Closed && pline.NumberOfVertices > 1)
+                                AddPolylineLeg(pline, pline.NumberOfVertices - 1, 0, transforms, childLabel);
+                        }
+                        else if (piece is Face face)
+                        {
+                            var vertices = new[]
+                            {
+                                face.GetVertexAt(0), face.GetVertexAt(1),
+                                face.GetVertexAt(2), face.GetVertexAt(3)
+                            };
+                            int n = vertices[2].DistanceTo(vertices[3]) < 1e-9 ? 3 : 4;
+                            for (int i = 0; i < n; i++)
+                                Add(vertices[i], vertices[(i + 1) % n], transforms);
+                        }
+                        else if (piece is Curve curve)
+                        {
+                            SampleCurve(curve, transforms, childLabel);
+                        }
+                        else if (piece.GetType() != original.GetType() &&
+                                 piece is not Solid3d && piece is not Region)
+                        {
+                            TryDecompose(piece, transforms, childLabel, depth + 1);
+                        }
+                        else
+                        {
+                            warnings.Add(new Warning(childLabel, piece.GetType().Name,
+                                "Exploded geometry still unsupported, no solid silhouette extraction"));
+                        }
+                    }
+                }
+                if (segments.Count > before)
+                {
+                    warnings.Add(new Warning(label, original.GetType().Name,
+                        "Some geometries were extracted via non-destructive Explode; verify all omitted objects",
+                        true));
+                    return true;
+                }
+                return false;
+            }
+            catch (System.Exception ex)
+            {
+                warnings.Add(new Warning(label, original.GetType().Name,
+                    "Explode unavailable: " + ex.GetType().Name));
+                return false;
+            }
+            finally
+            {
+                foreach (DBObject part in exploded)
+                    part.Dispose();
             }
         }
 
