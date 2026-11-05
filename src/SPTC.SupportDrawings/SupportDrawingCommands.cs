@@ -14,7 +14,7 @@ using WinForms = System.Windows.Forms;
 namespace SPTC.SupportDrawings;
 
 /// <summary>
-/// SPTC SUPPORT DRAWINGS - REV 05.
+/// SPTC SUPPORT DRAWINGS - REV 06.
 /// Clones a selected support into its own DWG and arranges four true 3D model
 /// viewports on an A3-like paper-space sheet. It is not a flattened fabrication drawing.
 /// </summary>
@@ -22,7 +22,7 @@ public sealed class SupportDrawingCommands : IExtensionApplication
 {
     public void Initialize() =>
         AcadApp.DocumentManager.MdiActiveDocument?.Editor.WriteMessage(
-            "\nSPTC Support Drawings REV05 ready. Commands: SPTC_SUPPORTEXPORT, SPTC_SUPPORTBATCH, SPTC_SUPPORTMANAGER, SPTC_SUPPORTINSPECT, SPTC_SUPPORT2D, SPTC_SUPPORT2DBATCH.");
+            "\nSPTC Support Drawings REV06 ready. Commands: SPTC_SUPPORTEXPORT, SPTC_SUPPORTBATCH, SPTC_SUPPORTMANAGER, SPTC_SUPPORTINSPECT, SPTC_SUPPORT2D, SPTC_SUPPORT2DBATCH.");
     public void Terminate() { }
 
     [CommandMethod("SPTC_SUPPORTEXPORT", CommandFlags.Modal)]
@@ -72,7 +72,7 @@ public sealed class SupportDrawingCommands : IExtensionApplication
 
         using var dialog = new WinForms.SaveFileDialog
         {
-            Title = "SPTC REV05 - Save 2D Orthographic Linework",
+            Title = "SPTC REV06 - Save 2D Orthographic Linework",
             Filter = "AutoCAD Drawing (*.dwg)|*.dwg",
             FileName = "SUPPORT_2D_PROJECTION.dwg",
             DefaultExt = "dwg",
@@ -84,7 +84,7 @@ public sealed class SupportDrawingCommands : IExtensionApplication
         {
             Support2DExporter.Result result =
                 Support2DExporter.Export(doc.Database, selection.Value.GetObjectIds(), dialog.FileName);
-            editor.WriteMessage($"\nREV05 projected DWG: {dialog.FileName}");
+            editor.WriteMessage($"\nREV06 projected DWG: {dialog.FileName}");
             editor.WriteMessage($"\nGenerated {result.Lines2D} 2D LINE entities from {result.ExtractedSegments} 3D edges; " +
                 $"collapsed {result.SkippedCollapsed}, unsupported {result.Unsupported}, approx curves/decompositions {result.Approximated}.");
             editor.WriteMessage($"\nReview unsupported geometry report: {result.Report}");
@@ -98,7 +98,7 @@ public sealed class SupportDrawingCommands : IExtensionApplication
                 Path.GetFileNameWithoutExtension(dialog.FileName) + "_3D_VIEWPORT_FALLBACK.dwg");
             if (File.Exists(fallback))
             {
-                editor.WriteMessage("\nREV05: 2D extraction unsupported. Fallback file already exists, so nothing overwritten.");
+                editor.WriteMessage("\nREV06: 2D extraction unsupported. Fallback file already exists, so nothing overwritten.");
                 editor.WriteMessage("\n" + ex.Message);
                 return;
             }
@@ -106,19 +106,21 @@ public sealed class SupportDrawingCommands : IExtensionApplication
             {
                 SheetExporter.Export(doc.Database, selection.Value.GetObjectIds(), fallback,
                     "VISUAL FALLBACK - NOT 2D FABRICATION");
-                editor.WriteMessage("\nREV05: 2D extraction unavailable; produced a 3D VIEWPORT FALLBACK instead: " + fallback);
+                editor.WriteMessage("\nREV06: 2D extraction unavailable; produced a 3D VIEWPORT FALLBACK instead: " + fallback);
                 editor.WriteMessage("\nThis DWG contains the native 3D model in viewports, NOT flattened 2D geometry.");
                 editor.WriteMessage("\n" + ex.Message);
             }
             catch (System.Exception fallbackError)
             {
-                editor.WriteMessage("\nREV05: 2D extraction and visual fallback both failed: " + fallbackError.Message);
+                editor.WriteMessage("\nREV06: 2D extraction and visual fallback both failed: " + fallbackError.Message);
+                Write2DDiagnostic(editor, dialog.FileName, fallbackError, "3D viewport fallback");
                 editor.WriteMessage("\n" + ex.Message);
             }
         }
         catch (System.Exception ex)
         {
-            editor.WriteMessage("\nREV05 2D export stopped: " + ex.Message);
+            editor.WriteMessage("\nREV06 2D export stopped: " + ex.GetType().Name + ": " + ex.Message);
+            Write2DDiagnostic(editor, dialog.FileName, ex, "SPTC_SUPPORT2D");
         }
     }
 
@@ -128,7 +130,7 @@ public sealed class SupportDrawingCommands : IExtensionApplication
         Document? doc = AcadApp.DocumentManager.MdiActiveDocument;
         if (doc == null) return;
         Editor editor = doc.Editor;
-        editor.WriteMessage("\nREV05 batch 2D mode: one selected support block reference per output DWG.");
+        editor.WriteMessage("\nREV06 batch 2D mode: one selected support block reference per output DWG.");
         PromptSelectionResult selection = editor.GetSelection(new PromptSelectionOptions
         {
             MessageForAdding = "\nSelect individual support block inserts for 2D output: "
@@ -193,15 +195,17 @@ public sealed class SupportDrawingCommands : IExtensionApplication
                 {
                     failed++;
                     editor.WriteMessage("\n2D extraction and fallback failed: " + fallbackError.Message);
+                    Write2DDiagnostic(editor, path, fallbackError, "3D viewport batch fallback");
                 }
             }
             catch (System.Exception ex)
             {
                 failed++;
                 editor.WriteMessage("\nSKIPPED/FAILED " + selected.name + ": " + ex.Message);
+                Write2DDiagnostic(editor, path, ex, "SPTC_SUPPORT2DBATCH");
             }
         }
-        editor.WriteMessage($"\nREV05 batch finished: {passed} actual 2D DWGs, {fallbackCount} explicitly labeled 3D viewport fallback DWGs, {failed} failures/skips.");
+        editor.WriteMessage($"\nREV06 batch finished: {passed} actual 2D DWGs, {fallbackCount} explicitly labeled 3D viewport fallback DWGs, {failed} failures/skips.");
     }
 
     [CommandMethod("SPTC_SUPPORTINSPECT", CommandFlags.Modal)]
@@ -304,6 +308,30 @@ public sealed class SupportDrawingCommands : IExtensionApplication
             "\nBatch finished: {0} DWG(s) created, {1} skipped/failed. Check all sheets.", ok, errors));
     }
 
+    private static void Write2DDiagnostic(Editor editor, string dwgPath,
+        System.Exception failure, string operation)
+    {
+        // REV06 diagnostic: precise managed stack trace for any remaining
+        // Plant 3D custom-object / output-database error.
+        try
+        {
+            string filename = Path.Combine(
+                Path.GetDirectoryName(Path.GetFullPath(dwgPath))!,
+                Path.GetFileNameWithoutExtension(dwgPath) + "_REV06_ERROR.txt");
+            string detail = "SPTC Support Drawings REV06" + Environment.NewLine +
+                "Operation: " + operation + Environment.NewLine +
+                "Exception: " + failure.ToString() + Environment.NewLine +
+                "Time (local): " + DateTime.Now.ToString("O", CultureInfo.InvariantCulture);
+            File.WriteAllText(filename, detail);
+            editor.WriteMessage("\nREV06 diagnostic stack trace saved: " + filename);
+        }
+        catch (System.Exception logError)
+        {
+            editor.WriteMessage("\nREV06 could not save diagnostic: " + logError.Message);
+            editor.WriteMessage("\nStack trace: " + failure);
+        }
+    }
+
     private static string SafeFilename(string value)
     {
         if (string.IsNullOrWhiteSpace(value)) return "UNNAMED";
@@ -364,7 +392,7 @@ internal static class SheetExporter
             DrawLine(tx, paper, 8, 42, A3Width - 8, 42);
             DrawLine(tx, paper, 265, 8, 265, 42);
             DrawLine(tx, paper, 8, 27, 265, 27);
-            AddText(tx, paper, "SPTC  |  PIPE SUPPORT DRAWING  |  REV 05", 12, 32, 3.6);
+            AddText(tx, paper, "SPTC  |  PIPE SUPPORT DRAWING  |  REV 06", 12, 32, 3.6);
             AddText(tx, paper, Crop(title, 43), 12, 19, 3.5);
             AddText(tx, paper, string.Format(CultureInfo.InvariantCulture,
                 "ENVELOPE (DWG units): X={0:0.##}  Y={1:0.##}  Z={2:0.##}",
