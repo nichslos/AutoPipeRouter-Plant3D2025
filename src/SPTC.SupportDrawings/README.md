@@ -1,4 +1,12 @@
-# SPTC Support Drawings — REV19: One-Command Native TOP Generation Experiment
+# SPTC Support Drawings — REV19.1: Native Seed Sharing Fix
+
+## REV19.1 — Fix for `eFileSharingViolation` on the empty seed
+
+The first REV19 runtime log stopped on `Database.ReadDwgFile(seed, FileShare.Read, true, null)` before creating the native clone. No Ortho view generation occurred. REV19.1 changes **only the seed-read overload** to `Database.ReadDwgFile(seed, FileOpenMode.OpenForReadAndAllShare, true, null)`, followed by `CloseInput(true)` before `SaveAs`. Autodesk documents this open mode as permitting reading a DWG already open for write. The rest of the REV19 native clone/register/TOP sequence remains unchanged.
+
+**Re-test:** Close any open seed drawing tab and save the blank seed first, then restart Plant 3D 2025, `NETLOAD` REV19.1, open the registered 3D source, run the same `SPTC_ORTHO19_TOP_ONECMD_TEST` command, choose the empty native Ortho seed, and type `REV19 TEST` in the backup project. Attach the new `_REV19_RESULT.txt`. If the file-sharing error persists, check other AutoCAD instances, Windows Explorer preview or network file locks; do not edit `Ortho.dcf` or delete the seed.
+
+Source: https://help.autodesk.com/cloudhelp/2022/ENU/OARX-ManagedRefGuide/files/OARX-ManagedRefGuide-Autodesk_AutoCAD_DatabaseServices_FileOpenMode.html
 
 **Target:** AutoCAD Plant 3D 2025, Windows x64, .NET 8.
 
