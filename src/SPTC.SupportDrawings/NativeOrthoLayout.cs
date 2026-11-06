@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Linq;
 using System.Globalization;
 
 namespace SPTC.SupportDrawings;
@@ -56,6 +58,30 @@ public static class NativeOrthoLayout
             View("SIDE", 1,0,0, 0,0,1, 313,95, 176,84, expanded.SizeY,expanded.SizeZ,sourceUnitToMm)
         };
         return new Plan(original, expanded, padX, padY, padZ, 420, 297, sourceUnitToMm, views);
+    }
+
+    /// <summary>
+    /// Name the proposed plan using the ACTIVE source drawing and selected
+    /// objects. Never embed an example project, DWG, member handle or zone.
+    /// </summary>
+    public static string SuggestedPlanFileName(string sourceDwg,
+        IEnumerable<string> selectedHandles, string revision)
+    {
+        if (string.IsNullOrWhiteSpace(sourceDwg))
+            throw new ArgumentException("Active source model path is required.", nameof(sourceDwg));
+        if (selectedHandles == null) throw new ArgumentNullException(nameof(selectedHandles));
+        string modelName = Path.GetFileNameWithoutExtension(sourceDwg);
+        string handle = selectedHandles.FirstOrDefault(h => !string.IsNullOrWhiteSpace(h)) ?? "NO_SELECTION";
+        return "SPTC_" + SafeFilePart(modelName, 48) + "_" + SafeFilePart(handle, 16) +
+            "_ORTHO_AUTOPLAN_" + SafeFilePart(revision, 12) + ".json";
+    }
+
+    private static string SafeFilePart(string value, int maximum)
+    {
+        string safe = new string(value.Select(c =>
+            char.IsLetterOrDigit(c) || c == '-' || c == '_' ? c : '_').ToArray()).Trim('_');
+        if (safe.Length == 0) return "UNNAMED";
+        return safe.Length > maximum ? safe[..maximum] : safe;
     }
 
     private static ViewPlan View(string name, double dx, double dy, double dz,
