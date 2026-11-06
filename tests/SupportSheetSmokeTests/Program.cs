@@ -66,5 +66,15 @@ Assert(planA.StartsWith("SPTC_Support-A_1A_", StringComparison.Ordinal), "source
 Assert(planA != planB && planA != planC && planB != planC, "model and support handle change report name");
 Assert(!planA.Contains('\\') && !planA.Contains(' '), "proposed filename excludes path and spaces");
 Assert(planA.EndsWith("_REV13.json", StringComparison.Ordinal), "versioned report name");
-Console.WriteLine("PASS: REV13 dynamic project-independent plan names, axis-specific cube, and 3-view geometry.");
+string nativeA = NativeOrthoRegistrationNames.NewOrthoDrawingFileName(
+    "/projects/one/Plant Models/Support 01.dwg", new[] {"A1","A2"}, "20261106_090000_cafe");
+string nativeB = NativeOrthoRegistrationNames.NewOrthoDrawingFileName(
+    "/projects/two/Plant Models/Support 02.dwg", new[] {"B1","B2"}, "20261106_090001_beef");
+Assert(nativeA.StartsWith("SPTC_Support_01_A1_ORTHO_R14_", StringComparison.Ordinal), "native Ortho new DWG depends on active model");
+Assert(nativeA != nativeB, "native Ortho naming follows model and selection");
+Assert(nativeA.EndsWith(".dwg", StringComparison.Ordinal), "native Ortho test output extension");
+Assert(NativeOrthoRegistrationNames.IsInsideProjectDirectory("/projects/sample/Orthos/new.dwg", "/projects/sample"), "test Ortho destination inside project");
+Assert(!NativeOrthoRegistrationNames.IsInsideProjectDirectory("/projects/sample2/Orthos/new.dwg", "/projects/sample"), "other project destination forbidden");
+Assert(!NativeOrthoRegistrationNames.IsInsideProjectDirectory("/projects/sample/../outside.dwg", "/projects/sample"), "parent traversal forbidden");
+Console.WriteLine("PASS: REV14 dynamic Ortho DWG naming, project boundary guards and prior geometry tests.");
 static void Assert(bool value, string name) { if (!value) throw new Exception("FAIL: "+name); }
