@@ -76,5 +76,14 @@ Assert(nativeA.EndsWith(".dwg", StringComparison.Ordinal), "native Ortho test ou
 Assert(NativeOrthoRegistrationNames.IsInsideProjectDirectory("/projects/sample/Orthos/new.dwg", "/projects/sample"), "test Ortho destination inside project");
 Assert(!NativeOrthoRegistrationNames.IsInsideProjectDirectory("/projects/sample2/Orthos/new.dwg", "/projects/sample"), "other project destination forbidden");
 Assert(!NativeOrthoRegistrationNames.IsInsideProjectDirectory("/projects/sample/../outside.dwg", "/projects/sample"), "parent traversal forbidden");
-Console.WriteLine("PASS: REV14 dynamic Ortho DWG naming, project boundary guards and prior geometry tests.");
+Assert(NativeOrthoRegistrationNames.IsInsideProjectDirectory(
+    "/plant-project/Orthos/DWGs/Wizard_Seed.dwg", "/plant-project/Orthos"),
+    "REV16 native seed in Orthos/DWGs subfolder accepted");
+Assert(!NativeOrthoRegistrationNames.IsInsideProjectDirectory(
+    "/other-project/Orthos/DWGs/Wizard_Seed.dwg", "/plant-project/Orthos"),
+    "REV16 seed outside native Ortho project folder rejected");
+Assert(!NativeOrthoRegistrationNames.IsInsideProjectDirectory(
+    "/plant-project/Orthos/../Plant Models/Wrong.dwg", "/plant-project/Orthos"),
+    "REV16 model DWG outside native Ortho folder rejected");
+Console.WriteLine("PASS: REV16 active Ortho subfolder containment, dynamic project guards and Ortho geometry.");
 static void Assert(bool value, string name) { if (!value) throw new Exception("FAIL: "+name); }
