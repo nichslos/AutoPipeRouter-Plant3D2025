@@ -51,6 +51,9 @@ public static class NativeOrthoOneClickPlan
         double maximumX=double.PositiveInfinity;
         double minimumY=double.NegativeInfinity;
         double maximumY=double.PositiveInfinity;
+        // A 0.1 mm inward clearance avoids strict boundary checks failing
+        // from floating-point roundoff when the group is exactly clamped.
+        const double boundaryClearanceMm=0.1;
 
         foreach(var slot in candidate.Views)
         {
@@ -60,10 +63,10 @@ public static class NativeOrthoOneClickPlan
             double deltaY=slot.CenterY-topY;
             // Match Build's conservative keepout: left=0, right=78%,
             // bottom=12%, top=94% of the configured physical sheet.
-            minimumX=Math.Max(minimumX,width/2-deltaX);
-            maximumX=Math.Min(maximumX,paperWidth*.78-width/2-deltaX);
-            minimumY=Math.Max(minimumY,paperHeight*.12+height/2-deltaY);
-            maximumY=Math.Min(maximumY,paperHeight*.94-height/2-deltaY);
+            minimumX=Math.Max(minimumX,width/2-deltaX+boundaryClearanceMm);
+            maximumX=Math.Min(maximumX,paperWidth*.78-width/2-deltaX-boundaryClearanceMm);
+            minimumY=Math.Max(minimumY,paperHeight*.12+height/2-deltaY+boundaryClearanceMm);
+            maximumY=Math.Min(maximumY,paperHeight*.94-height/2-deltaY-boundaryClearanceMm);
         }
         if(minimumX>maximumX||minimumY>maximumY||
             !double.IsFinite(minimumX)||!double.IsFinite(maximumX)||
