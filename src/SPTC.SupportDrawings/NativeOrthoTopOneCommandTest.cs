@@ -291,22 +291,55 @@ public sealed class NativeOrthoTopOneCommandTest
             Log("STEP5_TARGET_COMMAND_CONTEXT_REQUESTED");
             await AcadApp.DocumentManager.ExecuteInCommandContextAsync(_ =>
             {
+                // REV19.4: distinguish managed wrapper object identity from
+                // the actual DWG identity. If a Session document switch left
+                // the working DB on the source DWG, synchronize it to the
+                // verified active target before creating any native OrthoCube.
+                Database? originalWorkingDatabase = null;
+                bool workingDbWasChanged = false;
                 try
                 {
                     Log("STEP5_TARGET_COMMAND_CONTEXT_ENTERED");
                     bool appContext = AcadApp.DocumentManager.IsApplicationContext;
                     bool activeMatches = ReferenceEquals(
                         AcadApp.DocumentManager.MdiActiveDocument, targetDoc);
-                    bool workingMatches = ReferenceEquals(
-                        HostApplicationServices.WorkingDatabase, targetDoc.Database);
+                    originalWorkingDatabase = HostApplicationServices.WorkingDatabase;
+                    string beforePath = originalWorkingDatabase?.Filename ?? "";
+                    string targetPath = targetDoc.Database.Filename ?? "";
+                    bool wrapperMatches = ReferenceEquals(
+                        originalWorkingDatabase, targetDoc.Database);
+                    bool sameDrawing = !string.IsNullOrWhiteSpace(beforePath) &&
+                        !string.IsNullOrWhiteSpace(targetPath) &&
+                        string.Equals(Path.GetFullPath(beforePath),
+                            Path.GetFullPath(targetPath), StringComparison.OrdinalIgnoreCase);
                     Log("STEP5_TARGET_CONTEXT_IS_APPLICATION=" + appContext);
                     Log("STEP5_TARGET_CONTEXT_ACTIVE_DOC_MATCH=" + activeMatches);
-                    Log("STEP5_TARGET_CONTEXT_WORKING_DB_MATCH=" + workingMatches);
-                    if (appContext || !activeMatches || !workingMatches)
+                    Log("STEP5_WORKING_DB_BEFORE=" + beforePath);
+                    Log("STEP5_EXPECTED_WORKING_DB=" + targetPath);
+                    Log("STEP5_WORKING_DB_WRAPPER_EQUALS=" + wrapperMatches);
+                    Log("STEP5_TARGET_CONTEXT_WORKING_DB_MATCH=" + sameDrawing);
+                    if (appContext || !activeMatches)
                         throw new InvalidOperationException(
-                            "Native Ortho requires the opened target drawing's " +
-                            "document command context and matching working database. " +
-                            "See REV19.3 STEP5 context diagnostics.");
+                            "Target Ortho document command context is unavailable. " +
+                            "Native TOP generation stopped before touching cube geometry.");
+
+                    if (!sameDrawing)
+                    {
+                        Log("STEP5_WORKING_DB_SYNC_ENTERED");
+                        HostApplicationServices.WorkingDatabase = targetDoc.Database;
+                        workingDbWasChanged = true;
+                        Log("STEP5_WORKING_DB_SYNC_RETURNED");
+                    }
+                    string effective = HostApplicationServices.WorkingDatabase?.Filename ?? "";
+                    bool verifiedWorking = !string.IsNullOrWhiteSpace(effective) &&
+                        string.Equals(Path.GetFullPath(effective),
+                            Path.GetFullPath(targetPath), StringComparison.OrdinalIgnoreCase);
+                    Log("STEP5_WORKING_DB_EFFECTIVE=" + effective);
+                    Log("STEP5_WORKING_DB_VERIFIED_TARGET=" + verifiedWorking);
+                    if (!verifiedWorking)
+                        throw new InvalidOperationException(
+                            "AutoCAD working database still differs from native Ortho " +
+                            "target after command-context synchronization. See REV19.4 log.");
 
             // REV18-verified native OrthoCube and native Solid3d creation.
             Assembly[] loaded = AppDomain.CurrentDomain.GetAssemblies();
@@ -450,6 +483,29 @@ public sealed class NativeOrthoTopOneCommandTest
                     Log("NATIVE_DOCUMENT_CONTEXT_ERROR=" + ex);
                     SafeWriteToActiveEditor("REV19 native document-context error: " +
                         ex.Message);
+                }
+                finally
+                {
+                    if (workingDbWasChanged)
+                    {
+                        // Re-synchronize to whichever drawing is now active.
+                        // Do not restore the old source working DB while the
+                        // newly registered Ortho DWG remains the active tab.
+                        try
+                        {
+                            Document? active = AcadApp.DocumentManager.MdiActiveDocument;
+                            if (active != null)
+                                HostApplicationServices.WorkingDatabase = active.Database;
+                            else if (originalWorkingDatabase != null)
+                                HostApplicationServices.WorkingDatabase = originalWorkingDatabase;
+                            Log("STEP5_WORKING_DB_FINAL_SYNC=" +
+                                (HostApplicationServices.WorkingDatabase?.Filename ?? "UNKNOWN"));
+                        }
+                        catch (System.Exception ex)
+                        {
+                            Log("STEP5_WORKING_DB_FINAL_SYNC_ERROR=" + ex.Message);
+                        }
+                    }
                 }
                 return Task.CompletedTask;
             }, null);
