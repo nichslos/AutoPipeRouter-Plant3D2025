@@ -188,6 +188,20 @@ jobs:
           if ($code -notmatch 'db.CloseInput\(true\)') { throw 'Clone must close lazy-loaded source input' }
           if ($code -notmatch 'db.SaveAs\(dest, DwgVersion.Current\)') { throw 'Clone must still be saved as native DWG' }
           if ($code -match 'db.ReadDwgFile\(seed, FileShare.Read,') { throw 'FileShare.Read overload caused REV19 sharing violation' }
+      - name: Verify REV19.3 native Ortho document-context handoff
+        shell: pwsh
+        run: |
+          $src = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoTopOneCommandTest.cs' -Raw
+          if ($src -notmatch 'public async void Run\(\)') { throw 'REV19.3 Session command must yield to target document context' }
+          if ($src -notmatch 'ExecuteInCommandContextAsync') { throw 'Target command-context handoff missing' }
+          if ($src -notmatch 'HostApplicationServices.WorkingDatabase') { throw 'Working DB diagnostic missing' }
+          if ($src -notmatch 'STEP5_TARGET_CONTEXT_ACTIVE_DOC_MATCH') { throw 'Document context identity check missing' }
+          if ($src -notmatch 'STEP5_TARGET_CONTEXT_WORKING_DB_MATCH') { throw 'Working DB identity check missing' }
+          if ($src -notmatch 'STEP5_NATIVE_CUBE_EXTENTS_MATCHED') { throw 'Native cube must remain strictly verified' }
+          if ($src -notmatch 'NATIVE_DOCUMENT_CONTEXT_ERROR') { throw 'Native delegate must catch and log errors' }
+          if ($src -match 'GetMethod\("GenerateOrthos"|BindingFlags.NonPublic|SetOrthoDwgVersion|ExecuteNonQuery|SendStringToExecute') {
+            throw 'Private native generation and project database writes remain forbidden'
+          }
       - name: Compile SPTC Support Drawings
         run: dotnet build src/SPTC.SupportDrawings/SPTC.SupportDrawings.csproj -c Release
       - name: Verify compiled DLL
@@ -199,7 +213,7 @@ jobs:
       - name: Upload DLL artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SPTC-SupportDrawings-Plant3D2025-REV19_1
+          name: SPTC-SupportDrawings-Plant3D2025-REV19_3
           path: src/SPTC.SupportDrawings/bin/Release/net8.0-windows/SPTC.SupportDrawings.dll
           retention-days: 30
           if-no-files-found: error
