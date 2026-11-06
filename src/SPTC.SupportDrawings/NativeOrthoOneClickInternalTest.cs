@@ -434,37 +434,21 @@ public sealed class NativeOrthoOneClickInternalTest
             // Paper-space units are checked against the configured sheet;
             // do not allow a user click to push frames into the reserved
             // approximate title-block region or off the sheet.
+            var group=NativeOrthoOneClickPlan.Build(
+                candidate,paperWidth,paperHeight,anchor.X,anchor.Y);
             var planned=new List<(NativeOrthoThreeViewPlan.Slot Slot,
                 object ViewEnum,string TypeName,Point3d Center,double Width,double Height)>();
             foreach(var item in resolved)
             {
-                var slot=item.Slot;
-                double cx=anchor.X+(slot.CenterX-candidate.Views[0].CenterX);
-                double cy=anchor.Y+(slot.CenterY-candidate.Views[0].CenterY);
-                double frameW=Math.Max(5,slot.ModelWmm*candidate.Scale*1.05);
-                double frameH=Math.Max(5,slot.ModelHmm*candidate.Scale*1.05);
-                if(cx-frameW/2<0||cy-frameH/2<paperHeight*.12||
-                    cx+frameW/2>paperWidth*.78||cy+frameH/2>paperHeight*.94)
-                    throw new InvalidOperationException(
-                        "ONE CLICK placement for "+slot.Name+
-                        " is outside safe sheet/title-block envelope. " +
-                        "Retry with TOP point near the suggested center.");
-                planned.Add((slot,item.ViewEnum,item.TypeName,
-                    new Point3d(cx,cy,0),frameW,frameH));
-                Log("STEP5_"+slot.Name+"_AUTO_CENTER="+Point(cx,cy,0)+
-                    " FRAME="+Point(frameW,frameH,0));
+                var placement=group.First(g=>g.Name==item.Slot.Name);
+                planned.Add((item.Slot,item.ViewEnum,item.TypeName,
+                    new Point3d(placement.CenterX,placement.CenterY,0),
+                    placement.PaperFrameWidth,placement.PaperFrameHeight));
+                Log("STEP5_"+item.Slot.Name+"_AUTO_CENTER="+
+                    Point(placement.CenterX,placement.CenterY,0)+
+                    " FRAME="+Point(placement.PaperFrameWidth,
+                        placement.PaperFrameHeight,0));
             }
-            for(int i=0;i<planned.Count;i++)
-                for(int j=i+1;j<planned.Count;j++)
-                {
-                    var a=planned[i];var b=planned[j];
-                    if(Math.Abs(a.Center.X-b.Center.X)<(a.Width+b.Width)/2 &&
-                        Math.Abs(a.Center.Y-b.Center.Y)<(a.Height+b.Height)/2)
-                        throw new InvalidOperationException(
-                            "Derived "+a.Slot.Name+"/"+b.Slot.Name+
-                            " paper viewport rectangles overlap. No native views created.");
-                }
-
             var priorHandles=new HashSet<string>(
                 PaperViewports(targetDoc.Database,paperLayout).Select(x=>x.Handle),
                 StringComparer.OrdinalIgnoreCase);
