@@ -14,7 +14,7 @@ using WinForms = System.Windows.Forms;
 namespace SPTC.SupportDrawings;
 
 /// <summary>
-/// SPTC SUPPORT DRAWINGS - REV 17.
+/// SPTC SUPPORT DRAWINGS - REV 18.
 /// Clones a selected support into its own DWG and arranges four true 3D model
 /// viewports on an A3-like paper-space sheet. It is not a flattened fabrication drawing.
 /// </summary>
@@ -22,7 +22,7 @@ public sealed class SupportDrawingCommands : IExtensionApplication
 {
     public void Initialize() =>
         AcadApp.DocumentManager.MdiActiveDocument?.Editor.WriteMessage(
-            "\nSPTC REV17: SPTC_ORTHO17_TOP_PREFLIGHT inspects native TOP view APIs, source and Ortho sheet without project writes. Auto TOP placement remains unverified.");
+            "\nSPTC REV18: SPTC_ORTHO18_TOP_API_TEST verifies a real native OrthoCube and optionally attempts public CreateOrthos on a fresh cloned DWG, TEST PROJECT ONLY.");
     public void Terminate() { }
 
     [CommandMethod("SPTC_SUPPORTEXPORT", CommandFlags.Modal)]
