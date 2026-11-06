@@ -11,5 +11,6 @@
     <Compile Include="../../src/SPTC.SupportDrawings/Support2DMath.cs" Link="Support2DMath.cs" />
     <Compile Include="../../src/SPTC.SupportDrawings/NativeOrthoLayout.cs" Link="NativeOrthoLayout.cs" />
     <Compile Include="../../src/SPTC.SupportDrawings/NativeOrthoRegistrationNames.cs" Link="NativeOrthoRegistrationNames.cs" />
+    <Compile Include="../../src/SPTC.SupportDrawings/NativeOrthoTopViewPlan.cs" Link="NativeOrthoTopViewPlan.cs" />
   </ItemGroup>
 </Project>
