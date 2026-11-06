@@ -122,6 +122,33 @@ var threeA3=NativeOrthoThreeViewPlan.Build(rev20Sample,420,297);
 Assert(threeA3.Denominator>=threeA1.Denominator,"REV20 A3 needs equal or smaller drawing scale");
 Assert(threeA1.Status.StartsWith("PROPOSED_ONLY:"),
     "REV20 native placement not falsely claimed");
+var clickPlan=NativeOrthoOneClickPlan.Build(threeA1,594,841,
+    threeA1.Views[0].CenterX,threeA1.Views[0].CenterY);
+Assert(clickPlan.Count==3 &&
+    clickPlan[0].Name=="TOP"&&clickPlan[1].Name=="FRONT"&&
+    clickPlan[2].Name=="SIDE","REV21 one click computes three view centers");
+Assert(Math.Abs(clickPlan[0].CenterX-threeA1.Views[0].CenterX)<1e-8 &&
+    Math.Abs(clickPlan[0].CenterY-threeA1.Views[0].CenterY)<1e-8,
+    "REV21 click anchors TOP exactly");
+Assert(Math.Abs(clickPlan[1].CenterY-threeA1.Views[1].CenterY)<1e-8 &&
+    Math.Abs(clickPlan[2].CenterX-threeA1.Views[2].CenterX)<1e-8,
+    "REV21 FRONT and SIDE derive their centers automatically");
+var clickShift=NativeOrthoOneClickPlan.Build(threeA1,594,841,
+    threeA1.Views[0].CenterX+5,threeA1.Views[0].CenterY+5);
+Assert(clickShift.Zip(clickPlan).All(v=>
+    Math.Abs(v.First.CenterX-v.Second.CenterX-5)<1e-8 &&
+    Math.Abs(v.First.CenterY-v.Second.CenterY-5)<1e-8),
+    "REV21 entire group tracks just one anchor");
+bool outOfBoundsRejected=false;
+try{NativeOrthoOneClickPlan.Build(threeA1,594,841,500,800);}
+catch(InvalidOperationException){outOfBoundsRejected=true;}
+Assert(outOfBoundsRejected,"REV21 rejects off-sheet or title-block anchor");
+bool nonFiniteRejected=false;
+try{NativeOrthoOneClickPlan.Build(threeA1,594,841,double.NaN,200);}
+catch(ArgumentException){nonFiniteRejected=true;}
+Assert(nonFiniteRejected,"REV21 rejects invalid insertion point");
+Console.WriteLine("PASS: REV21 one-click TOP anchor, FRONT/SIDE offsets and placement guards.");
+
 Console.WriteLine("PASS: REV20 proposed three-view orientation, common scale and collisions.");
 Console.WriteLine("PASS: REV17 paper-aware TOP view planning and REV16 native Ortho safety guards.");
 static void Assert(bool value, string name) { if (!value) throw new Exception("FAIL: "+name); }

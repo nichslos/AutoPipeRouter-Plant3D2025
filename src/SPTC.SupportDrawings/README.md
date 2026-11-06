@@ -1,3 +1,29 @@
+# SPTC Support Drawings — REV21: One-Click Placement Test
+
+**Experimental and unsupported: COPY OF PROJECT ONLY.** Do not run this against your production Plant 3D project.
+
+REV20 succeeded in creating and registering native TOP, FRONT, SIDE views but called the public \`PlantOrthoView.CreateOrthos\` three times, which prompted for **three placement clicks**. REV21 is a separate test command that attempts the same work from **one** paper-space TOP anchor.
+
+## Run \`SPTC_ORTHO21_ONECLICK_INTERNAL_TEST\`
+
+1. Start AutoCAD Plant 3D 2025 and use the **copied test project**. Close the blank native Ortho seed's DWG tab.
+2. \`NETLOAD\` the REV21 DLL, open/save any registered 3D model containing the support, run \`SPTC_ORTHO21_ONECLICK_INTERNAL_TEST\`.
+3. Select the steel members belonging to one support, then choose a Project Manager-created, **empty and registered** native Ortho seed.
+4. Read the explicit unsupported-API warning, approve, and type **\`REV21 TEST\`** to authorize creating a new registered experimental Ortho DWG.
+5. On the paper-space sheet **click exactly once** near the displayed TOP anchor point. FRONT and SIDE positions are calculated automatically from the selected point, the actual paper size, and a shared view scale. For A1 portrait (594×841 mm), the default TOP suggestion is approximately (166, 601) mm.
+6. If validation fails, inspect \`*_REV21_RESULT.txt\`. Leave the failed registered test DWG in the copied project for diagnosis. Do not delete project files or edit \`Ortho.dcf\` manually.
+7. If three native views appear, save the drawing, inspect the title block and projections, and run **\`PLANTORTHOUPDATE\` → All** (or Update View on each view). **Only mark a test successful if model links and Update View work.** Upload the result log and an Ortho sheet screenshot.
+
+## Internal implementation and risk
+
+The public \`CreateOrthos\` API triggers \`ProcessViewportPlacement\` / \`Editor.Drag\` per call and has **no insertion point**. REV21 experiments with the **NON-PUBLIC** \`PlantOrthoView.GenerateOrthos\` entry point, requiring exactly 16 parameters including a **paper-space Viewport ObjectId** and explicit paper-space \`Point3d ptIns\`. It refuses to invoke a method whose *full runtime parameter signature* differs from the analyzed AutoCAD Plant 3D 2025 DLL.
+
+The code creates three proposed paper viewports in the new registered Ortho DWG and invokes internal generation once for each view using calculated centers. It verifies the working database, model bounds, actual OrthoCube extents and the registered native view catalog after each call. Since this is a non-public internal method, its initialization and required state **might not match the standalone call**; the first runtime test may fail or create an incomplete native view. The code logs the failure and stops; it does not silently delete registered drawings or patch the Project Manager database. Do not treat a compiled DLL as evidence that Update View works.
+
+**Fallback:** The fully validated REV19.4 TOP-only command and the working REV20 three-click TOP/FRONT/SIDE command remain **unchanged**.
+
+---
+
 # SPTC Support Drawings — REV20: Native TOP + FRONT + SIDE
 
 **REV19.4 is preserved as the confirmed working one-command TOP-only baseline.** Its original command remains \`SPTC_ORTHO19_TOP_ONECMD_TEST\`. The user confirmed native TOP creation without a placement click and Update View.

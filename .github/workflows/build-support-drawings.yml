@@ -237,6 +237,32 @@ jobs:
           }
           $baseline = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoTopOneCommandTest.cs' -Raw
           if ($baseline -notmatch 'CommandMethod\("SPTC_ORTHO19_TOP_ONECMD_TEST"') { throw 'Validated REV19.4 command must remain' }
+      - name: Verify REV21 unsupported internal generation is isolated and guarded
+        shell: pwsh
+        run: |
+          $src = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoOneClickInternalTest.cs' -Raw
+          $plan = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoOneClickPlan.cs' -Raw
+          $baseline = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoThreeViewOneCommandTest.cs' -Raw
+          $top = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoTopOneCommandTest.cs' -Raw
+          if ($src -notmatch 'CommandMethod\("SPTC_ORTHO21_ONECLICK_INTERNAL_TEST"') { throw 'Separate REV21 command missing' }
+          if ($src -notmatch 'REV21 TEST') { throw 'Copied-project explicit authorization missing' }
+          if ($src -notmatch 'ExecuteInCommandContextAsync') { throw 'Native target drawing command context missing' }
+          if ($src -notmatch 'STEP5_WORKING_DB_VERIFIED_TARGET') { throw 'Working database matching missing' }
+          if ($src -notmatch 'NonPublic\|BindingFlags.Instance') { throw 'Explicit experimental internal method lookup missing' }
+          if ($src -notmatch 'expectedNativeSignature') { throw 'Exact internal method signature gate missing' }
+          if ($src -notmatch 'STEP5_UNSUPPORTED_GENERATE_SIGNATURE_MATCH') { throw 'Internal signature fail-closed guard missing' }
+          if ($src -notmatch 'NativeOrthoOneClickPlan.Build') { throw 'One-click anchor spacing guard missing' }
+          if ($src -notmatch 'PromptPointOptions') { throw 'Exactly one TOP anchor point required' }
+          if ($src -notmatch 'CreateExperimentalViewport') { throw 'Native paper viewport ObjectId creation missing' }
+          if ($src -notmatch 'PRIVATE_GENERATEORTHOS_ENTERED') { throw 'Internal invocation not logged' }
+          if ($src -notmatch 'CatalogMatches') { throw 'Exact native view registration checks missing' }
+          if ($src -notmatch 'CUBE_EXTENTS_MATCHED') { throw 'Native cube geometry verification missing' }
+          if ($src -match 'SQLiteConnection|ExecuteNonQuery|SendStringToExecute|SetOrthoDwgVersion') {
+            throw 'REV21 must not edit project database directly or script clicks'
+          }
+          if ($plan -notmatch 'paperHeight\*\.12' -or $plan -notmatch 'paperWidth\*\.78') { throw 'Title-block keepout guard missing' }
+          if ($baseline -notmatch 'CommandMethod\("SPTC_ORTHO20_THREEVIEW_ONECMD_TEST"') { throw 'REV20 working fallback modified' }
+          if ($top -notmatch 'CommandMethod\("SPTC_ORTHO19_TOP_ONECMD_TEST"') { throw 'REV19.4 working fallback modified' }
       - name: Compile SPTC Support Drawings
         run: dotnet build src/SPTC.SupportDrawings/SPTC.SupportDrawings.csproj -c Release
       - name: Verify compiled DLL
@@ -248,7 +274,7 @@ jobs:
       - name: Upload DLL artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SPTC-SupportDrawings-Plant3D2025-REV20
+          name: SPTC-SupportDrawings-Plant3D2025-REV21
           path: src/SPTC.SupportDrawings/bin/Release/net8.0-windows/SPTC.SupportDrawings.dll
           retention-days: 30
           if-no-files-found: error
