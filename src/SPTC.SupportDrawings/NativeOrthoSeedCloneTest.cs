@@ -16,13 +16,17 @@ using WinForms = System.Windows.Forms;
 namespace SPTC.SupportDrawings;
 
 /// <summary>
-/// REV15 isolated test: clone an ORTHO DWG created by Plant 3D's own wizard,
+/// REV16 corrected native-seed clone test: accept registered project Ortho subfolders,
 /// NOT a raw DWT. Never modifies a live existing drawing or uses raw DCF writes.
 /// The new project registration must be tested in a copied project.
 /// </summary>
 public sealed class NativeOrthoSeedCloneTest
 {
+    // Preserve the REV15 experimental entry point as an alias; both use corrected logic.
     [CommandMethod("SPTC_ORTHO15CLONE_TEST", CommandFlags.Modal)]
+    public void LegacyAlias() => CreateFromNativeOrthoSeed();
+
+    [CommandMethod("SPTC_ORTHO16CLONE_TEST", CommandFlags.Modal)]
     public void CreateFromNativeOrthoSeed()
     {
         Document? doc = AcadApp.DocumentManager.MdiActiveDocument;
@@ -77,16 +81,18 @@ public sealed class NativeOrthoSeedCloneTest
             Filter = "Orthographic Drawing (*.dwg)|*.dwg",
             CheckFileExists = true,
             RestoreDirectory = true,
-            InitialDirectory = info.OrthoFolder
+            InitialDirectory = Directory.Exists(Path.Combine(info.OrthoFolder, "DWGs"))
+                ? Path.Combine(info.OrthoFolder, "DWGs") : info.OrthoFolder
         };
         if (dialog.ShowDialog() != WinForms.DialogResult.OK) return;
         string seed = Path.GetFullPath(dialog.FileName);
+        // Native Project Manager stores ortho drawing files beneath GetOrthoPath()
+        // (often Orthos/DWGs), not necessarily directly in the Ortho root.
+        // Allow only paths inside the ACTIVE native Ortho folder and project root.
         if (!NativeOrthoRegistrationNames.IsInsideProjectDirectory(seed, info.ProjectRoot) ||
-            !string.Equals(Path.GetDirectoryName(seed)?.TrimEnd(Path.DirectorySeparatorChar),
-                info.OrthoFolder.TrimEnd(Path.DirectorySeparatorChar),
-                StringComparison.OrdinalIgnoreCase))
+            !NativeOrthoRegistrationNames.IsInsideProjectDirectory(seed, info.OrthoFolder))
         {
-            ed.WriteMessage("\nREV15: Seed must be a registered DWG directly inside this project's Orthos folder.");
+            ed.WriteMessage("\nREV16: Seed must be a registered Ortho DWG within the active project's Ortho directory or its subfolders.");
             return;
         }
         if (!File.Exists(seed) || string.Equals(seed, source, StringComparison.OrdinalIgnoreCase))
@@ -133,8 +139,25 @@ public sealed class NativeOrthoSeedCloneTest
             return;
         }
 
+        // The screenshot of the working native Ortho may show an already generated
+        // view. Do not clone a sheet that contains a model-linked Ortho view.
+        // Inspect native registered view names where the Autodesk API exposes them.
+        string seedInspection = InspectSeedViews(info.OrthoProject, seed);
+        if (seedInspection.StartsWith("HAS_VIEWS:", StringComparison.Ordinal))
+        {
+            ed.WriteMessage("\nREV16 STOP: Selected seed already has native Ortho views: " + seedInspection);
+            ed.WriteMessage("\nCreate a NEW blank seed in Project Manager, enter New View, then cancel WITHOUT creating a view.");
+            return;
+        }
+        if (!string.Equals(seedInspection, "NO_VIEWS_FOUND", StringComparison.Ordinal))
+        {
+            ed.WriteMessage("\nREV16: Could not independently prove Ortho seed is empty: " + seedInspection);
+            ed.WriteMessage("\nCreate a NEW blank Project Manager Ortho DWG and use it as the seed.");
+            return;
+        }
+
         var answer = WinForms.MessageBox.Show(
-            "REV15 EXPERIMENTAL NATIVE ORTHO CLONE\n\n" +
+            "REV16 EXPERIMENTAL NATIVE ORTHO CLONE\n\n" +
             "ACTIVE PROJECT: " + info.ProjectRoot + "\n" +
             "SOURCE MODEL: " + source + "\n" +
             "NATIVE ORTHO SEED: " + seed + "\n\n" +
@@ -144,7 +167,7 @@ public sealed class NativeOrthoSeedCloneTest
             "This will ADD an Ortho DWG registration and cannot be automatically rolled back safely.\n" +
             "This experiment DOES NOT generate an Ortho view.\n\n" +
             "Are both the project and native Ortho seed suitable for this test?",
-            "SPTC REV15 — BACKUP ONLY", WinForms.MessageBoxButtons.YesNo,
+            "SPTC REV16 — BACKUP ONLY", WinForms.MessageBoxButtons.YesNo,
             WinForms.MessageBoxIcon.Warning, WinForms.MessageBoxDefaultButton.Button2);
         if (answer != WinForms.DialogResult.Yes) return;
 
@@ -161,19 +184,24 @@ public sealed class NativeOrthoSeedCloneTest
         string unique = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture) +
             "_" + Guid.NewGuid().ToString("N")[..6];
         string name = NativeOrthoRegistrationNames.NewOrthoDrawingFileName(source, handles, unique);
-        // Rev15 filename identifies seed-clone test, while REV14 naming remains unchanged.
-        name = name.Replace("_ORTHO_R14_", "_ORTHO_R15CLONE_", StringComparison.Ordinal);
-        string dest = Path.Combine(info.OrthoFolder, name);
+        // REV16 filename identifies corrected seed-clone test, while REV14 naming remains unchanged.
+        name = name.Replace("_ORTHO_R14_", "_ORTHO_R16CLONE_", StringComparison.Ordinal);
+        // Place clone beside the registered native seed, not in the arbitrary
+        // Ortho root (the native DWGs folder may be one level below it).
+        string nativeDwgFolder = Path.GetDirectoryName(seed)!;
+        string dest = Path.Combine(nativeDwgFolder, name);
         if (File.Exists(dest)) { ed.WriteMessage("\nREV15: Destination already exists; no changes."); return; }
-        string report = Path.Combine(info.OrthoFolder,
+        string report = Path.Combine(nativeDwgFolder,
             Path.GetFileNameWithoutExtension(dest) + "_REV15_RESULT.txt");
         var log = new StringBuilder();
-        log.AppendLine("SPTC REV15 - WIZARD-CREATED ORTHO SEED CLONE EXPERIMENT");
+        log.AppendLine("SPTC REV16 - VERIFIED EMPTY WIZARD-SEED CLONE EXPERIMENT");
         log.AppendLine("UTC: " + DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture));
         log.AppendLine("PROJECT: " + info.ProjectRoot);
         log.AppendLine("SOURCE_MODEL: " + source);
         log.AppendLine("SOURCE_HANDLES: " + string.Join(", ", handles));
         log.AppendLine("WIZARD_SEED: " + seed);
+        log.AppendLine("SEED_VIEW_INSPECTION: " + seedInspection);
+        log.AppendLine("NATIVE_DWG_FOLDER: " + nativeDwgFolder);
         log.AppendLine("NEW_CLONE: " + dest);
         log.AppendLine("AUTOMATIC_2D_VIEW_GENERATED=FALSE");
         bool copied = false, invoked = false;
@@ -299,6 +327,61 @@ public sealed class NativeOrthoSeedCloneTest
                 p[2].ParameterType == typeof(string).MakeByRefType();
         });
         return new NativeInfo(root, folder, ortho, add, validate, list);
+    }
+
+    /// <summary>
+    /// Fail closed if the native Ortho project's view catalog cannot establish
+    /// that the selected seed contains zero Ortho views. Only uses public APIs.
+    /// </summary>
+    private static string InspectSeedViews(object ortho, string seed)
+    {
+        try
+        {
+            const BindingFlags flags = BindingFlags.Public | BindingFlags.Instance;
+            MethodInfo? listed = ortho.GetType().GetMethod("GetPnPDrawingFiles",
+                flags, null, Type.EmptyTypes, null);
+            MethodInfo? views = ortho.GetType().GetMethod("GetAllViewNamesInOrthoDwgByGuid",
+                flags, null, new[]
+                {
+                    typeof(string), typeof(Dictionary<string,string>).MakeByRefType()
+                }, null);
+            if (listed == null || views == null) return "NATIVE_VIEW_API_UNAVAILABLE";
+            if (listed.Invoke(ortho, null) is not IEnumerable drawings)
+                return "CANNOT_ENUMERATE_PROJECT_DRAWINGS";
+
+            string? seedGuid = null;
+            foreach (object? drawing in drawings)
+            {
+                if (drawing == null) continue;
+                string? name = ReadPublicString(drawing, "FileName") ??
+                    ReadPublicString(drawing, "RelativeFilePath") ??
+                    ReadPublicString(drawing, "Name");
+                if (!string.Equals(Path.GetFileName(name), Path.GetFileName(seed),
+                    StringComparison.OrdinalIgnoreCase)) continue;
+
+                foreach (string key in new[] { "Guid", "PnPDrawingGuid", "DrawingGuid" })
+                {
+                    string? value = ReadPublicString(drawing, key);
+                    if (Guid.TryParse(value, out _))
+                    {
+                        seedGuid = value;
+                        break;
+                    }
+                }
+                break;
+            }
+            if (seedGuid == null) return "NATIVE_DRAWING_GUID_UNAVAILABLE";
+            object?[] parameters = { seedGuid, new Dictionary<string,string>() };
+            views.Invoke(ortho, parameters);
+            if (parameters[1] is not Dictionary<string,string> names)
+                return "NATIVE_VIEW_LIST_UNAVAILABLE";
+            return names.Count == 0 ? "NO_VIEWS_FOUND" :
+                "HAS_VIEWS:" + string.Join(",", names.Keys.Take(8));
+        }
+        catch (System.Exception ex)
+        {
+            return "VIEW_INSPECTION_FAILED:" + (ex.InnerException?.Message ?? ex.Message);
+        }
     }
 
     private static string? ReadPublicString(object target, string name)
