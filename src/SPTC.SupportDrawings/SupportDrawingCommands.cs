@@ -14,7 +14,7 @@ using WinForms = System.Windows.Forms;
 namespace SPTC.SupportDrawings;
 
 /// <summary>
-/// SPTC SUPPORT DRAWINGS - REV 15.
+/// SPTC SUPPORT DRAWINGS - REV 16.
 /// Clones a selected support into its own DWG and arranges four true 3D model
 /// viewports on an A3-like paper-space sheet. It is not a flattened fabrication drawing.
 /// </summary>
@@ -22,7 +22,7 @@ public sealed class SupportDrawingCommands : IExtensionApplication
 {
     public void Initialize() =>
         AcadApp.DocumentManager.MdiActiveDocument?.Editor.WriteMessage(
-            "\nSPTC REV15: use SPTC_ORTHO15CLONE_TEST with a native wizard-created EMPTY Ortho seed in a BACKUP project. SPTC_SUPPORT2D is interactive.");
+            "\nSPTC REV16: SPTC_ORTHO16CLONE_TEST supports Orthos/DWGs and requires a verified empty native Ortho seed. Use COPIED TEST projects only.");
     public void Terminate() { }
 
     [CommandMethod("SPTC_SUPPORTEXPORT", CommandFlags.Modal)]
