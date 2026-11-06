@@ -1,4 +1,29 @@
-# SPTC Support Drawings — REV19.1: Native Seed Sharing Fix
+# SPTC Support Drawings — REV19.3: Target Document Context Fix
+
+## REV19.3 — Fix native OrthoCube initialization after switching drawings
+
+**Observed:** REV19.2 created/registered/opened the native Ortho clone and calculated the same valid padded support bounds as REV18, but `PlantOrthoCube.InitializeCube(Extents3d)` returned uninitialized `Extents` with `Min=(+1e20,+1e20,+1e20)` and `Max=(-1e20,-1e20,-1e20)`. These are empty-envelope sentinel values, not structural support geometry. The previous code correctly stopped before generating a TOP view.
+
+**Likely root cause:** REV19 uses `CommandFlags.Session` (AutoCAD application context) to switch drawings. REV18 successfully ran as a document-context command inside an already open native Ortho drawing. The REV19.2 session code switched `MdiActiveDocument` but called the native OrthoCube API before entering the newly opened drawing's **document command context**.
+
+**Change:** REV19.3 retains the registered source/seed checks, all unique native drawing registration behavior, and the strict cube dimension comparison. After opening/activating the new registered Ortho drawing, it uses **`DocumentManager.ExecuteInCommandContextAsync`** to schedule the native cube initializer and public `CreateOrthos` on AutoCAD's target document context. It logs and **fails closed** if the document is not active or its working database does not match the target. All delegate exceptions are caught and written to `_REV19_RESULT.txt`; no direct editor writes to the inactive source document.
+
+**Important:** The new context handoff is an *unverified hypothesis* until tested in the actual Plant 3D 2025 runtime. It neither bypasses geometry validation nor modifies the confirmed REV18 command. The public TOP API may still show native dialogs depending on project state.
+
+**Test:** Restart Plant 3D, load the REV19.3 DLL with `NETLOAD`, open the registered 3D source in your fully copied test project, run `SPTC_ORTHO19_TOP_ONECMD_TEST`, select one support, select an empty native Project Manager seed under `Orthos/DWGs`, and enter `REV19 TEST`. Inspect the new unique `_ORTHO_R19AUTO_` drawing and upload the new `_REV19_RESULT.txt`.
+
+**Key new log fields:**
+- `STEP5_TARGET_COMMAND_CONTEXT_REQUESTED`
+- `STEP5_TARGET_COMMAND_CONTEXT_ENTERED`
+- `STEP5_TARGET_CONTEXT_IS_APPLICATION` (expected `False`)
+- `STEP5_TARGET_CONTEXT_ACTIVE_DOC_MATCH` (expected `True`)
+- `STEP5_TARGET_CONTEXT_WORKING_DB_MATCH` (expected `True`)
+- `STEP5_NATIVE_CUBE_EXTENTS_MATCHED` (expected `True`)
+- `STEP8_PUBLIC_CREATEORTHOS_RETURNED` if native TOP generation completes.
+
+Never delete a failed clone directly from the project folder or edit `Ortho.dcf` manually. Do not reuse a previous failed `_ORTHO_R19AUTO_` DWG as the empty seed. Test only in the copied project.
+
+Autodesk documentation: https://help.autodesk.com/cloudhelp/2022/ENU/OARX-ManagedRefGuide/files/OARX-ManagedRefGuide-Autodesk_AutoCAD_DatabaseServices_HostApplicationServices_WorkingDatabase.html ; https://blog.autodesk.io/creating-a-sample-autocad-plugin-with-net-80-and-ccli-for-autocad-2025/
 
 ## REV19.1 — Fix for `eFileSharingViolation` on the empty seed
 
