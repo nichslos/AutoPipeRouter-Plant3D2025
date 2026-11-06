@@ -299,16 +299,47 @@ public sealed class NativeOrthoTopOneCommandTest
                 var expected = new Extents3d(
                     new Point3d(bounds.MinX,bounds.MinY,bounds.MinZ),
                     new Point3d(bounds.MaxX,bounds.MaxY,bounds.MaxZ));
+                // REV19.2: native OrthoCube may change the requested extents.
+                // Log both native and requested bounds before deciding whether it
+                // remains safe to generate a model-linked TOP view. Do not bypass
+                // this geometry validation until actual native values are reviewed.
+                Log("STEP5_EXPECTED_CUBE_MIN=" +
+                    Point(bounds.MinX,bounds.MinY,bounds.MinZ));
+                Log("STEP5_EXPECTED_CUBE_MAX=" +
+                    Point(bounds.MaxX,bounds.MaxY,bounds.MaxZ));
                 Log("STEP5_NATIVE_CUBE_INITIALIZE_ENTERED");
                 init.Invoke(cube, new object[] {expected});
-                if (cubeClass.GetProperty("Extents")?.GetValue(cube) is not Extents3d got ||
-                    !Near(got.MinPoint.X,bounds.MinX) ||
-                    !Near(got.MinPoint.Y,bounds.MinY) ||
-                    !Near(got.MinPoint.Z,bounds.MinZ) ||
-                    !Near(got.MaxPoint.X,bounds.MaxX) ||
-                    !Near(got.MaxPoint.Y,bounds.MaxY) ||
-                    !Near(got.MaxPoint.Z,bounds.MaxZ))
-                    throw new InvalidOperationException("Native OrthoCube does not match selected support bounds.");
+                Log("STEP5_NATIVE_CUBE_INITIALIZE_RETURNED");
+                object? extentsValue = cubeClass.GetProperty("Extents")?.GetValue(cube);
+                if (extentsValue is not Extents3d got)
+                {
+                    Log("STEP5_ACTUAL_CUBE_EXTENTS=UNAVAILABLE");
+                    throw new InvalidOperationException(
+                        "Native OrthoCube.Extents did not return an Extents3d.");
+                }
+                Log("STEP5_ACTUAL_CUBE_MIN=" +
+                    Point(got.MinPoint.X,got.MinPoint.Y,got.MinPoint.Z));
+                Log("STEP5_ACTUAL_CUBE_MAX=" +
+                    Point(got.MaxPoint.X,got.MaxPoint.Y,got.MaxPoint.Z));
+                Log("STEP5_CUBE_MIN_DELTA=" +
+                    Point(got.MinPoint.X-bounds.MinX,
+                          got.MinPoint.Y-bounds.MinY,
+                          got.MinPoint.Z-bounds.MinZ));
+                Log("STEP5_CUBE_MAX_DELTA=" +
+                    Point(got.MaxPoint.X-bounds.MaxX,
+                          got.MaxPoint.Y-bounds.MaxY,
+                          got.MaxPoint.Z-bounds.MaxZ));
+                bool cubeMatches =
+                    Near(got.MinPoint.X,bounds.MinX) &&
+                    Near(got.MinPoint.Y,bounds.MinY) &&
+                    Near(got.MinPoint.Z,bounds.MinZ) &&
+                    Near(got.MaxPoint.X,bounds.MaxX) &&
+                    Near(got.MaxPoint.Y,bounds.MaxY) &&
+                    Near(got.MaxPoint.Z,bounds.MaxZ);
+                Log("STEP5_NATIVE_CUBE_EXTENTS_MATCHED=" + cubeMatches);
+                if (!cubeMatches)
+                    throw new InvalidOperationException(
+                        "Native OrthoCube differs from requested support bounds. See STEP5 actual and delta coordinates in REV19 log.");
                 Log("STEP5_NATIVE_CUBE_INITIALIZED_AND_VALIDATED=PASS");
 
                 MethodInfo copy = cubeClass.GetMethod("MakeCubeCopy",
@@ -372,7 +403,7 @@ public sealed class NativeOrthoTopOneCommandTest
                         actualViews.StartsWith("EXISTING_NATIVE_VIEWS:",StringComparison.Ordinal));
                     Log("UPDATE_VIEW_MANUAL_TEST_REQUIRED=TRUE");
                     Log("FINAL_STATUS=TOP_API_RETURNED_CHECK_UPDATE_AND_GEOMETRY");
-                    targetDoc.Editor.WriteMessage("\nREV19: TOP native API returned. Inspect sheet, SAVE and test Update View.");
+                    SafeWriteToActiveEditor("REV19: TOP native API returned. Inspect sheet, SAVE and test Update View.");
                 }
             }
             finally { if (cube is IDisposable disposeCube) disposeCube.Dispose(); }
@@ -380,12 +411,12 @@ public sealed class NativeOrthoTopOneCommandTest
         catch (TargetInvocationException ex)
         {
             Log("NATIVE_EXCEPTION=" + (ex.InnerException?.ToString() ?? ex.ToString()));
-            ed.WriteMessage("\nREV19 native API error: " + (ex.InnerException?.Message ?? ex.Message));
+            SafeWriteToActiveEditor("REV19 native API error: " + (ex.InnerException?.Message ?? ex.Message));
         }
         catch (System.Exception ex)
         {
             Log("ERROR=" + ex);
-            ed.WriteMessage("\nREV19 stopped: " + ex.Message);
+            SafeWriteToActiveEditor("REV19 stopped: " + ex.Message);
         }
         finally
         {
@@ -396,10 +427,25 @@ public sealed class NativeOrthoTopOneCommandTest
                 try { File.Delete(dest); Log("CLEANUP=UNREGISTERED_CLONE_REMOVED"); }
                 catch (System.Exception ex) { Log("CLEANUP_FAILED=" + ex.Message); }
             }
-            try { ed.WriteMessage("\nREV19 RESULT: " + report); }
-            catch { /* original source editor may be inactive */ }
-            try { targetDoc?.Editor.WriteMessage("\nREV19 RESULT: " + report); }
-            catch { }
+            // This is a Session command: the original source Editor may no longer
+            // have an active AutoCAD command context after switching to Ortho.
+            // Never let eNotApplicable from WriteMessage mask the real exception.
+            SafeWriteToActiveEditor("REV19 RESULT: " + report);
+        }
+    }
+
+    private static void SafeWriteToActiveEditor(string message)
+    {
+        try
+        {
+            Document? active = AcadApp.DocumentManager.MdiActiveDocument;
+            active?.Editor.WriteMessage("\n" + message);
+        }
+        catch (System.Exception)
+        {
+            // An AutoCAD session command may not have a document prompt context.
+            // Diagnostic evidence is persisted by Log() independently.
+            System.Diagnostics.Trace.WriteLine(message);
         }
     }
 
