@@ -7,7 +7,7 @@ using System.Reflection;
 namespace SPTC.SupportDrawings;
 
 /// <summary>
-/// REV12 read-only Plant 3D 2025 source registration check, using
+/// REV13 read-only model-independent Plant 3D source registration check, using
 /// OrthoDocUtils.IsValid3dDrawing when the installed Ortho API exposes it.
 /// Never adds, renames, or writes a project drawing.
 /// </summary>
@@ -31,7 +31,7 @@ internal static class NativeOrthoProjectCheck
                 return Fail("PlantApplication API not loaded; cannot verify project.");
             object? project = plant.GetProperty("CurrentProject", publicStatic)?.GetValue(null);
             if (project == null)
-                return Fail("No active Plant 3D project. Open the TOSHIBA project in Project Manager.");
+                return Fail("No active Plant 3D project. Open the project containing the current source 3D model in Project Manager.");
 
             Type projectType = project.GetType();
             string name = GetPublicProperty(project, "ProjectName") ??
