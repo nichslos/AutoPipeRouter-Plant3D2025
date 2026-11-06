@@ -115,6 +115,19 @@ jobs:
           }
           $base = Get-Content 'src/SPTC.SupportDrawings/SupportDrawingCommands.cs' -Raw
           if ($base -notmatch 'CommandMethod\("SPTC_SUPPORT2D"') { throw 'SPTC_SUPPORT2D must remain available' }
+      - name: Verify REV16 native Ortho seed folder and empty-view safeguards
+        shell: pwsh
+        run: |
+          $src = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoSeedCloneTest.cs' -Raw
+          if ($src -notmatch 'CommandMethod\("SPTC_ORTHO16CLONE_TEST"') { throw 'Corrected REV16 test command missing' }
+          if ($src -notmatch 'CommandMethod\("SPTC_ORTHO15CLONE_TEST"') { throw 'Legacy test alias missing' }
+          if ($src -notmatch 'IsInsideProjectDirectory\(seed, info.OrthoFolder\)') { throw 'Native Ortho subfolder guard missing' }
+          if ($src -notmatch 'Path.GetDirectoryName\(seed\)!') { throw 'Clone must be saved beside original native Ortho seed' }
+          if ($src -notmatch 'GetAllViewNamesInOrthoDwgByGuid') { throw 'Read-only native Ortho view list preflight missing' }
+          if ($src -notmatch 'NO_VIEWS_FOUND') { throw 'Unknown or occupied seed must stop clone test' }
+          if ($src -match 'SetOrthoDwgVersion|GenerateOrthos\(|SQLiteConnection|ExecuteNonQuery') {
+            throw 'Unverified version setter, non-public generation or direct project database mutation forbidden'
+          }
       - name: Compile SPTC Support Drawings
         run: dotnet build src/SPTC.SupportDrawings/SPTC.SupportDrawings.csproj -c Release
       - name: Verify compiled DLL
@@ -126,7 +139,7 @@ jobs:
       - name: Upload DLL artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SPTC-SupportDrawings-Plant3D2025-REV15
+          name: SPTC-SupportDrawings-Plant3D2025-REV16
           path: src/SPTC.SupportDrawings/bin/Release/net8.0-windows/SPTC.SupportDrawings.dll
           retention-days: 30
           if-no-files-found: error
