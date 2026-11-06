@@ -180,6 +180,14 @@ jobs:
           }
           $legacy = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoTopGenerationTest.cs' -Raw
           if ($legacy -notmatch 'CommandMethod\("SPTC_ORTHO18_TOP_API_TEST"') { throw 'Working REV18 command must remain unchanged' }
+      - name: Verify REV19.1 eFileSharingViolation native DWG clone fix
+        shell: pwsh
+        run: |
+          $code = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoTopOneCommandTest.cs' -Raw
+          if ($code -notmatch 'ReadDwgFile\(seed, FileOpenMode.OpenForReadAndAllShare, true, null\)') { throw 'Native seed clone must use Autodesk all-share FileOpenMode' }
+          if ($code -notmatch 'db.CloseInput\(true\)') { throw 'Clone must close lazy-loaded source input' }
+          if ($code -notmatch 'db.SaveAs\(dest, DwgVersion.Current\)') { throw 'Clone must still be saved as native DWG' }
+          if ($code -match 'db.ReadDwgFile\(seed, FileShare.Read,') { throw 'FileShare.Read overload caused REV19 sharing violation' }
       - name: Compile SPTC Support Drawings
         run: dotnet build src/SPTC.SupportDrawings/SPTC.SupportDrawings.csproj -c Release
       - name: Verify compiled DLL
@@ -191,7 +199,7 @@ jobs:
       - name: Upload DLL artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SPTC-SupportDrawings-Plant3D2025-REV19
+          name: SPTC-SupportDrawings-Plant3D2025-REV19_1
           path: src/SPTC.SupportDrawings/bin/Release/net8.0-windows/SPTC.SupportDrawings.dll
           retention-days: 30
           if-no-files-found: error
