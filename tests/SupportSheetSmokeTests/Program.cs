@@ -56,5 +56,15 @@ foreach (var view in nativePlan.Views)
 bool invalidScaleRejected = false;
 try { NativeOrthoLayout.Build(box, 0); } catch (ArgumentOutOfRangeException) { invalidScaleRejected = true; }
 Assert(invalidScaleRejected, "unrecognized source units rejected");
-Console.WriteLine("PASS: REV11 axis-specific OrthoCube padding, model bounds, 3-view scale and placement checks.");
+string planA = NativeOrthoLayout.SuggestedPlanFileName(
+    @"C:\\Projects\\Line_A\\Plant Models\\Support-A.dwg", new[] { "1A" }, "REV13");
+string planB = NativeOrthoLayout.SuggestedPlanFileName(
+    @"D:\\OtherProject\\Plant Models\\Unit-B.dwg", new[] { "2B" }, "REV13");
+string planC = NativeOrthoLayout.SuggestedPlanFileName(
+    @"C:\\Projects\\Line_A\\Plant Models\\Support-A.dwg", new[] { "3C" }, "REV13");
+Assert(planA.StartsWith("SPTC_Support-A_1A_", StringComparison.Ordinal), "source drawing determines report name");
+Assert(planA != planB && planA != planC && planB != planC, "model and support handle change report name");
+Assert(!planA.Contains('\\') && !planA.Contains(' '), "proposed filename excludes path and spaces");
+Assert(planA.EndsWith("_REV13.json", StringComparison.Ordinal), "versioned report name");
+Console.WriteLine("PASS: REV13 dynamic project-independent plan names, axis-specific cube, and 3-view geometry.");
 static void Assert(bool value, string name) { if (!value) throw new Exception("FAIL: "+name); }
