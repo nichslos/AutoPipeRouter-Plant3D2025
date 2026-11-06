@@ -85,5 +85,17 @@ Assert(!NativeOrthoRegistrationNames.IsInsideProjectDirectory(
 Assert(!NativeOrthoRegistrationNames.IsInsideProjectDirectory(
     "/plant-project/Orthos/../Plant Models/Wrong.dwg", "/plant-project/Orthos"),
     "REV16 model DWG outside native Ortho folder rejected");
-Console.WriteLine("PASS: REV16 active Ortho subfolder containment, dynamic project guards and Ortho geometry.");
+var topA1 = NativeOrthoTopViewPlan.Build(tightPlan, 841, 594);
+var topA3 = NativeOrthoTopViewPlan.Build(tightPlan, 420, 297);
+Assert(topA1.PaperWidthMm == 841 && topA1.PaperHeightMm == 594,
+    "REV17 uses actual A1 Ortho paper size rather than fixed A3");
+Assert(topA1.PaperCenterX == 841 * 0.32 && topA1.PaperCenterY == 594 * 0.62,
+    "REV17 calculates paper placement from target sheet");
+Assert(topA1.CandidateScaleDenominator <= topA3.CandidateScaleDenominator,
+    "Larger Ortho paper must not require a smaller TOP view");
+Assert(topA1.Status.StartsWith("PROPOSED_ONLY:", StringComparison.Ordinal),
+    "Never imply unverified native Ortho placement is automatic");
+Assert(topA1.ProjectedModelWidthMm > 0 && topA1.ProjectedModelHeightMm > 0,
+    "Selected support model spans must be nonzero");
+Console.WriteLine("PASS: REV17 paper-aware TOP view planning and REV16 native Ortho safety guards.");
 static void Assert(bool value, string name) { if (!value) throw new Exception("FAIL: "+name); }
