@@ -209,7 +209,11 @@ public sealed class NativeOrthoTopOneCommandTest
             // REV16-proven native DWG seed clone; never clone a DWT.
             using (var db = new Database(false, true))
             {
-                db.ReadDwgFile(seed, FileShare.Read, true, null);
+                // REV19.1: The FileShare overload can throw eFileSharingViolation
+                // when the native Project Manager Ortho seed is open in Plant 3D.
+                // Autodesk recommends the FileOpenMode API for shared read access.
+                // CloseInput materializes the lazy load before the SaveAs clone.
+                db.ReadDwgFile(seed, FileOpenMode.OpenForReadAndAllShare, true, null);
                 db.CloseInput(true);
                 db.SaveAs(dest, DwgVersion.Current);
             }
