@@ -68,6 +68,26 @@ jobs:
           if ($check -match 'AddPnPDrawingFile\(') { throw 'Validation must not mutate project registration' }
           $stage = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoStagingCommands.cs' -Raw
           if ($stage -notmatch 'NativeValidationApiSignature') { throw 'Validation method signature not reported in JSON' }
+      - name: Verify REV13 model-agnostic source and report naming
+        shell: pwsh
+        run: |
+          $code = Get-ChildItem 'src/SPTC.SupportDrawings' -Filter '*.cs' -File |
+            ForEach-Object { Get-Content $_.FullName -Raw }
+          foreach ($fixed in @('TOSHIBA', 'TEST3.dwg', 'SAMPLE_2ND STAGE.dwg',
+                               '8D1', '8D2', '3EC', '3EA')) {
+            foreach ($file in $code) {
+              if ($file.Contains($fixed)) { throw "Hard-coded source-model detail found: $fixed" }
+            }
+          }
+          $plan = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoStagingCommands.cs' -Raw
+          if ($plan -notmatch 'SuggestedPlanFileName\(drawing, handles, "REV13"\)') {
+            throw 'JSON report naming must depend on active source model and selected handles'
+          }
+          if ($plan -notmatch 'SourceSelectionMode') { throw 'Dynamic selection mode must be recorded' }
+          $native = Get-Content 'src/SPTC.SupportDrawings/SupportDrawingCommands.cs' -Raw
+          if ($native -notmatch 'NativeOrthoProjectCheck.Inspect\(doc.Database.Filename\)') {
+            throw 'SPTC_SUPPORT2D must inspect current active model'
+          }
       - name: Compile SPTC Support Drawings
         run: dotnet build src/SPTC.SupportDrawings/SPTC.SupportDrawings.csproj -c Release
       - name: Verify compiled DLL
@@ -79,7 +99,7 @@ jobs:
       - name: Upload DLL artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SPTC-SupportDrawings-Plant3D2025-REV12
+          name: SPTC-SupportDrawings-Plant3D2025-REV13
           path: src/SPTC.SupportDrawings/bin/Release/net8.0-windows/SPTC.SupportDrawings.dll
           retention-days: 30
           if-no-files-found: error
