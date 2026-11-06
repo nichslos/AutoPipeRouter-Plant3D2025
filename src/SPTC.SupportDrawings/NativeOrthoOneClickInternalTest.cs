@@ -440,14 +440,14 @@ public sealed class NativeOrthoOneClickInternalTest
                 object ViewEnum,string TypeName,Point3d Center,double Width,double Height)>();
             foreach(var item in resolved)
             {
-                var placement=group.First(g=>g.Name==item.Slot.Name);
+                var plannedPosition=group.First(g=>g.Name==item.Slot.Name);
                 planned.Add((item.Slot,item.ViewEnum,item.TypeName,
-                    new Point3d(placement.CenterX,placement.CenterY,0),
-                    placement.PaperFrameWidth,placement.PaperFrameHeight));
+                    new Point3d(plannedPosition.CenterX,plannedPosition.CenterY,0),
+                    plannedPosition.PaperFrameWidth,plannedPosition.PaperFrameHeight));
                 Log("STEP5_"+item.Slot.Name+"_AUTO_CENTER="+
-                    Point(placement.CenterX,placement.CenterY,0)+
-                    " FRAME="+Point(placement.PaperFrameWidth,
-                        placement.PaperFrameHeight,0));
+                    Point(plannedPosition.CenterX,plannedPosition.CenterY,0)+
+                    " FRAME="+Point(plannedPosition.PaperFrameWidth,
+                        plannedPosition.PaperFrameHeight,0));
             }
             var priorHandles=new HashSet<string>(
                 PaperViewports(targetDoc.Database,paperLayout).Select(x=>x.Handle),
