@@ -143,6 +143,43 @@ bool outOfBoundsRejected=false;
 try{NativeOrthoOneClickPlan.Build(threeA1,594,841,500,800);}
 catch(InvalidOperationException){outOfBoundsRejected=true;}
 Assert(outOfBoundsRejected,"REV21 rejects off-sheet or title-block anchor");
+// REV21.1 regression: real runtime failed after TOP click (115,370)
+ // because its FRONT center fell into the reserved bottom area.
+var adjustedOneClick=NativeOrthoOneClickPlan.BuildAdjusted(
+    threeA1,594,841,115,370);
+Assert(adjustedOneClick.WasAdjusted &&
+    adjustedOneClick.RequestedTopX==115 &&
+    adjustedOneClick.RequestedTopY==370,
+    "REV21.1 single clicked point preserved in audit record");
+Assert(adjustedOneClick.EffectiveTopY>370 &&
+    adjustedOneClick.EffectiveTopY>=adjustedOneClick.MinimumTopY &&
+    adjustedOneClick.EffectiveTopY<=adjustedOneClick.MaximumTopY,
+    "REV21.1 off-limits FRONT moves entire group up to nearest safe anchor");
+Assert(Math.Abs(adjustedOneClick.EffectiveTopX-115)<1e-8,
+    "REV21.1 X stays fixed when only Y correction is needed");
+Assert(adjustedOneClick.Views.All(v=>
+    v.CenterX-v.PaperFrameWidth/2>=-1e-7 &&
+    v.CenterX+v.PaperFrameWidth/2<=594*.78+1e-7 &&
+    v.CenterY-v.PaperFrameHeight/2>=841*.12-1e-7 &&
+    v.CenterY+v.PaperFrameHeight/2<=841*.94+1e-7),
+    "REV21.1 translated TOP FRONT SIDE all fit the conservative A1 sheet");
+Assert(Math.Abs(adjustedOneClick.Views[0].CenterY-
+    adjustedOneClick.EffectiveTopY)<1e-8,
+    "REV21.1 effective TOP center agrees with derived group position");
+var noShift=NativeOrthoOneClickPlan.BuildAdjusted(threeA1,594,841,
+    threeA1.Views[0].CenterX,threeA1.Views[0].CenterY);
+Assert(!noShift.WasAdjusted &&
+    Math.Abs(noShift.EffectiveTopY-threeA1.Views[0].CenterY)<1e-8,
+    "REV21.1 already-valid anchor must never be repositioned");
+var cornerAdjusted=NativeOrthoOneClickPlan.BuildAdjusted(threeA1,594,841,5,5);
+Assert(cornerAdjusted.WasAdjusted &&
+    cornerAdjusted.EffectiveTopX>5 && cornerAdjusted.EffectiveTopY>5,
+    "REV21.1 extreme inside-sheet click shifts group in both dimensions");
+bool outsidePaperRejected=false;
+try{NativeOrthoOneClickPlan.BuildAdjusted(threeA1,594,841,-1,370);}
+catch(ArgumentOutOfRangeException){outsidePaperRejected=true;}
+Assert(outsidePaperRejected,"REV21.1 does not allow a click outside the physical sheet");
+Console.WriteLine("PASS: REV21.1 one-click automatic group translation and sheet guards.");
 bool nonFiniteRejected=false;
 try{NativeOrthoOneClickPlan.Build(threeA1,594,841,double.NaN,200);}
 catch(ArgumentException){nonFiniteRejected=true;}

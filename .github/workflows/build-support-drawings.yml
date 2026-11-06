@@ -263,6 +263,22 @@ jobs:
           if ($plan -notmatch 'paperHeight\*\.12' -or $plan -notmatch 'paperWidth\*\.78') { throw 'Title-block keepout guard missing' }
           if ($baseline -notmatch 'CommandMethod\("SPTC_ORTHO20_THREEVIEW_ONECMD_TEST"') { throw 'REV20 working fallback modified' }
           if ($top -notmatch 'CommandMethod\("SPTC_ORTHO19_TOP_ONECMD_TEST"') { throw 'REV19.4 working fallback modified' }
+      - name: Verify REV21.1 single-click automatic group translation
+        shell: pwsh
+        run: |
+          $plan = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoOneClickPlan.cs' -Raw
+          $code = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoOneClickInternalTest.cs' -Raw
+          $previous = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoThreeViewOneCommandTest.cs' -Raw
+          if ($plan -notmatch 'BuildAdjusted') { throw 'Missing automatic full-group anchor translation' }
+          if ($plan -notmatch 'Math.Clamp') { throw 'Anchor must clamp to feasible interval' }
+          if ($plan -notmatch 'minimumX>maximumX') { throw 'Missing fail-closed impossible-fit guard' }
+          if ($plan -notmatch 'IReadOnlyList<Placement> views=Build') { throw 'Strict original collision validation must remain' }
+          if ($code -notmatch 'STEP5_ONE_CLICK_GROUP_TRANSLATION') { throw 'Original versus effective click must be logged' }
+          if ($code -notmatch 'STEP5_ONE_CLICK_AUTO_SHIFTED') { throw 'Auto-shift status missing' }
+          if ($code -notmatch 'NativeOrthoOneClickPlan.BuildAdjusted') { throw 'Native generator not using adjusted group' }
+          if ($code -notmatch 'STEP5_UNSUPPORTED_GENERATE_SIGNATURE_MATCH') { throw 'Internal API signature check must remain' }
+          if ($code -notmatch 'STEP9_.*_VIEW_CATALOG') { throw 'Native registration checks must remain' }
+          if ($previous -notmatch 'CommandMethod\("SPTC_ORTHO20_THREEVIEW_ONECMD_TEST"') { throw 'Working REV20 command changed' }
       - name: Compile SPTC Support Drawings
         run: dotnet build src/SPTC.SupportDrawings/SPTC.SupportDrawings.csproj -c Release
       - name: Verify compiled DLL
@@ -274,7 +290,7 @@ jobs:
       - name: Upload DLL artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SPTC-SupportDrawings-Plant3D2025-REV21
+          name: SPTC-SupportDrawings-Plant3D2025-REV21_1
           path: src/SPTC.SupportDrawings/bin/Release/net8.0-windows/SPTC.SupportDrawings.dll
           retention-days: 30
           if-no-files-found: error

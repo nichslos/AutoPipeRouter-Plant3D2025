@@ -1,3 +1,17 @@
+# SPTC Support Drawings — REV21.1: One-Click Auto-Fit Group Anchor
+
+**REV21 runtime evidence:** The user clicked paper point (115, 370) mm on an A1 portrait sheet (594×841 mm). Native internal `GenerateOrthos` signature preflight passed, but the FRONT view's calculated position fell inside the bottom reserved margin. The original REV21 safety guard correctly stopped **before creating any native views**.
+
+**REV21.1 fix:** Continue using the same separate `SPTC_ORTHO21_ONECLICK_INTERNAL_TEST` command, but allow the user to click **anywhere inside the physical paper sheet**. If the selected TOP position would push FRONT or SIDE off the allowed paper/title-block area, calculate the feasible TOP-anchor interval from **all three projected frame dimensions** and shift the entire group to the closest feasible position. No additional placement click is requested. Maintain the same relative TOP/FRONT/SIDE offsets, common scale, clipping checks, collision checks, and native registration checks.
+
+For the previously failing anchor (115,370), the group will move **upward together**; the logged effective TOP anchor will differ from the clicked point. This deliberate translation is displayed in the command line and logged as `STEP5_ONE_CLICK_EFFECTIVE_TOP_ANCHOR`, `STEP5_ONE_CLICK_GROUP_TRANSLATION`, `STEP5_ONE_CLICK_AUTO_SHIFTED`, and the feasible anchor ranges. A click outside physical paper or an impossible-to-fit group still fails closed before native calls. The conservative right/bottom keepout is an approximation; inspect the actual title block after creation.
+
+**How to test:** Restart Plant 3D 2025; NETLOAD REV21.1; open a **copied test project**, registered source model and empty native Project Manager Ortho seed; run `SPTC_ORTHO21_ONECLICK_INTERNAL_TEST`; select support and seed; confirm `REV21 TEST`; click **once** near the previously failing (115,370) location. If the API generates views, save the new `_ORTHO_R21ONCE_` drawing and test native **Update View** on all TOP/FRONT/SIDE views. Upload the new `_REV21_RESULT.txt` and a screenshot.
+
+**Still experimental:** Autodesk's internal `GenerateOrthos` is unsupported and may fail even with valid placement. This patch fixes the observed preflight refusal only. Never use in production until model links, visual geometry, and Update View are proven. REV19.4 and REV20 remain unchanged and available as fallback.
+
+---
+
 # SPTC Support Drawings — REV21: One-Click Placement Test
 
 **Experimental and unsupported: COPY OF PROJECT ONLY.** Do not run this against your production Plant 3D project.

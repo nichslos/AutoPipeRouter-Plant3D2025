@@ -415,10 +415,9 @@ public sealed class NativeOrthoOneClickInternalTest
             // One click only. This is the TOP viewport's paper-space center;
             // FRONT and SIDE are translated by the same planned offsets.
             targetDoc.Editor.WriteMessage(
-                "\nREV21: click once for TOP anchor near ("+
-                candidate.Views[0].CenterX.ToString("0.#",CultureInfo.InvariantCulture)+","+
-                candidate.Views[0].CenterY.ToString("0.#",CultureInfo.InvariantCulture)+
-                "). FRONT and SIDE will follow automatically.");
+                "\nREV21.1: click ONCE anywhere inside the Ortho sheet for TOP placement. "+
+                "FRONT and SIDE will follow. If the three-view group does not fit "+
+                "at that position, it will shift together to the nearest safe area.");
             PromptPointResult placement=targetDoc.Editor.GetPoint(
                 new PromptPointOptions("\nREV21 ONE CLICK: Pick TOP group anchor in paper space: "));
             if(placement.Status!=PromptStatus.OK)
@@ -430,12 +429,32 @@ public sealed class NativeOrthoOneClickInternalTest
             Log("STEP5_ONE_CLICK_TOP_ANCHOR="+Point(anchor.X,anchor.Y,anchor.Z));
             Log("STEP5_ONE_CLICK_COUNT=1");
 
-            // Validate all proposed viewport frames BEFORE creating any.
-            // Paper-space units are checked against the configured sheet;
-            // do not allow a user click to push frames into the reserved
-            // approximate title-block region or off the sheet.
-            var group=NativeOrthoOneClickPlan.Build(
+            // REV21.1: preserve the one-click workflow and translate the
+            // complete group when the requested TOP anchor is too close to an
+            // edge. The strict sheet/title-block and collision guards remain.
+            // Log the translation BEFORE the first unsupported native call.
+            var adjustedGroup=NativeOrthoOneClickPlan.BuildAdjusted(
                 candidate,paperWidth,paperHeight,anchor.X,anchor.Y);
+            var group=adjustedGroup.Views;
+            Log("STEP5_ONE_CLICK_VALID_TOP_X_RANGE="+
+                adjustedGroup.MinimumTopX.ToString("0.###",CultureInfo.InvariantCulture)+
+                ","+adjustedGroup.MaximumTopX.ToString("0.###",CultureInfo.InvariantCulture));
+            Log("STEP5_ONE_CLICK_VALID_TOP_Y_RANGE="+
+                adjustedGroup.MinimumTopY.ToString("0.###",CultureInfo.InvariantCulture)+
+                ","+adjustedGroup.MaximumTopY.ToString("0.###",CultureInfo.InvariantCulture));
+            Log("STEP5_ONE_CLICK_EFFECTIVE_TOP_ANCHOR="+
+                Point(adjustedGroup.EffectiveTopX,adjustedGroup.EffectiveTopY,0));
+            Log("STEP5_ONE_CLICK_GROUP_TRANSLATION="+
+                Point(adjustedGroup.EffectiveTopX-anchor.X,
+                      adjustedGroup.EffectiveTopY-anchor.Y,0));
+            Log("STEP5_ONE_CLICK_AUTO_SHIFTED="+adjustedGroup.WasAdjusted);
+            if(adjustedGroup.WasAdjusted)
+                targetDoc.Editor.WriteMessage(
+                    "\nREV21.1: moved the complete three-view group to fit "+
+                    "the sheet. Effective TOP center: ("+
+                    adjustedGroup.EffectiveTopX.ToString("0.#",CultureInfo.InvariantCulture)+
+                    ", "+adjustedGroup.EffectiveTopY.ToString("0.#",CultureInfo.InvariantCulture)+
+                    "). See REV21_RESULT.txt for exact offset.");
             var planned=new List<(NativeOrthoThreeViewPlan.Slot Slot,
                 object ViewEnum,string TypeName,Point3d Center,double Width,double Height)>();
             foreach(var item in resolved)
