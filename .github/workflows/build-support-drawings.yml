@@ -160,6 +160,26 @@ jobs:
           }
           $prev = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoSeedCloneTest.cs' -Raw
           if ($prev -notmatch 'CommandMethod\("SPTC_ORTHO16CLONE_TEST"') { throw 'Working REV16 clone command must remain' }
+      - name: Verify REV19 one-command native TOP cloned-drawing safety
+        shell: pwsh
+        run: |
+          $src = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoTopOneCommandTest.cs' -Raw
+          if ($src -notmatch 'CommandMethod\("SPTC_ORTHO19_TOP_ONECMD_TEST"') { throw 'REV19 isolated command missing' }
+          if ($src -notmatch 'CommandFlags.Session') { throw 'Cross-document command requires session context' }
+          if ($src -notmatch 'NativeOrthoProjectCheck.Inspect\(source\)') { throw 'Must verify active model is registered' }
+          if ($src -notmatch 'NativeOrthoRegistrationNames.IsInsideProjectDirectory\(seed, part.OrthoFolder\)') { throw 'Native empty Ortho seed location guard missing' }
+          if ($src -notmatch 'EMPTY_REGISTERED_ORTHO') { throw 'Native view catalog empty check missing' }
+          if ($src -notmatch 'IsNativeOrthoValid\(part.OrthoPart, dest\)') { throw 'New project drawing validation missing' }
+          if ($src -notmatch 'REV19 TEST') { throw 'Explicit backup-project test consent missing' }
+          if ($src -notmatch 'DocumentManager.Open\(dest, false\)') { throw 'New Ortho document activation missing' }
+          if ($src -notmatch 'InitializeCube') { throw 'Native OrthoCube init missing' }
+          if ($src -notmatch 'MakeCubeCopy') { throw 'Native OrthoCube solid missing' }
+          if ($src -notmatch 'CreateOrthos') { throw 'Public native TOP generation missing' }
+          if ($src -match 'BindingFlags.NonPublic|GetMethod\("GenerateOrthos"|SetOrthoDwgVersion|SendStringToExecute|SQLiteConnection|ExecuteNonQuery') {
+            throw 'REV19 may not call private generation, write DCF, or automate UI'
+          }
+          $legacy = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoTopGenerationTest.cs' -Raw
+          if ($legacy -notmatch 'CommandMethod\("SPTC_ORTHO18_TOP_API_TEST"') { throw 'Working REV18 command must remain unchanged' }
       - name: Compile SPTC Support Drawings
         run: dotnet build src/SPTC.SupportDrawings/SPTC.SupportDrawings.csproj -c Release
       - name: Verify compiled DLL
@@ -171,7 +191,7 @@ jobs:
       - name: Upload DLL artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SPTC-SupportDrawings-Plant3D2025-REV18
+          name: SPTC-SupportDrawings-Plant3D2025-REV19
           path: src/SPTC.SupportDrawings/bin/Release/net8.0-windows/SPTC.SupportDrawings.dll
           retention-days: 30
           if-no-files-found: error
