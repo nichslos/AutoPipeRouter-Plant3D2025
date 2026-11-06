@@ -142,6 +142,24 @@ jobs:
           }
           $layout = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoTopViewPlan.cs' -Raw
           if ($layout -notmatch 'PROPOSED_ONLY:') { throw 'Candidate placement must not be advertised as verified' }
+      - name: Verify REV18 public TOP generation test backup safety
+        shell: pwsh
+        run: |
+          $code = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoTopGenerationTest.cs' -Raw
+          if ($code -notmatch 'CommandMethod\("SPTC_ORTHO18_TOP_API_TEST"') { throw 'REV18 isolated command missing' }
+          if ($code -notmatch 'NativeOrthoProjectCheck.Inspect\(model\)') { throw 'Source Piping registration check missing' }
+          if ($code -notmatch 'EMPTY_REGISTERED_ORTHO') { throw 'Empty registered Ortho target safeguard missing' }
+          if ($code -notmatch '_ORTHO_R16CLONE_') { throw 'Test only on new REV16 cloned drawing' }
+          if ($code -notmatch 'InitializeCube') { throw 'Real native OrthoCube initialization missing' }
+          if ($code -notmatch 'MakeCubeCopy') { throw 'Native 3D cube Solid extraction missing' }
+          if ($code -notmatch 'TOP API TEST') { throw 'Explicit copied-project write confirmation missing' }
+          if ($code -notmatch 'STEP5_PUBLIC_CREATEORTHOS_ENTERED') { throw 'Public CreateOrthos test missing' }
+          if ($code -notmatch 'PUBLIC_API_STILL_INTERACTIVE=TRUE') { throw 'Viewport placement must not be reported unattended' }
+          if ($code -match 'BindingFlags.NonPublic|GetMethod\("GenerateOrthos"|SendStringToExecute|SQLiteConnection|ExecuteNonQuery') {
+            throw 'No private Ortho generation, UI script or direct project database edits in REV18'
+          }
+          $prev = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoSeedCloneTest.cs' -Raw
+          if ($prev -notmatch 'CommandMethod\("SPTC_ORTHO16CLONE_TEST"') { throw 'Working REV16 clone command must remain' }
       - name: Compile SPTC Support Drawings
         run: dotnet build src/SPTC.SupportDrawings/SPTC.SupportDrawings.csproj -c Release
       - name: Verify compiled DLL
@@ -153,7 +171,7 @@ jobs:
       - name: Upload DLL artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SPTC-SupportDrawings-Plant3D2025-REV17
+          name: SPTC-SupportDrawings-Plant3D2025-REV18
           path: src/SPTC.SupportDrawings/bin/Release/net8.0-windows/SPTC.SupportDrawings.dll
           retention-days: 30
           if-no-files-found: error
