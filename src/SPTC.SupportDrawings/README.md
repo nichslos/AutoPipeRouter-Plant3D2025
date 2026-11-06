@@ -1,57 +1,68 @@
-# SPTC Support Drawings — REV17: Native TOP View API Preflight
+# SPTC Support Drawings — REV18: Real Native OrthoCube + Public TOP Generation Experiment
 
-**Target:** Autodesk AutoCAD Plant 3D 2025 x64, .NET 8.
+**Host:** Autodesk AutoCAD Plant 3D 2025, Windows x64, .NET 8.
 
-## Confirmed user milestone
+## Established working baseline
 
-The user's REV16 cloned Ortho drawing successfully **created and updated a native Ortho view** in Plant 3D 2025. This verifies that the *wizard-created empty native Ortho seed → clone to Orthos/DWGs → AddPnPDrawingFile* pathway yields an updateable model-linked drawing, while REV14's DWT-derived Ortho DWG failed with the "created in earlier version" message.
+- REV13 demonstrated dynamic model names / selected support geometry across `TEST3.dwg` and `TEST4.dwg`.
+- REV16 created a genuine native Plant 3D Ortho project drawing by cloning a **blank wizard-created Ortho seed**, registering the new drawing through `AddPnPDrawingFile` in the `Orthos/DWGs` folder. The user confirmed that **New View** and **Update View** both worked in that clone.
+- REV17 confirmed native project source/target validity and the actual A1 **portrait** `Title Block` layout, **594 × 841 mm**, including a TOP scale candidate of **1:2** for the selected support. REV17 was **read-only**.
 
-This establishes native registration; it does **not** establish fully unattended generation and placement.
+## NEW: SPTC_ORTHO18_TOP_API_TEST
 
-## REV17 command: SPTC_ORTHO17_TOP_PREFLIGHT
+This is an **experimental test in a COPIED/BACKED-UP PROJECT ONLY**, not the final unattended Ortho generator. It uses the **public** Plant 3D Ortho APIs and explicitly acknowledges the last interactive obstacle.
 
-The new read-only command bridges the validated REV16 source/target workflow to the remaining native TOP view-generation stage:
+### Execution stages
 
-1. Open a **registered 3D source DWG** in the active project.
-2. Run `SPTC_ORTHO17_TOP_PREFLIGHT` and select the actual steel members of a single support. Every selected member must provide geometric extents.
-3. Select an **existing, registered, working native Ortho DWG** in the current project (e.g. a REV16 clone in `Orthos/DWGs`). The command verifies it belongs to the active Ortho project and that `OrthoDocUtils.IsValidOrthoDrawing` accepts it.
-4. Open the target Ortho DWG through a **read-only side database** and inspect its actual configured paper-space layout and paper dimensions. This handles cases where the configured Ortho DWT is A1 rather than the A3 assumed by earlier planning.
-5. Compute per-axis-padded OrthoCube bounds, TOP direction `(0,0,1)`, up `(0,1,0)`, a standard candidate scale, and a provisional viewport center proportional to the target paper width and height.
-6. Inspect runtime constructor and method signatures for `PlantOrthoView`, `PlantOrthoCube.InitializeCube`, public `CreateOrthos`, and non-public `GenerateOrthos`. No constructors or Ortho generating methods are invoked.
-7. Save `SPTC_<currentmodel>_<handle>_TOP_PREFLIGHT_REV17.json` to a user-selected location.
+1. Start in a **NEW and EMPTY** `_ORTHO_R16CLONE_` native DWG, opened in the project's `Orthos/DWGs` via Project Manager, with the real paper-space layout active. **DO NOT** run it on the existing working REV16 drawing containing a native TOP view.
+2. Select the fresh `SPTC_*_TOP_PREFLIGHT_REV17.json`. The report provides the dynamic 3D source path, support OrthoCube bounds, candidate TOP scale, and paper dimensions.
+3. Select where to save a `*_REV18_TOP_API_RESULT.txt` diagnostic log, preferably outside the project. The log is updated before every native call for post-crash analysis.
+4. Verify the report is REV17 TOP preflight, the current project still recognizes its source DWG through `OrthoDocUtils.IsValid3dDrawing`, the active Ortho target is inside the current project's native Ortho root, and that the current A1 layout matches the reported dimensions.
+5. Check the current drawing's registered GUID and native `GetAllViewNamesInOrthoDwgByGuid` output. **Fail closed** if the clone has any existing native views, cannot be identified, or if any required API is missing.
+6. Instantiate a **real** `PlantOrthoCube` through its public constructor and call `InitializeCube(Extents3d)`. Compare the resulting native `Extents` against the REV17 bounds; request a native solid with `MakeCubeCopy()`. This is the first actual native OrthoCube initialization in the automation work.
+7. A GUI warning offers a **safe exit after cube verification**. Choosing **No** saves the cube-validation log and does **NOT** generate any view. Choosing **Yes**, then typing **`TOP API TEST`**, explicitly authorizes the next API test in the copied project.
+8. If authorized, instantiate public `PlantOrthoView(bool,bool)` and call its **public** `CreateOrthos(StringCollection, viewName, scale, width, height, depth, Top, "TopView", Vector3d, Vector3d, Point3d, Point3d, Solid3d)` with the current source/cube parameters.
+9. **Expect interactive Plant 3D UI**: the constructor may show the native Ortho drawing-selection modal, and `CreateOrthos` still runs `ProcessViewportPlacement` / `Editor.Drag`. If prompted for Ortho drawing, only select the currently opened **fresh R16 clone**. If prompted for viewport insertion, choose a safe location in the A1 paper-space layout. Cancel immediately if the command targets the wrong drawing.
+10. Save the test Ortho and confirm **New View** and **Update View** work. Upload the diagnostic TXT. The log distinguishes API entered/returned from actual verified model-linked output; no automatic success is claimed.
 
-**A TOP view is NOT generated by this command.** It does not write the source DWG, registered Ortho DWG or any project database; it does not simulate clicks, patch DCF records, or call unsupported private generation methods. The reported paper center is a **candidate only**; title block and printable margins must still be validated in Plant 3D.
+### Run sequence
 
-## Why we did not claim fully automatic generation
+- First, in the copied project, create a fresh empty native seed through Project Manager, then use `SPTC_ORTHO16CLONE_TEST` to generate another registered, **empty** Ortho clone. Do not select the already populated, verified REV16 Ortho.
+- Run `SPTC_ORTHO17_TOP_PREFLIGHT` again if the source model or A1 drawing setup changed. The earlier REV17 report can be used for the same unchanged source geometry and same A1 sheet size, even if it referenced another REV16 clone.
+- Restart Plant 3D and `NETLOAD` REV18 `SPTC.SupportDrawings.dll`.
+- Open the **new** empty REV16 clone in paper space and run `SPTC_ORTHO18_TOP_API_TEST`.
+- Choose REV17 JSON and a diagnostic TXT destination. The first stage verifies the actual native OrthoCube.
+- Choose **No** to stop safely, or **Yes** + type **TOP API TEST** to attempt native TOP generation. This second stage is **high-risk experimental** and may display standard Plant dialogs.
+- After completion, confirm the native view is model-linked and **Update View** succeeds.
 
-The user's supplied Plant 3D 2025 DLLs expose a public `PlantOrthoView.CreateOrthos` entry point, but its actual compiled call flow invokes private `ProcessViewportPlacement`, followed by AutoCAD `Editor.Drag`. Autodesk's official procedure confirms that a paper-space viewport position must be specified interactively. The non-public `GenerateOrthos` accepts an explicit insertion point but depends on internal native document/session state. Blindly invoking it can leave invalid project drawings and source links.
+## Important safeguards
 
-*Source code static evidence:* `docs/Plant3D_2025_Ortho_API_DLL_Analysis_REV10.md`.
+- Native project read operations precede any generation calls; source model and target Ortho drawing are from the **active project**, never hard-coded examples.
+- Enforces a new empty REV16 clone by workflow marker and real native registered-view lookup.
+- Does **not** edit `Ortho.dcf`, invoke the non-public `GenerateOrthos`, send synthetic keystrokes, overwrite files, or assume the constructor/dialogs are silent.
+- The selected OrthoCube **does not whitelist individual objects**: other source model components inside the cube may appear in the generated view.
+- The REV17 candidate paper center is **not automatically applied**: the public API still calls a viewport jig. No claim is made that the project now has no-dialog generation.
+- The `PlantOrthoView(bool,bool)` boolean arguments have not been verified as a supported constructor contract, and Autodesk can change them; the test uses `false,false` and records constructor failures. That is why this command is **not enabled in the production `SPTC_SUPPORT2D` path**.
 
-*Independent external report:* https://forums.autodesk.com/t5/autocad-plant-3d-forum/create-an-orthographic-view-via-the-c-api/m-p/13629352
+## Expected log interpretation
 
-*Official workflow:* https://help.autodesk.com/cloudhelp/2025/ENU/Plant3D-UserGuide/files/GUID-09E67A9E-45F7-4392-BFB6-EF1ADAB1D46B.htm
+| Log item | Meaning |
+|---|---|
+| `STEP1_NATIVE_CUBE_INITIALIZE_RETURNED` | Native cube initializer completed |
+| `STEP2_NATIVE_CUBE_EXTENTS_MATCHED=TRUE` | Native cube bounds agree with model geometry |
+| `STEP3_NATIVE_CUBE_SOLID_CREATED=TRUE` | Generated real native Ortho cube solid in memory |
+| `FINAL_STATUS=NATIVE_CUBE_PASS_GENERATION_NOT_AUTHORIZED` | User stopped safely before view writes |
+| `STEP4_PUBLIC_PLANTORTHOVIEW_CONSTRUCTOR_RETURNED` | Public constructor returned; project session **not yet proven** |
+| `STEP5_PUBLIC_CREATEORTHOS_ENTERED... ` | Public native TOP generation invoked; may prompt for placement |
+| `STEP5_PUBLIC_CREATEORTHOS_RETURNED` | Native API returned, **not proof of an updateable view** |
+| `EXCEPTION_NATIVE` | Autodesk public API failed; include complete exception in next review |
 
-## Testing
+## Retained commands
 
-Use a **copied Plant 3D project** even though REV17 is read-only.
+`SPTC_ORTHO16CLONE_TEST` — validated native project drawing registration; `SPTC_ORTHO17_TOP_PREFLIGHT` — read-only sheet/TOP plan; `SPTC_SUPPORT2D` — existing interactive native command; `SPTC_ORTHOAUTOPLAN` and earlier diagnostics — unchanged.
 
-1. Restart Plant 3D 2025 and `NETLOAD` the REV17 DLL.
-2. Open a registered source model (any project/model; names and handles are read dynamically).
-3. Run `SPTC_ORTHO17_TOP_PREFLIGHT`, select one support and press Enter.
-4. In the file dialog, select a working native Ortho drawing created using the REV16 seed-clone path. Save the JSON.
-5. Check these fields: `TargetNativeRegistration`, `SheetStatus`, `SheetWidthMm`, `SheetHeightMm`, `CandidateTopView`, `NativeApi`.
-6. Upload the report. If `NativeApi.ViewType` or `CubeType` is `NOT_LOADED`, first open a native Ortho drawing and cancel a standard Ortho UI command, then repeat.
-7. Do not assume the proposed viewport coordinates are safe for plotting until the actual A1 title block is inspected.
+## Source evidence
 
-## Commands retained
-
-- `SPTC_ORTHO16CLONE_TEST`: existing working native seed clone and registration in **copied test projects only**.
-- `SPTC_ORTHO17_TOP_PREFLIGHT`: new read-only native target/layout and API capability check.
-- `SPTC_SUPPORT2D`: original interactive Plant 3D Ortho view workflow.
-- `SPTC_ORTHOAUTOPLAN`, `SPTC_ORTHOAUTOPROBE`: existing non-mutating planning/SDK reports.
-- Existing standalone linework/export/batch/audit tools remain unchanged.
-
-## Next validated engineering step
-
-After receiving the REV17 target-layout/API report, determine whether a supported, safe native insertion-point API exists for the active project state. Only then enable an opt-in, backup-only `SPTC_ORTHO17_TOP_GENERATE_TEST` that creates ONE actual TOP view and verifies Update View. The present code deliberately does **not** expose that unverified command.
+- `docs/Plant3D_2025_Ortho_API_DLL_Analysis_REV10.md` — static compiled Ortho API call path supplied by user's Autodesk DLL.
+- Autodesk developer public API code example: https://forums.autodesk.com/t5/autocad-plant-3d-forum/create-an-orthographic-view-via-the-c-api/m-p/13629352
+- Plant 3D official workflow: https://help.autodesk.com/cloudhelp/2025/ENU/Plant3D-UserGuide/files/GUID-09E67A9E-45F7-4392-BFB6-EF1ADAB1D46B.htm
