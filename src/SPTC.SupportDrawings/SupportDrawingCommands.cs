@@ -14,7 +14,7 @@ using WinForms = System.Windows.Forms;
 namespace SPTC.SupportDrawings;
 
 /// <summary>
-/// SPTC SUPPORT DRAWINGS - REV 12.
+/// SPTC SUPPORT DRAWINGS - REV 13.
 /// Clones a selected support into its own DWG and arranges four true 3D model
 /// viewports on an A3-like paper-space sheet. It is not a flattened fabrication drawing.
 /// </summary>
@@ -22,7 +22,7 @@ public sealed class SupportDrawingCommands : IExtensionApplication
 {
     public void Initialize() =>
         AcadApp.DocumentManager.MdiActiveDocument?.Editor.WriteMessage(
-            "\nSPTC Support Drawings REV12. Corrected Piping-part registration validation in SPTC_ORTHOAUTOPLAN; SPTC_SUPPORT2D remains interactive.");
+            "\nSPTC Support Drawings REV13: active drawing and selected supports drive all source-model calculations; native Ortho remains interactive.");
     public void Terminate() { }
 
     [CommandMethod("SPTC_SUPPORTEXPORT", CommandFlags.Modal)]
@@ -70,11 +70,20 @@ public sealed class SupportDrawingCommands : IExtensionApplication
 
         if (string.IsNullOrWhiteSpace(doc.Database.Filename))
         {
-            editor.WriteMessage("\nREV09: Save the source model DWG inside the active Plant 3D project first.");
+            editor.WriteMessage("\nREV13: Save the source model DWG inside the active Plant 3D project first.");
             return;
         }
 
-        editor.WriteMessage("\nSPTC REV09: Select the support members to frame with Plant 3D OrthoCube.");
+        // REV13: derive the source and Plant project from the active document.
+        // Never assume a named sample DWG, fixed project, zone, or object handle.
+        NativeOrthoProjectCheck.Result source = NativeOrthoProjectCheck.Inspect(doc.Database.Filename);
+        editor.WriteMessage("\nREV13 source 3D model: " + doc.Database.Filename);
+        editor.WriteMessage("\nREV13 active project: " + source.ProjectSummary);
+        editor.WriteMessage("\nREV13 project registration: " + source.RegistrationStatus);
+        if (!source.SourceRegistrationVerified)
+            editor.WriteMessage("\nWARNING: Ortho source registration is unverified. Plant 3D may reject this drawing.");
+
+        editor.WriteMessage("\nSPTC REV13: Select the support members to frame with Plant 3D OrthoCube.");
         editor.WriteMessage("\nIMPORTANT: Native PLANTORTHOCREATE uses the model and OrthoCube. Selection is guidance, not an automatic Ortho-only filter.");
         PromptSelectionResult selection = editor.GetSelection(new PromptSelectionOptions
         {
@@ -111,11 +120,11 @@ public sealed class SupportDrawingCommands : IExtensionApplication
         }
         if (count == 0)
         {
-            editor.WriteMessage("\nREV09: No valid source entities selected. Ortho was not started.");
+            editor.WriteMessage("\nREV13: No valid source entities selected. Ortho was not started.");
             return;
         }
 
-        editor.WriteMessage($"\nREV09 selected {count} support entities.");
+        editor.WriteMessage($"\nREV13 selected {count} support entities.");
         if (selectedBounds.HasValue)
         {
             Extents3d ext = selectedBounds.Value;
@@ -139,7 +148,7 @@ public sealed class SupportDrawingCommands : IExtensionApplication
         }
         catch (System.Exception ex)
         {
-            editor.WriteMessage("\nREV09 unable to start PLANTORTHOCREATE: " + ex.Message);
+            editor.WriteMessage("\nREV13 unable to start PLANTORTHOCREATE: " + ex.Message);
             editor.WriteMessage("\nTry running PLANTORTHOCREATE manually in the original project model DWG.");
         }
     }
