@@ -1,3 +1,23 @@
+# SPTC Support Drawings — REV20: Native TOP + FRONT + SIDE
+
+**REV19.4 is preserved as the confirmed working one-command TOP-only baseline.** Its original command remains \`SPTC_ORTHO19_TOP_ONECMD_TEST\`. The user confirmed native TOP creation without a placement click and Update View.
+
+## New isolated experiment
+
+Command: \`SPTC_ORTHO20_THREEVIEW_ONECMD_TEST\`.
+
+Run it **only in a copied test project** with a registered source 3D drawing and a native Project Manager-created *empty* Ortho seed. Select one support, choose the seed and type \`REV20 TEST\` to authorize a new, uniquely named project-registered native Ortho DWG. The test reuses REV19.4's verified read/share, registration and target-document command-context strategy. It then initializes a real native OrthoCube for each view and calls only the **public PlantOrthoView.CreateOrthos** API sequentially for TOP (look +Z, up +Y), FRONT (look −Y, up +Z) and SIDE (look +X, up +Z). Each newly registered view is verified against the native project view catalog before proceeding.
+
+The sheet planner reads the **actual title-block paper size** and calculates one common standard scale, plus non-overlapping *proposed* TOP-above-FRONT / SIDE-next-to-FRONT positions. The public CreateOrthos signature does not accept insertion coordinates. **Native placement may not follow those proposals**; REV20 does not claim otherwise and never moves linked native viewport objects. It probes paper-space viewports after generation, logging possible overlaps and conservative right/bottom title-block keepout conflicts. These warnings require visual verification of the actual template.
+
+If any view fails, REV20 stops subsequent view generation and preserves the registered partially completed test DWG for inspection; it never edits Ortho.dcf or calls private GenerateOrthos.
+
+**Test steps:** Restart Plant 3D 2025; NETLOAD the new DLL; open your registered 3D model in the copied project; run \`SPTC_ORTHO20_THREEVIEW_ONECMD_TEST\`; select your support; pick your EMPTY registered Ortho seed; approve and type \`REV20 TEST\`. Open \`*_ORTHO_R20THREE_*.dwg\`, inspect TOP/FRONT/SIDE geometry, orientation, placement and title-block clearance. Save and test **Update View** individually or \`PLANTORTHOUPDATE\` → All. Send \`*_REV20_RESULT.txt\` and a screenshot.
+
+**Runtime status:** Pending user validation. GitHub compilation does not prove that all three native views are correctly positioned or updateable.
+
+---
+
 # SPTC Support Drawings — REV19.4: Working Database Synchronization
 
 ## REV19.4 — Working database mismatch diagnosis and scoped synchronization

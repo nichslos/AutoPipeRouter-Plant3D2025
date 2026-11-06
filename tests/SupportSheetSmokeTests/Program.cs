@@ -97,5 +97,30 @@ Assert(topA1.Status.StartsWith("PROPOSED_ONLY:", StringComparison.Ordinal),
     "Never imply unverified native Ortho placement is automatic");
 Assert(topA1.ProjectedModelWidthMm > 0 && topA1.ProjectedModelHeightMm > 0,
     "Selected support model spans must be nonzero");
+var threeA1=NativeOrthoThreeViewPlan.Build(tightPlan,594,841);
+Assert(threeA1.Views.Count==3 && threeA1.Views[0].Name=="TOP" &&
+    threeA1.Views[1].Name=="FRONT" && threeA1.Views[2].Name=="SIDE",
+    "REV20 TOP FRONT SIDE order");
+Assert(threeA1.Denominator==2,"REV20 calibrated A1 common scale 1:2");
+Assert(threeA1.Views[0].Dz==1 && threeA1.Views[0].Uy==1,
+    "REV20 TOP orientation");
+Assert(threeA1.Views[1].Dy==-1 && threeA1.Views[1].Uz==1,
+    "REV20 FRONT orientation");
+Assert(threeA1.Views[2].Dx==1 && threeA1.Views[2].Uz==1,
+    "REV20 SIDE orientation");
+Assert(threeA1.Views.All(v=>v.Y>=841*.12 && v.X+v.W<=594*.78),
+    "REV20 proposed A1 title-block keepout");
+for(int i=0;i<threeA1.Views.Count;i++)
+    for(int j=i+1;j<threeA1.Views.Count;j++)
+    {
+        var a=threeA1.Views[i];var b=threeA1.Views[j];
+        Assert(!(a.X<b.X+b.W && b.X<a.X+a.W && a.Y<b.Y+b.H && b.Y<a.Y+a.H),
+            "REV20 no proposed tile collisions");
+    }
+var threeA3=NativeOrthoThreeViewPlan.Build(tightPlan,420,297);
+Assert(threeA3.Denominator>=threeA1.Denominator,"REV20 A3 needs equal or smaller drawing scale");
+Assert(threeA1.Status.StartsWith("PROPOSED_ONLY:"),
+    "REV20 native placement not falsely claimed");
+Console.WriteLine("PASS: REV20 proposed three-view orientation, common scale and collisions.");
 Console.WriteLine("PASS: REV17 paper-aware TOP view planning and REV16 native Ortho safety guards.");
 static void Assert(bool value, string name) { if (!value) throw new Exception("FAIL: "+name); }

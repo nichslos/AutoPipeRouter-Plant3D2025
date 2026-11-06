@@ -217,6 +217,26 @@ jobs:
           if ($code -match 'SetOrthoDwgVersion|GetMethod\("GenerateOrthos"|BindingFlags.NonPublic|ExecuteNonQuery|SQLiteConnection|SendStringToExecute') {
             throw 'REV19.4 must preserve public-only native Ortho generation and registration'
           }
+      - name: Verify REV20 separate native TOP FRONT SIDE experiment
+        shell: pwsh
+        run: |
+          $code = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoThreeViewOneCommandTest.cs' -Raw
+          $plan = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoThreeViewPlan.cs' -Raw
+          if ($code -notmatch 'CommandMethod\("SPTC_ORTHO20_THREEVIEW_ONECMD_TEST"') { throw 'REV20 isolated command missing' }
+          if ($code -notmatch 'REV20 TEST') { throw 'REV20 copied-project consent missing' }
+          if ($code -notmatch 'ExecuteInCommandContextAsync') { throw 'Target document context missing' }
+          if ($code -notmatch 'STEP5_WORKING_DB_VERIFIED_TARGET') { throw 'REV19.4 working database guard missing' }
+          if ($code -notmatch 'CUBE_EXTENTS_MATCHED') { throw 'Strict native cube match missing' }
+          if ($code -notmatch 'NativeOrthoThreeViewPlan.Build') { throw 'Sheet-aware view planning missing' }
+          if ($code -notmatch 'STEP10_TOP_FRONT_SIDE_NATIVE_REGISTERED') { throw 'Three view registration missing' }
+          if ($code -notmatch 'CatalogMatches') { throw 'Catalog validation missing' }
+          if ($code -notmatch 'PaperViewports') { throw 'Post-placement inspection missing' }
+          if ($plan -notmatch 'PROPOSED_ONLY:') { throw 'Unenforced placement cannot be advertised as guaranteed' }
+          if ($code -match 'BindingFlags.NonPublic|GetMethod\("GenerateOrthos"|SQLiteConnection|ExecuteNonQuery|SendStringToExecute') {
+            throw 'REV20 must use only public Ortho API'
+          }
+          $baseline = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoTopOneCommandTest.cs' -Raw
+          if ($baseline -notmatch 'CommandMethod\("SPTC_ORTHO19_TOP_ONECMD_TEST"') { throw 'Validated REV19.4 command must remain' }
       - name: Compile SPTC Support Drawings
         run: dotnet build src/SPTC.SupportDrawings/SPTC.SupportDrawings.csproj -c Release
       - name: Verify compiled DLL
@@ -228,7 +248,7 @@ jobs:
       - name: Upload DLL artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SPTC-SupportDrawings-Plant3D2025-REV19_4
+          name: SPTC-SupportDrawings-Plant3D2025-REV20
           path: src/SPTC.SupportDrawings/bin/Release/net8.0-windows/SPTC.SupportDrawings.dll
           retention-days: 30
           if-no-files-found: error
