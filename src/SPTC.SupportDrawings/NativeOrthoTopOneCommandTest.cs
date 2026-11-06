@@ -7,6 +7,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Text;
+using System.Threading.Tasks;
 using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
@@ -29,7 +30,7 @@ public sealed class NativeOrthoTopOneCommandTest
 {
     [CommandMethod("SPTC_ORTHO19_TOP_ONECMD_TEST",
         CommandFlags.Modal | CommandFlags.Session)]
-    public void Run()
+    public async void Run()
     {
         Document? sourceDoc = AcadApp.DocumentManager.MdiActiveDocument;
         if (sourceDoc == null) return;
@@ -279,6 +280,34 @@ public sealed class NativeOrthoTopOneCommandTest
                 candidate.PaperCenterY.ToString("0.###", CultureInfo.InvariantCulture));
             Log("PUBLIC_API_HAS_NO_INSERTION_POINT_ARGUMENT=TRUE");
 
+            // REV19.3: A Session command can activate a different DWG without
+            // entering that drawing's document/command execution context.
+            // REV19.2 yielded sentinel +/-1e20 Extents after InitializeCube,
+            // whereas REV18 succeeded when invoked within the Ortho document.
+            // Schedule all native cube + view generation in target document
+            // context, preserving the exact strict extents validation.
+            Log("STEP5_SESSION_CONTEXT_IS_APPLICATION=" +
+                AcadApp.DocumentManager.IsApplicationContext);
+            Log("STEP5_TARGET_COMMAND_CONTEXT_REQUESTED");
+            await AcadApp.DocumentManager.ExecuteInCommandContextAsync(_ =>
+            {
+                try
+                {
+                    Log("STEP5_TARGET_COMMAND_CONTEXT_ENTERED");
+                    bool appContext = AcadApp.DocumentManager.IsApplicationContext;
+                    bool activeMatches = ReferenceEquals(
+                        AcadApp.DocumentManager.MdiActiveDocument, targetDoc);
+                    bool workingMatches = ReferenceEquals(
+                        HostApplicationServices.WorkingDatabase, targetDoc.Database);
+                    Log("STEP5_TARGET_CONTEXT_IS_APPLICATION=" + appContext);
+                    Log("STEP5_TARGET_CONTEXT_ACTIVE_DOC_MATCH=" + activeMatches);
+                    Log("STEP5_TARGET_CONTEXT_WORKING_DB_MATCH=" + workingMatches);
+                    if (appContext || !activeMatches || !workingMatches)
+                        throw new InvalidOperationException(
+                            "Native Ortho requires the opened target drawing's " +
+                            "document command context and matching working database. " +
+                            "See REV19.3 STEP5 context diagnostics.");
+
             // REV18-verified native OrthoCube and native Solid3d creation.
             Assembly[] loaded = AppDomain.CurrentDomain.GetAssemblies();
             Type cubeClass = FindType(loaded,
@@ -407,6 +436,24 @@ public sealed class NativeOrthoTopOneCommandTest
                 }
             }
             finally { if (cube is IDisposable disposeCube) disposeCube.Dispose(); }
+
+                }
+                catch (TargetInvocationException ex)
+                {
+                    Log("NATIVE_DOCUMENT_CONTEXT_EXCEPTION=" +
+                        (ex.InnerException?.ToString() ?? ex.ToString()));
+                    SafeWriteToActiveEditor("REV19 native document-context API error: " +
+                        (ex.InnerException?.Message ?? ex.Message));
+                }
+                catch (System.Exception ex)
+                {
+                    Log("NATIVE_DOCUMENT_CONTEXT_ERROR=" + ex);
+                    SafeWriteToActiveEditor("REV19 native document-context error: " +
+                        ex.Message);
+                }
+                return Task.CompletedTask;
+            }, null);
+            Log("STEP5_TARGET_COMMAND_CONTEXT_COMPLETED");
         }
         catch (TargetInvocationException ex)
         {
