@@ -88,6 +88,19 @@ jobs:
           if ($native -notmatch 'NativeOrthoProjectCheck.Inspect\(doc.Database.Filename\)') {
             throw 'SPTC_SUPPORT2D must inspect current active model'
           }
+      - name: Verify REV14 native project registration safety
+        shell: pwsh
+        run: |
+          $reg = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoRegistrationTest.cs' -Raw
+          if ($reg -notmatch 'CommandMethod\("SPTC_ORTHO14REGISTER_TEST"') { throw 'Separate test-only command missing' }
+          if ($reg -notmatch 'NativeOrthoProjectCheck.Inspect\(model\)') { throw 'Current source registration check missing' }
+          if ($reg -notmatch 'TEST PROJECT') { throw 'Explicit backup-project confirmation missing' }
+          if ($reg -notmatch 'SetOrthoDwgVersion') { throw 'Native Ortho version API integration missing' }
+          if ($reg -notmatch 'AddPnPDrawingFile') { throw 'Native Ortho drawing registration API missing' }
+          if ($reg -notmatch 'IsValidOrthoDrawing') { throw 'Native Ortho validation API missing' }
+          if ($reg -match 'GenerateOrthos\(|\.ExecuteNonQuery\(|SQLiteConnection') { throw 'No internal generation or raw DCF writes allowed in test' }
+          $old = Get-Content 'src/SPTC.SupportDrawings/SupportDrawingCommands.cs' -Raw
+          if ($old -notmatch 'CommandMethod\("SPTC_SUPPORT2D"') { throw 'Existing production command must remain available' }
       - name: Compile SPTC Support Drawings
         run: dotnet build src/SPTC.SupportDrawings/SPTC.SupportDrawings.csproj -c Release
       - name: Verify compiled DLL
@@ -99,7 +112,7 @@ jobs:
       - name: Upload DLL artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SPTC-SupportDrawings-Plant3D2025-REV13
+          name: SPTC-SupportDrawings-Plant3D2025-REV14
           path: src/SPTC.SupportDrawings/bin/Release/net8.0-windows/SPTC.SupportDrawings.dll
           retention-days: 30
           if-no-files-found: error
