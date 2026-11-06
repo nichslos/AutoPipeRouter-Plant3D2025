@@ -202,6 +202,21 @@ jobs:
           if ($src -match 'GetMethod\("GenerateOrthos"|BindingFlags.NonPublic|SetOrthoDwgVersion|ExecuteNonQuery|SendStringToExecute') {
             throw 'Private native generation and project database writes remain forbidden'
           }
+      - name: Verify REV19.4 working-database identity and synchronization fix
+        shell: pwsh
+        run: |
+          $code = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoTopOneCommandTest.cs' -Raw
+          if ($code -notmatch 'STEP5_WORKING_DB_BEFORE=') { throw 'Missing current working DB filename diagnostic' }
+          if ($code -notmatch 'STEP5_EXPECTED_WORKING_DB=') { throw 'Missing target DB filename diagnostic' }
+          if ($code -notmatch 'STEP5_WORKING_DB_WRAPPER_EQUALS=') { throw 'Missing wrapper identity diagnostic' }
+          if ($code -notmatch 'STEP5_WORKING_DB_SYNC_ENTERED') { throw 'Missing explicit target DB synchronization' }
+          if ($code -notmatch 'HostApplicationServices.WorkingDatabase = targetDoc.Database') { throw 'Must set working DB to verified target before native cube init' }
+          if ($code -notmatch 'STEP5_WORKING_DB_VERIFIED_TARGET') { throw 'Must verify effective working DB filename' }
+          if ($code -notmatch 'STEP5_WORKING_DB_FINAL_SYNC') { throw 'Must synchronize working DB after native call' }
+          if ($code -notmatch 'STEP5_NATIVE_CUBE_EXTENTS_MATCHED') { throw 'Strict native OrthoCube bounds check removed' }
+          if ($code -match 'SetOrthoDwgVersion|GetMethod\("GenerateOrthos"|BindingFlags.NonPublic|ExecuteNonQuery|SQLiteConnection|SendStringToExecute') {
+            throw 'REV19.4 must preserve public-only native Ortho generation and registration'
+          }
       - name: Compile SPTC Support Drawings
         run: dotnet build src/SPTC.SupportDrawings/SPTC.SupportDrawings.csproj -c Release
       - name: Verify compiled DLL
@@ -213,7 +228,7 @@ jobs:
       - name: Upload DLL artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SPTC-SupportDrawings-Plant3D2025-REV19_3
+          name: SPTC-SupportDrawings-Plant3D2025-REV19_4
           path: src/SPTC.SupportDrawings/bin/Release/net8.0-windows/SPTC.SupportDrawings.dll
           retention-days: 30
           if-no-files-found: error
