@@ -97,7 +97,8 @@ Assert(topA1.Status.StartsWith("PROPOSED_ONLY:", StringComparison.Ordinal),
     "Never imply unverified native Ortho placement is automatic");
 Assert(topA1.ProjectedModelWidthMm > 0 && topA1.ProjectedModelHeightMm > 0,
     "Selected support model spans must be nonzero");
-var threeA1=NativeOrthoThreeViewPlan.Build(tightPlan,594,841);
+var rev20Sample=NativeOrthoLayout.Build(new BoundingBox3(0,0,0,300,75,220),1.0);
+var threeA1=NativeOrthoThreeViewPlan.Build(rev20Sample,594,841);
 Assert(threeA1.Views.Count==3 && threeA1.Views[0].Name=="TOP" &&
     threeA1.Views[1].Name=="FRONT" && threeA1.Views[2].Name=="SIDE",
     "REV20 TOP FRONT SIDE order");
@@ -117,7 +118,7 @@ for(int i=0;i<threeA1.Views.Count;i++)
         Assert(!(a.X<b.X+b.W && b.X<a.X+a.W && a.Y<b.Y+b.H && b.Y<a.Y+a.H),
             "REV20 no proposed tile collisions");
     }
-var threeA3=NativeOrthoThreeViewPlan.Build(tightPlan,420,297);
+var threeA3=NativeOrthoThreeViewPlan.Build(rev20Sample,420,297);
 Assert(threeA3.Denominator>=threeA1.Denominator,"REV20 A3 needs equal or smaller drawing scale");
 Assert(threeA1.Status.StartsWith("PROPOSED_ONLY:"),
     "REV20 native placement not falsely claimed");
