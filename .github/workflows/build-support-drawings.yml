@@ -101,6 +101,20 @@ jobs:
           if ($reg -match 'GenerateOrthos\(|\.ExecuteNonQuery\(|SQLiteConnection') { throw 'No internal generation or raw DCF writes allowed in test' }
           $old = Get-Content 'src/SPTC.SupportDrawings/SupportDrawingCommands.cs' -Raw
           if ($old -notmatch 'CommandMethod\("SPTC_SUPPORT2D"') { throw 'Existing production command must remain available' }
+      - name: Verify REV15 wizard-seed clone test is isolated
+        shell: pwsh
+        run: |
+          $seed = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoSeedCloneTest.cs' -Raw
+          if ($seed -notmatch 'CommandMethod\("SPTC_ORTHO15CLONE_TEST"') { throw 'REV15 seed clone test command missing' }
+          if ($seed -notmatch 'NATIVE ORTHO TEST') { throw 'Backup project confirmation missing' }
+          if ($seed -notmatch 'IsValidOrthoDrawing') { throw 'Native Ortho project validation missing' }
+          if ($seed -notmatch 'AddPnPDrawingFile') { throw 'Native Ortho registration missing' }
+          if ($seed -notmatch 'File.Exists\(dest\)') { throw 'Existing output overwrite guard missing' }
+          if ($seed -match 'SetOrthoDwgVersion|GenerateOrthos\(|SQLiteConnection|ExecuteNonQuery') {
+            throw 'REV15 must not use unverified version setter or internal generator or edit DCF directly'
+          }
+          $base = Get-Content 'src/SPTC.SupportDrawings/SupportDrawingCommands.cs' -Raw
+          if ($base -notmatch 'CommandMethod\("SPTC_SUPPORT2D"') { throw 'SPTC_SUPPORT2D must remain available' }
       - name: Compile SPTC Support Drawings
         run: dotnet build src/SPTC.SupportDrawings/SPTC.SupportDrawings.csproj -c Release
       - name: Verify compiled DLL
@@ -112,7 +126,7 @@ jobs:
       - name: Upload DLL artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SPTC-SupportDrawings-Plant3D2025-REV14
+          name: SPTC-SupportDrawings-Plant3D2025-REV15
           path: src/SPTC.SupportDrawings/bin/Release/net8.0-windows/SPTC.SupportDrawings.dll
           retention-days: 30
           if-no-files-found: error
