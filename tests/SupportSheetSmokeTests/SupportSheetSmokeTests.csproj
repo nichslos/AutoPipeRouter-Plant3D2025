@@ -14,5 +14,6 @@
     <Compile Include="../../src/SPTC.SupportDrawings/NativeOrthoTopViewPlan.cs" Link="NativeOrthoTopViewPlan.cs" />
     <Compile Include="../../src/SPTC.SupportDrawings/NativeOrthoThreeViewPlan.cs" Link="NativeOrthoThreeViewPlan.cs" />
     <Compile Include="../../src/SPTC.SupportDrawings/NativeOrthoOneClickPlan.cs" Link="NativeOrthoOneClickPlan.cs" />
+    <Compile Include="../../src/SPTC.SupportDrawings/NativeOrthoTenViewPlan.cs" Link="NativeOrthoTenViewPlan.cs" />
   </ItemGroup>
 </Project>

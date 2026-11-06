@@ -1,3 +1,20 @@
+# SPTC Support Drawings — REV22: All Ten Views in One Experimental Group
+
+REV22 is a separate, unsupported native Plant 3D 2025 Ortho experiment for a COPIED TEST PROJECT ONLY. It does not replace REV19.4, REV20 or REV21.1.
+
+New command: SPTC_ORTHO22_TENVIEW_ONECLICK_TEST
+
+Views from the supplied Plant 3D menu, in order: TOP, BOTTOM, LEFT, RIGHT, FRONT, BACK, NW Isometric, NE Isometric, SW Isometric, SE Isometric. REV22 constructs ten correctly normalized view/up directions and validates the exact native enum type for every view before native generation.
+
+A1 sheet design: two columns by five rows, one common automatically chosen scale for all ten projected envelopes. Each diagonal isometric view is separately projected to compute its required width and height. A preliminary 22% right and 12% bottom title-block keepout are reserved. One click sets the TOP anchor for the entire group; if the group cannot fit there, it shifts together and logs the adjusted coordinates. Real template collisions remain subject to user visual confirmation.
+
+Native safety: reuse the REV21 exact 16-parameter unsupported internal GenerateOrthos signature check, source/seed registration checks, working database verification, strict per-view OrthoCube extent checks, independent viewport ObjectId creation, and exact native view registration checks after each call. REV22 removes the previous 8-view truncation in catalog diagnostic so all ten can be checked. No raw Ortho.dcf writes, no keystroke scripts. A partially registered failure remains in copied project for inspection.
+
+Test: Restart AutoCAD Plant 3D 2025. NETLOAD the REV22 DLL in a copied test project. Open and save a registered 3D source model. Run SPTC_ORTHO22_TENVIEW_ONECLICK_TEST. Select one support, then a registered EMPTY Project Manager Ortho seed, accept warning, type REV22 TEST, and click once on the Ortho paper. If generated, save; visually check all ten view directions, scale, borders/title block, and perform native Update View for each. Upload the new *_REV22_RESULT.txt log and a screenshot.
+
+Important: Compiling REV22 does not establish that the unsupported internal generator creates updateable model links or that it handles all ten native isometric types. REV21.1 internal generation has not yet been runtime-validated beyond the one-click preflight. User must test in a completely separate project backup.
+
+---
 # SPTC Support Drawings — REV21.1: One-Click Auto-Fit Group Anchor
 
 **REV21 runtime evidence:** The user clicked paper point (115, 370) mm on an A1 portrait sheet (594×841 mm). Native internal `GenerateOrthos` signature preflight passed, but the FRONT view's calculated position fell inside the bottom reserved margin. The original REV21 safety guard correctly stopped **before creating any native views**.

@@ -179,6 +179,65 @@ bool outsidePaperRejected=false;
 try{NativeOrthoOneClickPlan.BuildAdjusted(threeA1,594,841,-1,370);}
 catch(ArgumentOutOfRangeException){outsidePaperRejected=true;}
 Assert(outsidePaperRejected,"REV21.1 does not allow a click outside the physical sheet");
+var tenSource = NativeOrthoLayout.Build(
+    new BoundingBox3(0,0,0,362.68,75,272.679),1.0);
+var ten=NativeOrthoTenViewPlan.Build(tenSource,594,841);
+string[] tenExpected={"TOP","BOTTOM","LEFT","RIGHT","FRONT","BACK","NW","NE","SW","SE"};
+Assert(ten.Views.Count==10&&ten.Views.Select(v=>v.Name).SequenceEqual(tenExpected),
+    "REV22 exactly ten native view directions in requested sequence");
+Assert(ten.Views.Select(v=>v.EnumName).Distinct().Count()==10,
+    "REV22 all native view enums unique");
+Assert(ten.Denominator>=2&&ten.Views.All(v=>v.ModelWmm>0&&v.ModelHmm>0),
+    "REV22 native projected support dimensions and common scale");
+foreach(var view in ten.Views)
+{
+    double directionLength=Math.Sqrt(view.Dx*view.Dx+view.Dy*view.Dy+view.Dz*view.Dz);
+    double upLength=Math.Sqrt(view.Ux*view.Ux+view.Uy*view.Uy+view.Uz*view.Uz);
+    double dot=view.Dx*view.Ux+view.Dy*view.Uy+view.Dz*view.Uz;
+    Assert(Math.Abs(dot)<1e-7&&Math.Abs(directionLength-1)<1e-7&&
+        Math.Abs(upLength-1)<1e-7,
+        "REV22 unit-orthogonal view direction and up vector "+view.Name);
+}
+Assert(ten.Views[6].Dx<0&&ten.Views[6].Dy>0&&ten.Views[6].Dz>0&&
+    ten.Views[7].Dx>0&&ten.Views[7].Dy>0&&ten.Views[7].Dz>0&&
+    ten.Views[8].Dx<0&&ten.Views[8].Dy<0&&ten.Views[8].Dz>0&&
+    ten.Views[9].Dx>0&&ten.Views[9].Dy<0&&ten.Views[9].Dz>0,
+    "REV22 four isometric camera quadrants");
+var tenGroup=NativeOrthoTenViewPlan.BuildAdjusted(ten,594,841,
+    ten.Views[0].CenterX,ten.Views[0].CenterY);
+Assert(tenGroup.Views.Count==10&&!tenGroup.WasAdjusted,
+    "REV22 ten-view group fits at its default A1 center");
+for(int i=0;i<tenGroup.Views.Count;i++)
+{
+    var a=tenGroup.Views[i];
+    Assert(a.CenterX-a.PaperFrameWidth/2>=-1e-7&&
+        a.CenterX+a.PaperFrameWidth/2<=594*.78+1e-7&&
+        a.CenterY-a.PaperFrameHeight/2>=841*.12-1e-7&&
+        a.CenterY+a.PaperFrameHeight/2<=841*.94+1e-7,
+        "REV22 actual view envelope fits A1 sheet "+a.Name);
+    for(int j=i+1;j<tenGroup.Views.Count;j++)
+    {
+        var b=tenGroup.Views[j];
+        Assert(Math.Abs(a.CenterX-b.CenterX)>=(a.PaperFrameWidth+b.PaperFrameWidth)/2||
+            Math.Abs(a.CenterY-b.CenterY)>=(a.PaperFrameHeight+b.PaperFrameHeight)/2,
+            "REV22 ten viewport rectangles cannot overlap");
+    }
+}
+var tenClick=NativeOrthoTenViewPlan.BuildAdjusted(ten,594,841,115,370);
+Assert(tenClick.Views.Count==10&&tenClick.WasAdjusted&&
+    tenClick.EffectiveTopY>370&&tenClick.RequestedTopY==370,
+    "REV22 shift full ten-view group when initial TOP click is too low");
+bool tenRejected=false;
+try{NativeOrthoTenViewPlan.BuildAdjusted(ten,594,841,-1,370);}
+catch(ArgumentOutOfRangeException){tenRejected=true;}
+Assert(tenRejected,"REV22 reject click outside actual sheet");
+var tenA3=NativeOrthoTenViewPlan.Build(tenSource,420,297);
+Assert(tenA3.Denominator>=ten.Denominator,
+    "REV22 smaller A3 paper must not have a larger view scale");
+Assert(ten.Status.StartsWith("PROPOSED_ONLY:"),
+    "REV22 private API remains unverified until native runtime test");
+Console.WriteLine("PASS: REV22 ten orthographic and isometric views, common scale and single-click fit.");
+
 Console.WriteLine("PASS: REV21.1 one-click automatic group translation and sheet guards.");
 bool nonFiniteRejected=false;
 try{NativeOrthoOneClickPlan.Build(threeA1,594,841,double.NaN,200);}

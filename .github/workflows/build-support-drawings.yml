@@ -279,6 +279,29 @@ jobs:
           if ($code -notmatch 'STEP5_UNSUPPORTED_GENERATE_SIGNATURE_MATCH') { throw 'Internal API signature check must remain' }
           if ($code -notmatch 'STEP9_.*_VIEW_CATALOG') { throw 'Native registration checks must remain' }
           if ($previous -notmatch 'CommandMethod\("SPTC_ORTHO20_THREEVIEW_ONECMD_TEST"') { throw 'Working REV20 command changed' }
+      - name: Verify REV22 all ten views and safe separate one-click command
+        shell: pwsh
+        run: |
+          $code = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoTenViewOneClickTest.cs' -Raw
+          $plan = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoTenViewPlan.cs' -Raw
+          foreach($type in @('Top','Bottom','Left','Right','Front','Back','NW','NE','SW','SE')) {
+            if ($plan -notmatch ('"'+$type+'"')) { throw "REV22 missing native view $type" }
+          }
+          if ($code -notmatch 'CommandMethod\("SPTC_ORTHO22_TENVIEW_ONECLICK_TEST"') { throw 'REV22 separate command missing' }
+          if ($code -notmatch 'REV22 TEST') { throw 'Missing copied-project confirmation' }
+          if ($code -notmatch 'STEP5_ONE_CLICK_COUNT=1') { throw 'One-click anchor missing' }
+          if ($code -notmatch 'NativeOrthoTenViewPlan.BuildAdjusted') { throw '10-view auto-fit missing' }
+          if ($code -notmatch 'STEP10_ALL_TEN_NATIVE_VIEWS_REGISTERED') { throw 'Full view catalog verification missing' }
+          if ($code -match 'views.Keys.Take\(8\)') { throw 'Do not truncate the ten native view names' }
+          if ($code -notmatch 'STEP5_UNSUPPORTED_GENERATE_SIGNATURE_MATCH') { throw 'Internal native API signature guard missing' }
+          if ($code -notmatch 'CUBE_EXTENTS_MATCHED') { throw 'Native geometry strict checks missing' }
+          if ($code -notmatch 'STEP5_WORKING_DB_VERIFIED_TARGET') { throw 'Native target context guard missing' }
+          if ($code -match 'SQLiteConnection|ExecuteNonQuery|SendStringToExecute|SetOrthoDwgVersion') { throw 'Direct project metadata modification or UI scripts forbidden' }
+          if ($plan -notmatch 'PROPOSED_ONLY') { throw 'Native Update View validation disclaimer missing' }
+          $previous = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoOneClickInternalTest.cs' -Raw
+          $public = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoThreeViewOneCommandTest.cs' -Raw
+          if ($previous -notmatch 'CommandMethod\("SPTC_ORTHO21_ONECLICK_INTERNAL_TEST"') { throw 'REV21 fallback missing' }
+          if ($public -notmatch 'CommandMethod\("SPTC_ORTHO20_THREEVIEW_ONECMD_TEST"') { throw 'REV20 fallback missing' }
       - name: Compile SPTC Support Drawings
         run: dotnet build src/SPTC.SupportDrawings/SPTC.SupportDrawings.csproj -c Release
       - name: Verify compiled DLL
@@ -290,7 +313,7 @@ jobs:
       - name: Upload DLL artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SPTC-SupportDrawings-Plant3D2025-REV21_1
+          name: SPTC-SupportDrawings-Plant3D2025-REV22
           path: src/SPTC.SupportDrawings/bin/Release/net8.0-windows/SPTC.SupportDrawings.dll
           retention-days: 30
           if-no-files-found: error
