@@ -1,4 +1,18 @@
-# SPTC Support Drawings — REV19.3: Target Document Context Fix
+# SPTC Support Drawings — REV19.4: Working Database Synchronization
+
+## REV19.4 — Working database mismatch diagnosis and scoped synchronization
+
+**Observed in REV19.3 runtime:** Entered the registered target Ortho document command context (`IsApplicationContext=False`), the active Document matched the registered target, but `HostApplicationServices.WorkingDatabase` did **not** pass a `ReferenceEquals` comparison with the target document database. The command stopped before native OrthoCube initialization. This result alone does not prove that the underlying AutoCAD database was wrong: different .NET wrappers may represent the same native drawing.
+
+**Change:** First log the working and target database filenames. Compare **normalized full DWG paths**, not only .NET wrapper object identity. Only when the paths differ, set `HostApplicationServices.WorkingDatabase = targetDoc.Database` in the verified target document command context. Immediately verify the effective working database filename. Stop if it still differs. After the operation, synchronize working database to whichever AutoCAD drawing is active so a previous source-drawing database is not left active while the generated Ortho drawing is the active tab. Keep exact REV19.2 native OrthoCube bounds validation, copied-test-project consent, public native CreateOrthos only, and the prior exception logging guard.
+
+**Why:** Autodesk's managed API documentation says the working database supplies drawing context for many DB operations and should stay synchronized with document switching. Reference: https://help.autodesk.com/cloudhelp/2026/ENU/OARX-ManagedRefGuide/files/OARX-ManagedRefGuide-Autodesk_AutoCAD_DatabaseServices_HostApplicationServices_WorkingDatabase.html
+
+**Retest only in copied project:** Restart AutoCAD Plant 3D 2025; NETLOAD REV19.4; open any registered source 3D model, save it; run `SPTC_ORTHO19_TOP_ONECMD_TEST`, select the support, choose the native registered **empty** Ortho seed, and type `REV19 TEST`. Upload the fresh `_REV19_RESULT.txt` and a TOP view screenshot if generated. Do not select an earlier failed clone or populated REV18 output as the seed.
+
+**Key new log entries:** `STEP5_WORKING_DB_BEFORE`, `STEP5_EXPECTED_WORKING_DB`, `STEP5_WORKING_DB_WRAPPER_EQUALS`, `STEP5_WORKING_DB_SYNC_ENTERED` (only if filenames differ), `STEP5_WORKING_DB_EFFECTIVE`, `STEP5_WORKING_DB_VERIFIED_TARGET=True`, and `STEP5_NATIVE_CUBE_EXTENTS_MATCHED=True` (if native cube works). If the cube still returns sentinel values, report and diagnose rather than bypass the geometry check.
+
+**Status:** REV19.4 is unverified in the Plant 3D runtime until the user tests the compiled build. REV18 automatic TOP generation and Update View remain the confirmed working baseline. No private API or direct `Ortho.dcf` editing is introduced.
 
 ## REV19.3 — Fix native OrthoCube initialization after switching drawings
 
