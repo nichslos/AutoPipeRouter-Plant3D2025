@@ -91,6 +91,11 @@ public sealed class NativeOrthoTopGenerationTest
             string model = root.GetProperty("Source3dModel").GetString() ?? "";
             if (!File.Exists(model) || !NativeOrthoProjectCheck.Inspect(model).SourceRegistrationVerified)
                 throw new InvalidOperationException("The report's source model is not a currently registered Piping DWG.");
+            if (File.GetLastWriteTimeUtc(model) > File.GetLastWriteTimeUtc(planPath).AddSeconds(5))
+                throw new InvalidOperationException("Source model changed after the REV17 report was created. Regenerate REV17 TOP preflight.");
+            JsonElement handles = root.GetProperty("SelectedSupportHandles");
+            if (handles.ValueKind != JsonValueKind.Array || handles.GetArrayLength() == 0)
+                throw new InvalidOperationException("REV17 report has no selected source support handles.");
 
             var bound = root.GetProperty("CalculatedOrthoCubeBounds");
             double minX = bound.GetProperty("MinX").GetDouble();
@@ -120,6 +125,8 @@ public sealed class NativeOrthoTopGenerationTest
                 !NativeOrthoRegistrationNames.IsInsideProjectDirectory(target, project.ProjectFolder))
                 throw new InvalidOperationException("Active Ortho DWG is outside the active Plant 3D project.");
 
+            if (!IsNativeOrthoValid(project.OrthoProject, target))
+                throw new InvalidOperationException("Native OrthoDocUtils.IsValidOrthoDrawing rejected the target DWG.");
             string viewStatus = FindViewStatus(project.OrthoProject, target);
             if (viewStatus != "EMPTY_REGISTERED_ORTHO")
                 throw new InvalidOperationException("The Ortho target is not verified as EMPTY: " + viewStatus);
@@ -315,6 +322,25 @@ public sealed class NativeOrthoTopGenerationTest
         if (!Path.IsPathRooted(folder)) folder = Path.Combine(root, folder);
         folder = Path.GetFullPath(folder);
         return new PlantTarget(root, folder, ortho);
+    }
+
+    private static bool IsNativeOrthoValid(object ortho, string filename)
+    {
+        Type util = FindType(AppDomain.CurrentDomain.GetAssemblies(),
+            "Autodesk.ProcessPower.P3dProjectParts.OrthoDocUtils") ??
+            throw new InvalidOperationException("Native OrthoDocUtils unavailable.");
+        MethodInfo? method = util.GetMethods(BindingFlags.Public | BindingFlags.Static)
+            .FirstOrDefault(m =>
+            {
+                if (m.Name != "IsValidOrthoDrawing" || m.ReturnType != typeof(bool)) return false;
+                ParameterInfo[] args = m.GetParameters();
+                return args.Length == 3 && args[0].ParameterType == typeof(string) &&
+                    args[1].ParameterType.IsInstanceOfType(ortho) &&
+                    args[2].ParameterType == typeof(string).MakeByRefType();
+            });
+        if (method == null) return false;
+        object?[] parameters = {filename, ortho, ""};
+        return method.Invoke(null, parameters) is bool valid && valid;
     }
 
     private static string FindViewStatus(object ortho, string target)
