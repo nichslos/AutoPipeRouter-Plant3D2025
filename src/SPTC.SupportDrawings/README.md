@@ -1,52 +1,62 @@
-# SPTC Support Drawings — REV12 (Fix actual native 3D model registration check)
+# SPTC Support Drawings — REV13 (No hard-coded source models)
 
-**Host:** AutoCAD Plant 3D 2025, Windows x64, the user's .NET 8 installation.
+**Target:** AutoCAD Plant 3D 2025, Windows x64, .NET 8 runtime.
 
-## Why REV11 returned an API mismatch
+## Requirement: model and project independence
 
-The actual user-generated `SPTC_ORTHO_AUTOPLAN_REV11.json` reported:
+The native Ortho commands and planning tools must work on **any project-registered Plant 3D model currently open in the editor**, not on one test project, sample DWG, zone name or AutoCAD entity handle.
 
-- `SourceRegistrationVerified: false`
-- `SourceRegistrationStatus: "Read-only IsValid3dDrawing(string, Project, out string) API unavailable/incompatible."`
-- `OrthoProjectPart: Autodesk.ProcessPower.P3dProjectParts.OrthoProject`
+REV13 avoids fixed references to examples. Its input contract is:
 
-**This did not establish that the 3D model was unregistered.** The REV11 reflection code was passing `PlantApplication.CurrentProject` (a `PlantProject`) to a native method whose parameter is `Autodesk.ProcessPower.ProjectManager.Project`.
+| Input | Runtime source (not hard-coded) |
+|---|---|
+| Current Plant 3D project | `PlantApplication.CurrentProject` |
+| Source model | `Application.DocumentManager.MdiActiveDocument.Database.Filename` |
+| Validation part | Active project's `ProjectParts["Piping"]` (a Plant 3D API-defined part name) |
+| Source DWG validity | `OrthoDocUtils.IsValid3dDrawing` against the active Piping project part |
+| Support members | Each new editor selection, handles resolved from that drawing only |
+| Cube boundary | Union of currently selected entities' geometric extents |
+| OrthoCube margin | 10% of each axis span with 10 mm per-side minimum, in source drawing units |
+| Report file name | Active drawing basename and **first selected handle**, plus revision |
+| Native Ortho command | Still interactive `PLANTORTHOCREATE` from the current source DWG |
 
-Direct inspection of the user-provided .NET 8 Plant 3D 2025 assemblies confirms:
+**No model-specific constants are used** for project names, source DWG names, folder paths, zones, or support handles. `"Piping"` and `"Ortho"` are *required Plant 3D project-part keys*, not user project names. `TOP`, `FRONT`, and `SIDE` are view types, not model identifiers.
 
-- `Autodesk.ProcessPower.ProjectManager.PlantProject` inherits `System.Object`; it is **not** an Autodesk `Project`.
-- `Autodesk.ProcessPower.P3dProjectParts.OrthoProject` derives from Autodesk `Project`.
-- `Autodesk.ProcessPower.P3dProjectParts.OrthoDocUtils.IsValid3dDrawing(string, Project, ref string)` is public and static.
-- Its compiled body checks the project part type obtained through `PnPProjectUtils.GetProjectPartTypeFromDrawingFile` against **`Piping`**, after validating the DWG.
+## Evidence from uploaded REV12 report
 
-## REV12 changes
+The most recent `SPTC_ORTHO_AUTOPLAN_REV12.json` shows a **valid registered source** in the active project, a test model `TEST3.dwg`, and two selected handles `3EC` / `3EA`. These were *observed values from one test*, not constants in the plugin. Another DWG, project or support selection will yield different paths, handles and geometry.
 
-The existing command `SPTC_ORTHOAUTOPLAN` now creates `SPTC_ORTHO_AUTOPLAN_REV12.json`.
+The test's actual support was about **302.233 x 75 x 227.233 mm** and its padded planning cube about **362.680 x 95 x 272.680 mm**. Those coordinates are not in source code and will not be reused when another model is selected.
 
-- Retrieves the active `PlantProject`, then **separately** requests `CurrentProject.ProjectParts["Piping"]` for 3D model source validation and `ProjectParts["Ortho"]` for an Ortho project summary.
-- Matches `IsValid3dDrawing` on its actual signature, then checks the **Piping** project part is assignable to the expected Autodesk `Project` parameter.
-- Calls the read-only native API with the **full source DWG path and Piping project part**, collecting its returned `bool` and reason string.
-- Records `SourceRegistrationStatus`, `ValidationProjectPart`, and `NativeValidationApiSignature` in the JSON. An API mismatch is now reported distinctly from an actual native `false` validation result.
-- Leaves the selected support handles, A3 view plan, axes-specific OrthoCube padding, and all other REV11 behavior intact.
-- No external Autodesk DLLs are committed or packaged. The plugin uses the installed native APIs through reflection.
+## REV13 changes
 
-### Geometry from the latest uploaded REV11 JSON
+1. Removed the last fixed-project diagnostic message directing users to a sample project.
+2. `SPTC_ORTHOAUTOPLAN` derives the initial JSON report name from the current source DWG and first selected handle. Example **format**: `SPTC_<ACTIVE-DWG>_<HANDLE>_ORTHO_AUTOPLAN_REV13.json`.
+3. Each plan records `SourceSelectionMode: ACTIVE_DOCUMENT_AND_CURRENT_SELECTION`, `GeneratedAtUtc`, `SourceModelName` and `Source3dModel` to make it obvious which model/selection created it.
+4. `SPTC_SUPPORT2D` prints the actual active model and project-registration status rather than assuming a fixed source drawing. It still starts native Plant 3D Ortho UI; it does **not** auto-select the project Ortho DWG or OrthoCube.
+5. Added smoke tests for multiple source DWGs and different support handles. GitHub build also rejects source code references to previous test-model and project names.
 
-The latest `SAMPLE_2ND STAGE.dwg` selection lists handles `8D1` and `8D2` with a support envelope of approximately **451.850 × 75 × 376.850 mm** and a padded OrthoCube of **542.219 × 95 × 452.219 mm**. Candidate Top view is **1:5**, Front/Side **1:10**.
+## Commands retained
 
-Earlier REV09/REV10 reports on a file with the same name and handles had *different model extents* (**1224.392 × 75 × 1149.392 mm**). This is not automatically an error, but if the file path and support handles have not intentionally changed, visually check the model and project copy. REV12 always calculates from the **currently selected objects**, never from previous JSON coordinates.
+- `SPTC_ORTHOAUTOPLAN`: reads current selection/model and produces model-specific **plan JSON** (read-only).
+- `SPTC_ORTHOAUTOPROBE`: read-only native API diagnostics.
+- `SPTC_SUPPORT2D`: uses current source model to launch interactive `PLANTORTHOCREATE`.
+- `SPTC_SUPPORT2DLINEWORK`, `SPTC_SUPPORT2DBATCH`: standalone experimental projected-linework DWGs (not native project Ortho).
+- `SPTC_SUPPORTEXPORT`, `SPTC_SUPPORTBATCH`, `SPTC_SUPPORTMANAGER`, `SPTC_SUPPORTINSPECT`: existing drawing utilities.
 
-## Test instructions
+## Test with any source model
 
-1. Close and restart Plant 3D 2025, then `NETLOAD` the REV12 DLL.
-2. Open the **same source model** in a **backup copy** of the project.
-3. Enter `SPTC_ORTHOAUTOPLAN`, select the two support members, and save `SPTC_ORTHO_AUTOPLAN_REV12.json`.
-4. Inspect `SourceRegistrationVerified`, `SourceRegistrationStatus`, `ValidationProjectPart`, and `NativeValidationApiSignature`.
-5. If the native method returns `false`, check the actual API reason and confirm the source model exists in the project's **Piping** drawing list. Do not interpret a lack of error as successful registration.
-6. If `Piping` is unavailable, report the exact project-part result instead of trying to register the DWG automatically.
+1. Restart Plant 3D 2025 and `NETLOAD` the REV13 `SPTC.SupportDrawings.dll`.
+2. Open **any** 3D model under the active Plant 3D project (e.g., a second test DWG).
+3. Run `SPTC_ORTHOAUTOPLAN`, select members of that one support, and save the suggested JSON name.
+4. Check `Source3dModel`, `SourceModelName`, `SelectedSupportHandles`, `SourceRegistrationVerified`, and the cube coordinates. They must come from that **current** model.
+5. Switch to a different registered source DWG, repeat, and compare the two reports. They must be independent.
+6. `SPTC_SUPPORT2D` will display its active model registration before launching native Ortho UI; it will not use an earlier model or saved JSON.
 
-## Current scope and future native Ortho generator
+## Important remaining limitation
 
-This remains a read-only **preflight** revision. The requested one-command bypass of the **Select Orthographic Drawing** dialog, native OrthoCube editing, and viewport placement is not implemented. Public `PlantOrthoView.CreateOrthos` invokes interactive placement; its internal, non-public `GenerateOrthos` method cannot safely be called without validated project/session state.
+REV13 **does not automatically generate or register a native Ortho DWG without interaction**. In the supplied .NET 8 Plant 3D 2025 Ortho DLLs, the public `PlantOrthoView.CreateOrthos` path still calls `Editor.Drag` and the standard drawing-selection workflow uses a modal dialog. Avoid blind UI scripting or invoking private `GenerateOrthos` against an active production project without validated initialization and rollback.
 
-The following established commands remain: `SPTC_SUPPORT2D` (interactive native Ortho), `SPTC_SUPPORT2DLINEWORK`, `SPTC_SUPPORT2DBATCH`, `SPTC_ORTHOAUTOPROBE`, `SPTC_ORTHOAUTOPLAN`, `SPTC_SUPPORTEXPORT`, `SPTC_SUPPORTBATCH`, `SPTC_SUPPORTMANAGER`, and `SPTC_SUPPORTINSPECT`.
+Models are dynamic; the **A3 landscape sheet and Top/Front/Side view arrangement are currently preset drafting choices**, not tailored to all fabrication templates. Review these assumptions separately.
+
+See also `docs/Plant3D_2025_Ortho_API_DLL_Analysis_REV10.md`.
