@@ -616,6 +616,57 @@ try
 }
 catch(InvalidOperationException){noRoomRejected=true;}
 Assert(noRoomRejected,"REV22.13 fail closed if caption group exceeds sheet keepout");
+// REV22.14 metadata MUST come from a declared attribute or an explicit
+// structural size token in the block/member name. Never guess by extents.
+Assert(SupportOrthoMemberMetadata.SectionsFromName(
+    "R-TYPE_CHANNEL_C100x50x5_L75x75x6").Count==2,
+    "REV22.14 capture multiple channel/angle section tokens from block names");
+Assert(SupportOrthoMemberMetadata.SectionFromName(
+    "SUPPORT-002-MODEL_20261109")==null,
+    "REV22.14 ignore arbitrary support IDs/dates as steel sections");
+Assert(SupportOrthoMemberMetadata.SectionFromAttribute(
+    "SECTION_SIZE","C125x65x6")=="C125x65x6",
+    "REV22.14 use explicit CAD section attribute");
+Assert(SupportOrthoMemberMetadata.SectionFromAttribute(
+    "PLATE_SIZE","210x210x9")=="210x210x9",
+    "REV22.14 preserve explicit plate size without inventing profile prefix");
+Assert(SupportOrthoMemberMetadata.SectionFromAttribute(
+    "LENGTH","1234")==null &&
+    SupportOrthoMemberMetadata.SectionFromAttribute("SIZE","UNSET")==null,
+    "REV22.14 never confuse structural length or blank metadata with size");
+var metadataSummary=SupportOrthoMemberMetadata.Summarize(
+    new[]{"SUPPORT_A-001"},
+    new[]{"C100x50x5","L75x75x6","C100x50x5"});
+Assert(metadataSummary.BlockName=="SUPPORT_A-001"&&
+    metadataSummary.MemberSizes.Count==2,
+    "REV22.14 exact selected block name and unique member sections");
+var missingSummary=SupportOrthoMemberMetadata.Summarize(
+    new[]{"SUPPORT_B"},Array.Empty<string>());
+Assert(SupportOrthoMemberMetadata.SizeLabel(missingSummary)
+    =="NOT AVAILABLE (NO SECTION METADATA)",
+    "REV22.14 never fake steel sizes when CAD block contains raw solids");
+var titleAnnotationFrames=reservedTitleFrames.Frames;
+var steelAnnotations=SupportOrthoCalloutPlan.Build(
+    titleAnnotationFrames,metadataSummary,594,841);
+Assert(steelAnnotations.Count==10 &&
+    steelAnnotations[0].BlockLine=="BLOCK: SUPPORT_A-001"&&
+    steelAnnotations[0].SizeLine.Contains("C100x50x5") &&
+    steelAnnotations[9].SizeLine.Contains("L75x75x6"),
+    "REV22.14 show block name and steel section list beside all ten views");
+Assert(steelAnnotations.All(c=>c.X>0&&c.X+c.Width<594*.78&&
+    c.LeaderFromX<c.LeaderToX&&c.Height>0),
+    "REV22.14 frame-linked callouts remain outside native viewports and keepout");
+bool profileCollisionRejected=false;
+try
+{
+    var crowded=titleAnnotationFrames.Select(f=>f with {X=440}).ToArray();
+    SupportOrthoCalloutPlan.Build(crowded,metadataSummary,594,841);
+}
+catch(InvalidOperationException){profileCollisionRejected=true;}
+Assert(profileCollisionRejected,
+    "REV22.14 fail closed when source view width leaves no note area");
+Console.WriteLine("PASS: REV22.14 metadata-evidenced block/steel labels with all 10 safe paper-space callouts.");
+
 Console.WriteLine("PASS: REV22.13 ten native preset view titles, whole-group caption clearance and no overlaps.");
 
 Console.WriteLine("PASS: REV22.12 numeric-free automatically derived SupportFocus clearances and long-route clipping.");
