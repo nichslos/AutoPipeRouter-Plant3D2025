@@ -1,3 +1,31 @@
+# SPTC Support Drawings — REV22.9: Automatically Finalize All Ten Views
+
+**Runtime finding (2026-11-09):** The REV22.8 generated TXT reports all six TOP/BOTTOM/LEFT/RIGHT/FRONT/BACK strings recognized by the installed Plant 3D 2025 native Edit View parser, saved IDwgViewDef.ViewType matches each short name, ten views registered, and all four NW/NE/SW/SE isometrics correctly centered. Nevertheless, the user still has to invoke manual **Update View** after initial generation to see the standard view results correctly. This means the remaining requirement is automatic *native content regeneration/finalization*, not another camera-vector or ViewType-string change.
+
+**Official Plant 3D 2025 mechanism:** Autodesk documents `PLANTORTHOUPDATE` with the `All` option and the `PLANTORTHOSILENTUPDATE` registry-backed system variable. `PLANTORTHOSILENTUPDATE=1` forces all views to regenerate even when considered up to date, and suppresses missing-model/proxy warnings; it is **only** temporarily enabled on a confirmed, backed-up project and restored afterward. Sources: https://help.autodesk.com/cloudhelp/2025/ENU/Plant3D-UserGuide/files/GUID-527A9774-33FD-4423-8D5E-F01ABC16DF5E.htm and https://help.autodesk.com/cloudhelp/2025/ENU/Plant3D-UserGuide/files/GUID-E1CAA1D6-C6C6-44D1-8A5E-1BFB9C0204CA.htm
+
+**New independent command:** `SPTC_ORTHO22_9_AUTO_UPDATE_TEST`. It is a copy of the working REV22.8 isolated generator, preserving the six native preset names `Top/Bottom/Left/Right/Front/Back`, correct four isometric presets, REV22.7 ISO-only `TwistAngle=0` with ViewCenter compensation, and one-click ten-view placement. Once all ten views are registered with no detected initial overlaps, it executes a **second command-context phase** on the active native Ortho DWG:
+1. Save the generated, project-registered Ortho drawing using `QSAVE`.
+2. Read the current user setting `PLANTORTHOSILENTUPDATE`, set it temporarily to 1.
+3. Run `PLANTORTHOUPDATE` with the `All` option synchronously through the document editor.
+4. Restore the setting in both success and failure paths.
+5. Save the updated drawing, verify the ten native view names remain registered, check ten paper-space viewports, and report any overlap/off-sheet condition.
+
+**Diagnostic log:** `*_REV22_9_RESULT.txt`. In particular, inspect `STEP11_PLANTORTHOUPDATE_ALL_ENTERED`, `STEP11_PLANTORTHOUPDATE_ALL_RETURNED`, `STEP11_SILENTUPDATE_RESTORED=True`, `STEP11_ALL_TEN_NATIVE_VIEWS_STILL_REGISTERED=True`, `STEP11_POSTUPDATE_NEW_VIEWPORT_COUNT=10`, `STEP11_POSTUPDATE_VIEWPORT_OVERLAP_OR_OFFSHEET=False`, `STEP11_AUTO_UPDATE_COMPLETED=True`, and `FINAL_STATUS=TEN_NATIVE_VIEWS_AUTO_UPDATED_CHECK_VISIBLE_GEOMETRY`. A failure is logged as `STEP11_AUTO_UPDATE_FAILURE`; do not interpret other prior generation PASS messages as proof of auto-update success.
+
+**Safety:** Test only in a duplicate project. Native `PLANTORTHOUPDATE All` may alter all current Ortho views, and silent mode suppresses warnings about missing files and proxies. This isolated command creates a **fresh** ten-view native drawing and performs only this one extra native update; it never touches the earlier test DWGs and does not edit `Ortho.dcf` directly. Do not deploy to production until the resulting ten views are visually correct immediately after the command **without any manual Update View**.
+
+**Install/test:**
+1. Close Plant 3D 2025; load the new DLL with `NETLOAD` in a copied registered project.
+2. Open source support model, run `SPTC_ORTHO22_9_AUTO_UPDATE_TEST`; select two support members, choose an empty registered Ortho seed, type `REV22.9 TEST`, and click **once**.
+3. Do **not** manually select Update View. Inspect TOP/BOTTOM/LEFT/RIGHT/FRONT/BACK as well as NW/NE/SW/SE immediately; capture an overall drawing screenshot and the native Edit View selection for one axial and one ISO view.
+4. Send the REV22.9 TXT and screenshot. Check that the PLANTORTHOSILENTUPDATE variable was restored.
+5. If the internal native updater reports failure/unsupported command, preserve the TXT and partial copied test drawing. Do not keep trying in a production project.
+
+**Scope:** The supported Autodesk Update All command is used only to finalize new views; the underlying `GenerateOrthos` entry point remains unsupported/internal and needs live Plant 3D verification. A successful CI build does not prove Update All behavior in the native editor.
+
+---
+
 # SPTC Support Drawings — REV22.8: TOP/BOTTOM/LEFT/RIGHT/FRONT/BACK Native Edit View Presets
 
 **Runtime user finding:** REV22.7 successfully shows all four isometrics (NW, NE, SW, SE) with full support geometry after correcting native viewport rotation and center. The remaining six orthographic/axial views appear as **Current View** when opened in the Plant 3D 2025 native Ortho Editor.
