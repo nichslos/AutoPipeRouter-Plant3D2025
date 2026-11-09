@@ -1,3 +1,24 @@
+# SPTC Support Drawings — REV22.6: Compare Native Isometric Presets (Read-Only)
+
+**Evidence, 2026-11-09:** REV22.5 generated 10 native views using one click, with no detected viewport overlap. The four native isometric view names and WCS camera directions passed. REV22.4 audits before and after native Update View show that the viewports now retain **0° / 360°** twist, not the earlier 180° error. However, these logs do **not** establish that NW/NE/SW/SE generated linework matches manually created Plant 3D preset views. REV22.6 gathers an independent native reference before changing any more code.
+
+**Existing REV22.5 generation and all earlier commands remain unchanged. REV22.6 is strictly read-only to AutoCAD DWGs/Plant project.** It only writes diagnostic TXT files alongside the DWG.
+
+**Step A — capture true native presets:**
+1. In a **copied/backed-up** Plant 3D 2025 project, create four reference views manually through **Plant 3D Ortho Editor** using the built-in **NW**, **NE**, **SW**, **SE** options (same project-registered 3D source support; same model orientation). Save this registered Ortho DWG, switch to the paper layout. Capture screenshots of the native Edit View selector for each.
+2. `NETLOAD` the compiled REV22.6 `SPTC.SupportDrawings.dll` and run `SPTC_ORTHO22_6_CAPTURE_NATIVE_ISO`.
+3. Select the four **paper-space viewport borders** in order: **NW, NE, SW, SE**. The command saves `*_REV22_6_NATIVE_REFERENCE_<timestamp>.txt`. The labels come from your selection order, not from automatically verified view metadata, so select carefully.
+
+**Step B — compare to REV22.5:**
+1. Open the existing REV22.5-generated test Ortho DWG with NW/NE/SW/SE. Save and switch to the paper layout.
+2. Run `SPTC_ORTHO22_6_COMPARE_NATIVE_ISO`. Choose the captured native reference TXT.
+3. Select the four **plugin-generated viewport borders** in the same **NW, NE, SW, SE** order. A report `*_REV22_6_COMPARE_<timestamp>.txt` is written alongside the DWG.
+
+**Comparison:** The reference and generated `ViewDirection` vectors are normalized before comparison (tolerance 0.1°); `TwistAngle` differences are compared modulo 360° (tolerance 0.5°). Actual scale is informational, because native reference and plugin-generated viewports can use different scales. The report explicitly distinguishes **CAMERA_MATCH**, **ROLL_MATCH**, **SCALE_MATCH**, and **VIEWPORT_CAMERA_AND_ROLL_MATCH** for each view. This does **not** compare generated linework or prove that Autodesk's `IDwgViewDef.ViewType` metadata matches; visually compare the native and generated images and inspect Edit View presets.
+
+**Send:** the native reference TXT, plugin comparison TXT, and paired native-versus-generated isometric screenshots. If camera or roll mismatches are found, correct only the mapping implicated by those measurements; do not alter six working standard directions or the REV22.3 paper layout. If all properties match but output linework differs, investigate the native Ortho model link, view metadata, clipping, and geometry regeneration rather than guessing at the twist.
+
+---
 # SPTC Support Drawings — REV22.5: Four-Isometric Viewport Twist Test
 
 **Observed from uploaded 2026-11-09 logs:** `*_REV22_3_RESULT.txt` confirms all ten native views registered with one click and correct actual viewport frames, scale 1:5, `ACTUAL_VIEWPORT_OVERLAP_DETECTED=False`, and no title-block collision. It also confirms saved native `NW`, `NE`, `SW`, `SE` view type strings and correct WCS camera quadrants. A separate `*_REV22_4_ISO_AUDIT_*.txt` reports **`VIEW_TWIST_DEG=180` on every isometric viewport**, despite matching view directions. Since camera up vectors were explicitly chosen as the projection of WCS +Z, a half-turn in the paper viewport makes the displayed object inverted.
