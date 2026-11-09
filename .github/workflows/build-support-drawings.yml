@@ -724,6 +724,25 @@ jobs:
           if(-not $planner.Contains('double height=addTos?TextLineHeightMm*2:')) { throw 'Reserve two text rows for Size and TOS' }
           if(-not $oldPlanner.Contains('label+"\n\n"+tos')) { throw 'Keep old REV22.20 command unchanged as fallback' }
           if(-not $new.Contains('Replace("\n","\\P")')) { throw 'Native MText line break conversion absent' }
+      - name: Verify REV22.22 native MText line break preservation
+        shell: pwsh
+        run: |
+          $new = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoTenViewMTextSeparatorTest.cs' -Raw
+          $old = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoTenViewTosDirectLineTest.cs' -Raw
+          $encoder = Get-Content 'src/SPTC.SupportDrawings/SupportOrthoMemberMText22.cs' -Raw
+          $planner = Get-Content 'src/SPTC.SupportDrawings/SupportOrthoMemberCalloutPlan21.cs' -Raw
+          if($new -notmatch 'CommandMethod\("SPTC_ORTHO22_22_MTEXT_SEPARATOR_TEST"') { throw 'REV22.22 separate command missing' }
+          if($old -notmatch 'CommandMethod\("SPTC_ORTHO22_21_TOS_DIRECT_LINE_TEST"') { throw 'REV22.21 previous command removed' }
+          if($new -notmatch 'REV22.22 TEST') { throw 'Copied-project authorization missing' }
+          if(-not $new.Contains('Contents=SupportOrthoMemberMText22.Encode(item.Text)')) { throw 'Native MText must call split-first encoder' }
+          if($new.Contains('Contents=SupportOrthoMemberMetadata.SafeMText(item.Text)')) { throw 'Old newline-stripping path remains in REV22.22' }
+          foreach($token in @('Split(',"string.Join(", 'paragraphs.Select(SupportOrthoMemberMetadata.SafeMText)')) {
+            if(-not $encoder.Contains($token)) { throw "REV22.22 encoder implementation missing $token" }
+          }
+          foreach($token in @('SupportOrthoHorizontalSource19.Read','SupportOrthoMemberCalloutPlan21.Build','STEP10_ALL_TEN_NATIVE_VIEWS_REGISTERED','STEP10_VIEW_TITLE_COUNT','STEP10_HORIZONTAL_TOS_LABEL_COUNT','STEP10_MEMBER_ANNOTATIONS_CHECK')) {
+            if(-not $new.Contains($token)) { throw "REV22.22 native view regression guard missing: $token" }
+          }
+          if(-not $planner.Contains('bool addTos=member.IsHorizontal;') -or -not $planner.Contains('"TOS ~ ":"TOS EL. "')) { throw 'Horizontal-only spaced-tilde display removed' }
       - name: Compile SPTC Support Drawings
         run: dotnet build src/SPTC.SupportDrawings/SPTC.SupportDrawings.csproj -c Release
       - name: Verify compiled DLL
@@ -735,7 +754,7 @@ jobs:
       - name: Upload DLL artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SPTC-SupportDrawings-Plant3D2025-REV22_21
+          name: SPTC-SupportDrawings-Plant3D2025-REV22_22
           path: src/SPTC.SupportDrawings/bin/Release/net8.0-windows/SPTC.SupportDrawings.dll
           retention-days: 30
           if-no-files-found: error
