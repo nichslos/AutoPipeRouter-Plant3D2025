@@ -1,32 +1,22 @@
-# SPTC Production Iso REV10 — Toggle Active / All line numbers
+# SPTC Production Iso REV11 — Faster toggle, cleaner left panel
 
-REV10 continues directly from REV09. Earlier releases, including working REV05 copy/export and REV06 Select All, are unchanged.
+REV11 is based directly on REV10. Earlier REV05–REV10 branches and builds remain unchanged.
 
-## Change relative to REV09
-The original Production Iso dialog initially shows **the normal unfiltered list**. Clicking a top-left native **Drawing / Project** toolbar icon the first time shows the verified active route tag in the open DWG. Clicking again clears the temporary tag filter and restores Autodesk's unfiltered native line list. Repeated clicks alternate between filtered and unfiltered.
+## Changes
+- Removed the redundant **DWG Only** button from the lower-left corner. The **Select All** checkbox is preserved and now uses the full width of the footer.
+- The two Autodesk Drawing/Project buttons still toggle between full native line list and the verified active current-DWG tag, per REV10.
+- Reduced the plugin's debounce **when returning to the full list** from 350 ms to 100 ms. Applying the active route still waits 300 ms to allow Autodesk's mode transition.
+- **Important limitation:** Autodesk's native Drawing/Project list may still take time to retrieve pipeline tags from a project stored on a mapped/shared drive. This revision only reduces the plugin-imposed delay, not Autodesk's own database refresh time.
+- No edits to Plant 3D project databases, model files, Project Manager settings, IsoConfig.xml, Project.xml or IsoPart.xml.
+- The REV05 background ISO copy/export and the Custom Save Location field are unchanged.
 
-For the single-line example:
-- Dialog opens: normal full list (native field blank).
-- First top icon click: native filter `A-008`, only `A-008` displayed.
-- Second top icon click: clears native filter; all available lines in Autodesk's selected Drawing/Project mode display again.
-- Third top icon click: `A-008` again.
+## Test
+1. Exit Plant 3D 2025 completely, reopen, and NETLOAD this REV11 DLL.
+2. Run SPTC_PRODISO in the one-route test drawing.
+3. Verify the normal full line list is visible when the dialog first opens.
+4. Click the Drawing or Project icon at top-left: the verified active line number should be shown.
+5. Click again: native full list should reappear. The filter textbox should become blank.
+6. Repeat and test how quickly the list returns. On large network projects, the native query still determines most of the latency.
+7. Verify Select All works as before and that the Custom Save Location field is intact; generate a single test ISO only after checking selection.
 
-The `DWG Only` button still applies the active tag, and its state is synchronized with the toolbar toggle, so the next top click restores the unfiltered list. The Select All checkbox and the working automatic ISO copy behavior are unchanged.
-
-## Testing
-1. Restart Plant 3D 2025 completely to unload previously NETLOADed DLLs.
-2. Load REV10 `SPTC.ProductionIso.dll` using `NETLOAD`.
-3. Open the one-route DWG and run `SPTC_PRODISO`.
-4. Confirm the line filter box starts blank with the normal lines visible.
-5. Click the first or second native top-left line-list icon: filter should become `A-008`.
-6. Click the top icon again: filter should become blank and the native line list should repopulate.
-7. Click once more: only `A-008` should remain.
-8. Test **Select All** only after confirming the right list is shown. Don't generate all project isos during a filter test.
-
-## Technical notes and safety
-- Uses Autodesk's own Line Numbers text filter, never deletes or alters pipeline records.
-- "All" means unfiltered lines in the **currently selected native Drawing or Project scope**. Autodesk's existing scope buttons keep their behavior. For all project lines, select the Project mode.
-- Supports one verified active tag from the model-space read-only PnP DataLinks scan. More than one active tag is not forced into a single-tag filter.
-- Uses a one-shot 350 ms WinForms message filter for toolbar clicks; the original click passes to Autodesk unchanged.
-- Compiles in cloud with GitHub Actions. In-Plant 3D runtime verification is still required because Autodesk's native dialog is not a supported customization API.
-- No modifications to Project Manager, Project.xml, IsoPart.xml, IsoConfig.xml, actual DWGs, or model objects.
+This is an experimental dialog extension compiled via GitHub Actions. Compilation is not a substitute for in-Plant 3D runtime testing.
