@@ -289,6 +289,42 @@ foreach(string axial in new[]{"TOP","BOTTOM","LEFT","RIGHT","FRONT","BACK"})
     Assert(NativeOrthoEditorPreset.Resolve(axial,view.TypeName)==view.TypeName,
         "REV22.2 axial view name preserved exactly "+axial);
 }
+// REV22.3: replay the verified 2026-11-09 runtime discrepancy:
+// planned TOP 76.163x19.950 mm versus native 362.68x95 mm.
+// Verify that actual post-generation geometry is authoritative, and the
+// failure guard stops generation rather than trusting preflight dimensions.
+var paperExpected=new NativeOrthoViewportPaperGuard.Frame(
+    "TOP",50,682.256,76.163,19.950,.2,99.75);
+var paperActual=new NativeOrthoViewportPaperGuard.Frame(
+    "TOP",50,682.256,362.68,95,.2,99.75);
+Assert(NativeOrthoViewportPaperGuard.Validate(
+    paperExpected,paperActual,594,841,
+    Array.Empty<NativeOrthoViewportPaperGuard.Frame>())=="NATIVE_FRAME_SIZE_CHANGED",
+    "REV22.3 reject actual native oversized paper viewport from REV22.2 log");
+Assert(NativeOrthoViewportPaperGuard.Validate(
+    paperExpected,paperExpected,594,841,
+    Array.Empty<NativeOrthoViewportPaperGuard.Frame>())=="PASS",
+    "REV22.3 accept correctly generated viewport after scale correction");
+var conflicting=new NativeOrthoViewportPaperGuard.Frame(
+    "BOTTOM",50,682.256,76.163,19.95,.2,99.75);
+Assert(NativeOrthoViewportPaperGuard.Validate(
+    paperExpected,paperExpected,594,841,new[]{conflicting})==
+    "NATIVE_VIEWPORT_OVERLAPS_BOTTOM",
+    "REV22.3 reject post-generation viewport overlap");
+var moved=new NativeOrthoViewportPaperGuard.Frame(
+    "TOP",62,682.256,76.163,19.95,.2,99.75);
+Assert(NativeOrthoViewportPaperGuard.Validate(
+    paperExpected,moved,594,841,
+    Array.Empty<NativeOrthoViewportPaperGuard.Frame>())=="NATIVE_CENTER_CHANGED",
+    "REV22.3 reject unexpected native view translation");
+var wrongScale=new NativeOrthoViewportPaperGuard.Frame(
+    "TOP",50,682.256,76.163,19.95,1,99.75);
+Assert(NativeOrthoViewportPaperGuard.Validate(
+    paperExpected,wrongScale,594,841,
+    Array.Empty<NativeOrthoViewportPaperGuard.Frame>())=="NATIVE_VIEWPORT_SCALE_CHANGED",
+    "REV22.3 reject native viewport scale change");
+Console.WriteLine("PASS: REV22.3 actual native viewport frame, collision and scale guards.");
+
 Console.WriteLine("PASS: REV22.2 exact native Edit View preset metadata and six unmodified axial views.");
 
 Console.WriteLine("PASS: REV22.1 canonical NW NE SW SE native strings, no Current View fallback and six standard views unchanged.");
