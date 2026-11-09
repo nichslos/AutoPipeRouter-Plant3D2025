@@ -37,10 +37,11 @@ internal static class NativeIsoDialogEnhancer
     private static Task<CopyReport>? _copyTask;
     private static string _copyState = "Not started";
     private static CopyReport? _lastCopyReport;
+    private static DateTime _copyFinishedUtc;
     private static bool _nativeSeen;
     private static bool _resultsSeen;
     private static DateTime _nativeClosedAt;
-    private sealed record CopyReport(int Copied, int Skipped, string Destination);
+    private sealed record CopyReport(int Copied, int Skipped, string Destination, IReadOnlyList<string> Files);
 
     public static void Launch(Document doc)
     {
@@ -53,6 +54,7 @@ internal static class NativeIsoDialogEnhancer
         _copyTask = null;
         _copyState = "Waiting for Production Iso dialog";
         _lastCopyReport = null;
+        _copyFinishedUtc = DateTime.MinValue;
         _document = doc;
         _source = null;
         _destination = "";
@@ -102,25 +104,44 @@ internal static class NativeIsoDialogEnhancer
             {
                 Task<CopyReport> finished = _copyTask;
                 _copyTask = null;
-                Detach();
                 if (finished.IsFaulted)
                 {
                     _copyState = "Error: " + finished.Exception?.GetBaseException().Message;
+                    Detach();
                     _document?.Editor.WriteMessage("\nSPTC ISO export: " + _copyState);
                 }
                 else if (finished.IsCanceled)
                 {
                     _copyState = "Canceled";
+                    Detach();
                     _document?.Editor.WriteMessage("\nSPTC ISO export canceled.");
                 }
                 else
                 {
                     _lastCopyReport = finished.Result;
                     _copyState = "Completed";
+                    _copyFinishedUtc = DateTime.UtcNow;
                     _document?.Editor.WriteMessage(
                         $"\nSPTC ISO: {_lastCopyReport.Copied} DWG(s) copied to {_lastCopyReport.Destination}; " +
                         $"{_lastCopyReport.Skipped} skipped. Original project files unchanged.");
+                    if (_lastCopyReport.Copied == 0)
+                        Detach();
+                    else
+                        ShowCustomResultIfAvailable();
                 }
+                return;
+            }
+
+            // Once the real copy succeeds, extend Autodesk's Results window only.
+            // Leave native Results text and hyperlinks untouched.
+            if (_copyState == "Completed" && _lastCopyReport is { Copied: > 0 })
+            {
+                ShowCustomResultIfAvailable();
+                // Do not keep a UI monitor alive indefinitely if the Results
+                // notification is never opened by the user.
+                if ((_resultsSeen && FindDialog("Isometric Creation Results") == IntPtr.Zero) ||
+                    (DateTime.UtcNow - _copyFinishedUtc).TotalMinutes > 10)
+                    Detach();
                 return;
             }
 
@@ -198,6 +219,20 @@ internal static class NativeIsoDialogEnhancer
             _copyState = "Error: " + ex.Message;
             _document?.Editor.WriteMessage("\nSPTC ISO monitor: " + ex.Message);
         }
+    }
+
+    private static void ShowCustomResultIfAvailable()
+    {
+        if (_lastCopyReport is null || _lastCopyReport.Copied <= 0) return;
+        IntPtr results = FindDialog("Isometric Creation Results");
+        if (results == IntPtr.Zero)
+        {
+            ResultIsoLinkOverlay.Hide();
+            return;
+        }
+
+        _resultsSeen = true;
+        ResultIsoLinkOverlay.ShowOrUpdate(results, _lastCopyReport.Files, _lastCopyReport.Destination);
     }
 
     private static string? ReadSourcePath(IntPtr dialog)
@@ -305,6 +340,7 @@ internal static class NativeIsoDialogEnhancer
         _watch?.Dispose();
         _watch = null;
         RemoveOverlay();
+        ResultIsoLinkOverlay.Hide();
     }
 
     private static bool NestedOrEqual(string child, string parent)
@@ -320,6 +356,7 @@ internal static class NativeIsoDialogEnhancer
     private static async Task<CopyReport> CopyFilesAsync(string source, string targetRoot, DateTime sinceUtc)
     {
         int copied = 0, skipped = 0;
+        var copiedFiles = new List<string>();
         var copiedVersions = new Dictionary<string, (long Size, long Modified)>(StringComparer.OrdinalIgnoreCase);
         var observed = new Dictionary<string, (long Size, long Modified, DateTime SeenAt)>(StringComparer.OrdinalIgnoreCase);
         DateTime start = DateTime.UtcNow;
@@ -380,6 +417,7 @@ internal static class NativeIsoDialogEnhancer
                             if (File.Exists(temp)) File.Delete(temp);
                         }
                         copiedVersions[file] = version;
+                        copiedFiles.Add(destination);
                         copied++;
                         lastCopy = DateTime.UtcNow;
                     }
@@ -397,11 +435,11 @@ internal static class NativeIsoDialogEnhancer
             }
 
             if (copied > 0 && (DateTime.UtcNow - lastCopy).TotalSeconds >= 25)
-                return new CopyReport(copied, skipped, targetRoot);
+                return new CopyReport(copied, skipped, targetRoot, copiedFiles);
 
             await Task.Delay(2500).ConfigureAwait(false);
         }
-        return new CopyReport(copied, skipped, targetRoot);
+        return new CopyReport(copied, skipped, targetRoot, copiedFiles);
     }
 
     private static void EnsureMonitor()
