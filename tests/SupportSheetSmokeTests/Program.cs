@@ -323,6 +323,28 @@ Assert(NativeOrthoViewportPaperGuard.Validate(
     paperExpected,wrongScale,594,841,
     Array.Empty<NativeOrthoViewportPaperGuard.Frame>())=="NATIVE_VIEWPORT_SCALE_CHANGED",
     "REV22.3 reject native viewport scale change");
+// REV22.5 replay of the actual REV22.4 Plant 3D runtime audit:
+// all four saved view types and WCS camera quadrant checks passed, but
+// viewport TwistAngle was 180 degrees in every isometric viewport.
+foreach(string iso in new[]{"NW","NE","SW","SE"})
+{
+    var v=ten.Views.Single(x=>x.Name==iso);
+    Assert(NativeOrthoIsoTwistGuard.IsProjectedWorldUp(
+        v.Dx,v.Dy,v.Dz,v.Ux,v.Uy,v.Uz),
+        "REV22.5 "+iso+" predefined camera up vector projects WCS +Z");
+    Assert(NativeOrthoIsoTwistGuard.IsHalfTurn(Math.PI),
+        "REV22.5 original 180-degree twist is a half-turn");
+    Assert(!NativeOrthoIsoTwistGuard.IsZeroTwist(Math.PI),
+        "REV22.5 original 180-degree twist cannot masquerade as zero");
+    Assert(NativeOrthoIsoTwistGuard.IsZeroTwist(0),
+        "REV22.5 "+iso+" normalize paper twist to zero");
+}
+Assert(!NativeOrthoIsoTwistGuard.IsProjectedWorldUp(0,0,1,0,1,0),
+    "REV22.5 do not assume world-up projection for TOP camera");
+Assert(!NativeOrthoIsoTwistGuard.IsZeroTwist(double.NaN),
+    "REV22.5 reject nonfinite twist");
+Console.WriteLine("PASS: REV22.5 four WCS projected-up isometric cameras and 180-degree twist correction.");
+
 Console.WriteLine("PASS: REV22.3 actual native viewport frame, collision and scale guards.");
 
 Console.WriteLine("PASS: REV22.2 exact native Edit View preset metadata and six unmodified axial views.");
