@@ -201,8 +201,10 @@ internal static class ResultIsoLinkOverlay
         int availableWidth = Math.Max(200, dialogRect.Width - left - 40);
 
         // Try to place below the actual last visible Results TreeView row.
+        // Native Results may render "File:" and "Open drawing folder" links
+        // as two extra text lines below the last TreeView item; keep clear.
         if (TryLastResultRow(dialog, out int lastRowBottom))
-            top = lastRowBottom + 8;
+            top = Math.Max(lastRowBottom + 48, (int)(dialogRect.Height * 0.49));
         else
             top = (int)(dialogRect.Height * 0.49);
 
