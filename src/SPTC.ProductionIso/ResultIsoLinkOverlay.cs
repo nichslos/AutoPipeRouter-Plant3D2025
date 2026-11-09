@@ -37,6 +37,7 @@ internal static class ResultIsoLinkOverlay
     [DllImport("user32.dll")] private static extern bool ScreenToClient(IntPtr hwnd, ref POINT pt);
     [DllImport("user32.dll")] private static extern IntPtr SendMessage(IntPtr hwnd, uint message, IntPtr wParam, IntPtr lParam);
     [DllImport("user32.dll")] private static extern IntPtr SetParent(IntPtr child, IntPtr newParent);
+    [DllImport("user32.dll")] private static extern IntPtr GetParent(IntPtr child);
     [DllImport("user32.dll")] private static extern bool SetWindowPos(IntPtr hwnd, IntPtr insertAfter, int x, int y, int width, int height, uint flags);
     [DllImport("user32.dll")] private static extern bool IsWindow(IntPtr hwnd);
 
@@ -160,7 +161,10 @@ internal static class ResultIsoLinkOverlay
         // A managed WinForms child HWND is added to the existing Results window.
         // Original Autodesk controls and URLs are not replaced or modified.
         _ = _panel.Handle;
-        if (SetParent(_panel.Handle, parent) == IntPtr.Zero)
+        SetParent(_panel.Handle, parent);
+        // SetParent can return NULL on success when the original parent was NULL.
+        // Verify the actual parent instead of testing its return value.
+        if (GetParent(_panel.Handle) != parent)
             throw new InvalidOperationException("Could not attach custom ISO link to Results dialog.");
 
         Position(parent);
