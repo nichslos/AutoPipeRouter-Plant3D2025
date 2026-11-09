@@ -16,5 +16,6 @@
     <Compile Include="../../src/SPTC.SupportDrawings/NativeOrthoOneClickPlan.cs" Link="NativeOrthoOneClickPlan.cs" />
     <Compile Include="../../src/SPTC.SupportDrawings/NativeOrthoTenViewPlan.cs" Link="NativeOrthoTenViewPlan.cs" />
     <Compile Include="../../src/SPTC.SupportDrawings/NativeOrthoIsoViewType.cs" Link="NativeOrthoIsoViewType.cs" />
+    <Compile Include="../../src/SPTC.SupportDrawings/NativeOrthoEditorPreset.cs" Link="NativeOrthoEditorPreset.cs" />
   </ItemGroup>
 </Project>

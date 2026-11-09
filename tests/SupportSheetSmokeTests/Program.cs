@@ -268,6 +268,29 @@ foreach(string standard in new[]{"TOP","BOTTOM","LEFT","RIGHT","FRONT","BACK"})
     Assert(!NativeOrthoIsoViewType.IsIsometric(standard),
         "REV22.1 standard view remains nonisometric "+standard);
 }
+// REV22.2: Plant 3D 2025 PnP3dOrthoDrawingsUI.dll IL inspection
+// proved UIUtils::.cctor defines s_NWView="NW" etc; the Edit View
+// GetViewTypeFromName() parser does NOT identify "NWIsometric".
+foreach(string iso in new[]{"NW","NE","SW","SE"})
+{
+    string shortName=NativeOrthoEditorPreset.Resolve(iso,iso+"Isometric");
+    Assert(shortName==iso&&NativeOrthoEditorPreset.IsExactIsoPreset(iso,shortName),
+        "REV22.2 exact native Edit View preset string "+iso);
+    Assert(NativeOrthoEditorPreset.IsUnclassifiedCurrentView(
+        iso,iso+"Isometric"),
+        "REV22.2 deprecated long name must not be accepted as Edit View preset");
+    Assert(NativeOrthoEditorPreset.IsUnclassifiedCurrentView(
+        iso,iso+"IsometricView"),
+        "REV22.2 original custom isometric name must not be accepted");
+}
+foreach(string axial in new[]{"TOP","BOTTOM","LEFT","RIGHT","FRONT","BACK"})
+{
+    var view=ten.Views.Single(v=>v.Name==axial);
+    Assert(NativeOrthoEditorPreset.Resolve(axial,view.TypeName)==view.TypeName,
+        "REV22.2 axial view name preserved exactly "+axial);
+}
+Console.WriteLine("PASS: REV22.2 exact native Edit View preset metadata and six unmodified axial views.");
+
 Console.WriteLine("PASS: REV22.1 canonical NW NE SW SE native strings, no Current View fallback and six standard views unchanged.");
 
 Console.WriteLine("PASS: REV22 ten orthographic and isometric views, common scale and single-click fit.");

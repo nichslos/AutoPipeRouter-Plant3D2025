@@ -328,6 +328,30 @@ jobs:
               throw 'Legacy iso type name still used'
             }
           }
+      - name: Verify REV22.2 exact native Edit View preset metadata
+        shell: pwsh
+        run: |
+          $code = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoTenViewMetadataFixTest.cs' -Raw
+          $preset = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoEditorPreset.cs' -Raw
+          $old = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoTenViewIsoFixTest.cs' -Raw
+          foreach($iso in @('NW','NE','SW','SE')) {
+            if ($preset -notmatch ('"'+$iso+'" => "'+$iso+'"')) { throw "REV22.2 missing short preset $iso" }
+          }
+          if ($code -notmatch 'CommandMethod\("SPTC_ORTHO22_2_EDITVIEW_FIX_TEST"') { throw 'Separate new command absent' }
+          if ($code -notmatch 'REV22.2 TEST') { throw 'Copied-project explicit consent absent' }
+          if ($code -notmatch 'NativeOrthoEditorPreset.Resolve') { throw 'Native persisted short names not used' }
+          if ($code -notmatch 'GetViewTypeFromName') { throw 'Native Editor preset parser preflight missing' }
+          if ($code -notmatch 'SAVED_VIEWDEF_TYPE') { throw 'Native saved view-definition type check missing' }
+          if ($code -notmatch 'GetDwgSheetFromOrthoView') { throw 'Missing native read-only sheet readback' }
+          if ($code -notmatch 'GetViewDefByViewName') { throw 'Missing native read-only view definition readback' }
+          if ($code -notmatch 'SAVED_TYPE_CHECK') { throw 'Missing metadata check result' }
+          if ($code -notmatch 'ISOMETRIC_CAMERA_MATCH_AFTER') { throw 'Must retain viewport camera validation' }
+          if ($code -notmatch 'STEP5_UNSUPPORTED_GENERATE_SIGNATURE_MATCH') { throw 'Must retain exact private signature gate' }
+          if ($code -notmatch 'STEP5_WORKING_DB_VERIFIED_TARGET') { throw 'Must retain target document protection' }
+          if ($code -notmatch 'CUBE_EXTENTS_MATCHED') { throw 'Must retain strict native cube bounds' }
+          if ($code -notmatch 'CatalogMatches') { throw 'Must verify native view registration' }
+          if ($code -match 'SQLiteConnection|ExecuteNonQuery|SendStringToExecute|SetOrthoDwgVersion') { throw 'Direct project DB changes prohibited' }
+          if ($old -notmatch 'CommandMethod\("SPTC_ORTHO22_1_ISO_FIX_TEST"') { throw 'REV22.1 must remain available unchanged' }
       - name: Compile SPTC Support Drawings
         run: dotnet build src/SPTC.SupportDrawings/SPTC.SupportDrawings.csproj -c Release
       - name: Verify compiled DLL
@@ -339,7 +363,7 @@ jobs:
       - name: Upload DLL artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SPTC-SupportDrawings-Plant3D2025-REV22_1
+          name: SPTC-SupportDrawings-Plant3D2025-REV22_2
           path: src/SPTC.SupportDrawings/bin/Release/net8.0-windows/SPTC.SupportDrawings.dll
           retention-days: 30
           if-no-files-found: error
