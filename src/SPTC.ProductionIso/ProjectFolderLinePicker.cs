@@ -42,10 +42,11 @@ internal static class ProjectFolderLinePicker
     private sealed record NativeEntry(int Index, string Tag);
     private static IntPtr _dialog;
     private static Document? _document;
-    // REV14: the folder control lives inside the proven Select All footer.
-    // Menu choices are rendered as a CHILD of the Autodesk native dialog,
-    // never as a top-level ContextMenuStrip popup. This avoids stealing focus
-    // and never sits on top of Autodesk's existing filter funnel control.
+    // REV15: compact folder arrow in the native Filter ROW, immediately
+    // left of Autodesk's original funnel, never on top of that funnel.
+    // Its menu stays a CHILD of the native dialog, not a modal popup.
+    private static UserControl? _filterHost;
+    private static Button? _filterButton;
     private static UserControl? _choicesHost;
     private static Control? _folderAnchor;
     private static ListBox? _choiceList;
@@ -67,23 +68,132 @@ internal static class ProjectFolderLinePicker
     public static void Attach(IntPtr dialog, Document? document)
     {
         if (dialog == IntPtr.Zero) return;
-        if (_dialog == dialog) { _document = document; return; }
+        if (_dialog == dialog && _filterHost is { IsDisposed: false })
+        {
+            _document = document;
+            return;
+        }
         Hide();
         _dialog = dialog;
         _document = document;
+
+        _filterHost = new UserControl
+        {
+            Size = new Size(24, 23),
+            BackColor = SystemColors.Control,
+            TabStop = false
+        };
+        _filterButton = new Button
+        {
+            Text = "▾",
+            Size = new Size(23, 22),
+            Location = Point.Empty,
+            Font = new Font(SystemFonts.MessageBoxFont.FontFamily, 9, FontStyle.Bold),
+            TabStop = false,
+            AccessibleName = "Plant 3D Drawings folder selector",
+            FlatStyle = FlatStyle.Standard
+        };
+        _filterButton.Click += (_, _) =>
+        {
+            if (_filterButton != null)
+                ToggleFolderMenu(_filterButton);
+        };
+        _filterHost.Controls.Add(_filterButton);
+        _ = _filterHost.Handle;
+        SetParent(_filterHost.Handle, dialog);
+        if (GetParent(_filterHost.Handle) != dialog)
+        {
+            Hide();
+            document?.Editor.WriteMessage(
+                "\nSPTC REV15: Folder arrow could not attach; native filter remains usable.");
+            return;
+        }
+
+        var tip = new ToolTip();
+        tip.SetToolTip(_filterButton, "Plant 3D Drawings folders (direct children only)");
+        _filterHost.Disposed += (_, _) => tip.Dispose();
+        Position(dialog);
+        _filterHost.Show();
     }
 
     public static void Position(IntPtr dialog)
     {
-        if (_dialog == dialog && _choicesHost is { IsDisposed: false })
+        if (_dialog != dialog) return;
+        if (_filterHost is { IsDisposed: false })
+            PositionFilterButton(dialog);
+        if (_choicesHost is { IsDisposed: false })
             PositionMenu();
         if (FolderActive && _lineHost is { IsDisposed: false })
             PositionList(dialog);
     }
 
-    // Called only from the new "Folders" button beside Select All, not from
-    // the native filter icon. Opening the embedded menu does not dismiss the
-    // modal Create Production Iso dialog.
+    private static void PositionFilterButton(IntPtr dialog)
+    {
+        if (_filterHost == null || _filterHost.IsDisposed ||
+            !GetClientRect(dialog, out RECT bounds)) return;
+
+        // Known REV12 dialog geometry is a fallback only. Prefer the actual
+        // native filter textbox so changes in screen scaling follow Autodesk.
+        int x = (int)(bounds.Width * 0.25) - 22;
+        int y = (int)(bounds.Height * 0.145);
+        if (TryFindNativeFilterEdit(dialog, out RECT edit))
+        {
+            // The original funnel occupies the rightmost ~24 px.
+            // Place our 23 px arrow immediately before it, not over it.
+            x = edit.Right - 54;
+            y = edit.Top + 1;
+        }
+
+        x = Math.Clamp(x, 12, Math.Max(12, bounds.Width - 50));
+        y = Math.Clamp(y, 42, Math.Max(42, bounds.Height - 40));
+        SetWindowPos(_filterHost.Handle, IntPtr.Zero, x, y, 24, 23,
+            SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    }
+
+    private static bool TryFindNativeFilterEdit(IntPtr dialog, out RECT client)
+    {
+        client = default;
+        if (!GetWindowRect(dialog, out RECT dlg)) return false;
+        var matches = new List<(RECT Rect, int Score)>();
+        EnumChildWindows(dialog, (hwnd, _) =>
+        {
+            // Never inspect the folder arrow itself as a possible input.
+            if (hwnd == _filterHost?.Handle || hwnd == _filterButton?.Handle)
+                return true;
+            if (!GetWindowRect(hwnd, out RECT rect) ||
+                rect.Width < 110 || rect.Height < 16 || rect.Height > 45)
+                return true;
+
+            double cx = (rect.Left + rect.Right) * 0.5 - dlg.Left;
+            double cy = (rect.Top + rect.Bottom) * 0.5 - dlg.Top;
+            if (cx < 30 || cx > Math.Min(300, dlg.Width * 0.40) ||
+                cy < 60 || cy > 170)
+                return true;
+
+            Control? c = Control.FromHandle(hwnd);
+            var cls = new StringBuilder(128);
+            GetClassName(hwnd, cls, cls.Capacity);
+            if (c is not TextBoxBase &&
+                !cls.ToString().Contains("EDIT", StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            matches.Add((rect, rect.Width - Math.Abs((int)cy - 105)));
+            return true;
+        }, IntPtr.Zero);
+        if (matches.Count == 0) return false;
+
+        RECT r = matches.OrderByDescending(m => m.Score).First().Rect;
+        POINT a = new() { X = r.Left, Y = r.Top };
+        POINT b = new() { X = r.Right, Y = r.Bottom };
+        if (!ScreenToClient(dialog, ref a) || !ScreenToClient(dialog, ref b))
+            return false;
+        client = new RECT { Left = a.X, Top = a.Y, Right = b.X, Bottom = b.Y };
+        return true;
+    }
+
+    // The arrow is inside the native Filter row. The original funnel remains
+    // available; we never issue a synthetic click on its underlying control.
+    // The embedded menu does not dismiss the native modal dialog.
     public static void ToggleFolderMenu(Control anchor)
     {
         if (_dialog == IntPtr.Zero || _document is null) return;
@@ -202,9 +312,11 @@ internal static class ProjectFolderLinePicker
 
         int width = _choicesHost.Width;
         int height = _choicesHost.Height;
-        int x = Math.Max(5, Math.Min(corner.X - 90, dialogBounds.Width - width - 5));
-        int y = Math.Max(140, corner.Y - height - 5);
-        y = Math.Min(y, Math.Max(8, dialogBounds.Height - height - 32));
+        // Open BELOW the filter row, covering the native line list only while
+        // the user is choosing a folder. Never open above the native toolbar.
+        int x = Math.Clamp(corner.X - 155, 5, Math.Max(5, dialogBounds.Width - width - 5));
+        int y = Math.Clamp(corner.Y + 27, 105,
+            Math.Max(105, dialogBounds.Height - height - 35));
 
         // HWND_TOP without NOZORDER ensures the temporary dropdown stays above
         // the native checked list while open.
@@ -487,6 +599,9 @@ internal static class ProjectFolderLinePicker
         HideFolderMenu();
         _folder = "";
         DestroyProjection();
+        try { _filterHost?.Dispose(); } catch { }
+        _filterHost = null;
+        _filterButton = null;
         _dialog = IntPtr.Zero;
         _document = null;
         ProjectFolderLineCatalog.Reset();
