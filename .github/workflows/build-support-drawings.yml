@@ -483,6 +483,21 @@ jobs:
           if ($new -notmatch 'Editor.Command\("_.PLANTORTHOUPDATE","_All"\)') { throw 'Must run Autodesk supported PLANTORTHOUPDATE All' }
           if ($new -notmatch 'AcadApp.SetSystemVariable\("PLANTORTHOSILENTUPDATE",oldSilent\)') { throw 'Must restore original native silent setting' }
           if ($new -match 'Ortho.dcf\s*=|Ortho.dcf\s*\,') { throw 'Never directly write Ortho.dcf' }
+      - name: Verify REV22.10 six-axial half-turn test and ISO fallback
+        shell: pwsh
+        run: |
+          $new = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoTenViewAxialOrientationTest.cs' -Raw
+          $helper = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoAxialHalfTurnGuard.cs' -Raw
+          $prior = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoTenViewAxialPresetFixTest.cs' -Raw
+          if ($new -notmatch 'CommandMethod\("SPTC_ORTHO22_10_AXIAL_ORIENTATION_TEST"') { throw 'REV22.10 command missing' }
+          if ($prior -notmatch 'CommandMethod\("SPTC_ORTHO22_8_AXIAL_PRESET_TEST"') { throw 'REV22.8 baseline removed' }
+          if ($new -notmatch 'REV22.10 TEST') { throw 'Copied-project consent missing' }
+          foreach($token in @('NativeOrthoAxialEditorPreset.IsAxial(label)','NativeOrthoAxialHalfTurnGuard.Flip','AXIAL_TWIST_BEFORE_DEG','AXIAL_VIEWCENTER_BEFORE','AXIAL_TWIST_AFTER_DEG','AXIAL_VIEWCENTER_AFTER','AXIAL_FRAME_ROTATION_CHECK','ISO_FRAME_COORDINATES_CHECK','SAVED_VIEWDEF_TYPE','STEP10_ALL_TEN_NATIVE_VIEWS_REGISTERED')) {
+            if (-not $new.Contains($token)) { throw "Missing REV22.10 safeguard: $token" }
+          }
+          if ($new -match 'PLANTORTHOUPDATE_ALL_ENTERED|Editor.Command\("_.PLANTORTHOUPDATE"') { throw 'REV22.9 failed automatic update must not be reused' }
+          if ($helper -notmatch 'before.CenterX,\-before.CenterY') { throw 'Both view center coordinates must be compensated' }
+          if ($helper -notmatch 'IsZeroTwist' -or $helper -notmatch 'IsHalfTurn') { throw 'Only zero/180 initial twists are supported' }
       - name: Compile SPTC Support Drawings
         run: dotnet build src/SPTC.SupportDrawings/SPTC.SupportDrawings.csproj -c Release
       - name: Verify compiled DLL
@@ -494,7 +509,7 @@ jobs:
       - name: Upload DLL artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SPTC-SupportDrawings-Plant3D2025-REV22_9
+          name: SPTC-SupportDrawings-Plant3D2025-REV22_10
           path: src/SPTC.SupportDrawings/bin/Release/net8.0-windows/SPTC.SupportDrawings.dll
           retention-days: 30
           if-no-files-found: error
