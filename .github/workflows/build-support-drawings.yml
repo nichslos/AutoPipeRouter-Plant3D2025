@@ -548,6 +548,27 @@ jobs:
           if($new -match 'PLANTORTHOUPDATE_ALL_ENTERED|Editor.Command\("_.PLANTORTHOUPDATE"') { throw 'Do not reuse failing native auto update' }
           if($new -notmatch 'new MText') { throw 'Titles must be native editable paper-space MText' }
           if($new -notmatch 'AttachmentPoint.TopCenter') { throw 'Titles must be centered below their viewport' }
+      - name: Verify REV22.14 block and structural section annotations
+        shell: pwsh
+        run: |
+          $new = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoTenViewStructuralAnnotationsTest.cs' -Raw
+          $reader = Get-Content 'src/SPTC.SupportDrawings/SupportOrthoSourceReader.cs' -Raw
+          $metadata = Get-Content 'src/SPTC.SupportDrawings/SupportOrthoMemberMetadata.cs' -Raw
+          $plan = Get-Content 'src/SPTC.SupportDrawings/SupportOrthoCalloutPlan.cs' -Raw
+          $prior = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoTenViewWithTitlesTest.cs' -Raw
+          if ($new -notmatch 'CommandMethod\("SPTC_ORTHO22_14_STRUCTURE_ANNOTATIONS_TEST"') { throw 'REV22.14 test command missing' }
+          if ($prior -notmatch 'CommandMethod\("SPTC_ORTHO22_13_VIEW_TITLES_TEST"') { throw 'Working REV22.13 baseline removed' }
+          if ($new -notmatch 'REV22.14 TEST') { throw 'REV22.14 copied-project authorization missing' }
+          foreach($token in @('SupportOrthoSourceReader.Inspect','SupportOrthoCalloutPlan.Build','CreateNativePaperSupportAnnotations','REV22_14_BLOCK_NAME','REV22_14_MEMBER_SIZES','STEP10_SUPPORT_ANNOTATION_COUNT','STEP10_SUPPORT_ANNOTATIONS_CHECK=PASS','NativeOrthoViewTitlePlan.BuildTitles','SupportFocusedCubePlanner.BuildAutomatic','AXIAL_FRAME_ROTATION_CHECK','ISO_FRAME_COORDINATES_CHECK','STEP10_ALL_TEN_NATIVE_VIEWS_REGISTERED')) {
+            if (-not $new.Contains($token)) { throw "REV22.14 missing guard: $token" }
+          }
+          if ($new -match 'PLANTORTHOUPDATE_ALL_ENTERED|Editor.Command\("_.PLANTORTHOUPDATE"') { throw 'Disallowed native auto updater' }
+          foreach($token in @('BlockReference','AttributeReference','AttributeDefinition','DynamicBlockTableRecord','SectionsFromName')) {
+            if (-not (($reader+$metadata).Contains($token))) { throw "REV22.14 source metadata path missing: $token" }
+          }
+          if ($metadata -notmatch 'NOT AVAILABLE \(NO SECTION METADATA\)') { throw 'Unknown structural sizes must not be fabricated' }
+          if ($plan -notmatch 'FrameGapMm=7.0') { throw 'Callouts must be outside native viewports' }
+          if ($new -notmatch 'new MText' -or $new -notmatch 'new Line\(') { throw 'Native paper-space note and leader not created' }
       - name: Compile SPTC Support Drawings
         run: dotnet build src/SPTC.SupportDrawings/SPTC.SupportDrawings.csproj -c Release
       - name: Verify compiled DLL
@@ -559,7 +580,7 @@ jobs:
       - name: Upload DLL artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SPTC-SupportDrawings-Plant3D2025-REV22_13
+          name: SPTC-SupportDrawings-Plant3D2025-REV22_14
           path: src/SPTC.SupportDrawings/bin/Release/net8.0-windows/SPTC.SupportDrawings.dll
           retention-days: 30
           if-no-files-found: error
