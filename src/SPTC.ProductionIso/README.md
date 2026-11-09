@@ -1,22 +1,24 @@
-# SPTC Production Iso 2025 (C# GitHub Actions prototype)
+# SPTC Production Iso — REV02 native-dialog experiment
 
-## Scope
-This independent plugin adds the `SPTC_PRODISO` command. It opens a custom companion Windows Forms dialog with **Custom Save Location** immediately underneath **Revision Number**, plus Browse. It is not an injected field in the original Autodesk dialog.
+## Objective
+The `SPTC_PRODISO` command opens Autodesk's **original Create Production Iso** window, then attempts to attach **Custom Save Location** and a Browse button directly under **Revision Number**.
 
-Click **1. Open Production Iso** to use Autodesk's native Production Iso line selection and generation. When generation has fully finished, click **2. Copy finished DWGs** to copy newly created/modified DWGs to the separate destination folder. Generation always writes to its normal native project directory first.
+It does not replace the native line-number list, Iso Style selector or Create button. The field is attached at runtime with a managed WinForms child control. Autodesk does not document this UI-injection technique, so it is **experimental** and could fail or require position adjustments depending on Plant 3D 2025 updates, display scaling and UI implementation.
 
-The project is read-only relative to Plant 3D Project Manager settings, existing isometric configurations and original drawings. It doesn't modify `IsoConfig.xml` or original DWG contents, and the copied DWGs are not registered as Production Iso documents in Project Manager.
+## Important generation limitation
+Plant 3D still generates Production Iso DWGs to the project-configured native directory. The chosen custom folder is used only to **copy completed DWGs** later; it is **not** a native generation output setting. No edits to Project Manager, IsoConfig.xml, ISO style configuration or original DWG files.
 
-## Build with GitHub Actions
-Open the pull request containing these changes and inspect **Build SPTC Production Iso DLL** CI run. After it succeeds, download the `SPTC-ProductionIso-2025-DLL` artifact, extract `SPTC.ProductionIso.dll`, and use Plant 3D 2025's `NETLOAD`. Then run `SPTC_PRODISO`.
+## Usage
+1. Compile on GitHub Actions using `build-production-iso.yml`, download `SPTC-ProductionIso-2025-DLL` artifact.
+2. Use `NETLOAD` to load `SPTC.ProductionIso.dll` in Plant 3D 2025.
+3. Run `SPTC_PRODISO`. The native dialog should open with an added destination field below Revision Number. Choose the destination with its Browse button.
+4. Select line number(s) and click Autodesk's native **Create**.
+5. **Wait for native ISO generation to finish.**
+6. Run `SPTC_ISOCOPY` from the command line. It copies new/modified DWGs from the native source into your custom folder without overwriting originals.
 
-Uses .NET 8 and the same AutoCAD.NET package 25.0.1 as the repository's existing SupportDrawings project. Builds occur on GitHub's Windows runner; no .NET SDK or Visual Studio installer is required locally.
-
-## Safety and limitations
-- Do not run ISO jobs concurrently in the same source folder: change detection is based on DWG file modification timestamps and size, not line numbers.
-- The custom **Revision Number** field is informational. Set the actual revision in the native Autodesk dialog.
-- Auto-detection searches upward from the active drawing for a project `Project.xml`; if not detected, enter the native source folder manually.
-- Destination must be outside the native source folder and not its parent.
-- Existing destination files are never overwritten, instead `_copyN` is appended.
-- If a DWG is still in use, copying skips it. Wait until native ISO generation is complete.
-- This is an untested Plant 3D runtime prototype. Successful CI compilation alone doesn't prove Autodesk integration.
+## Cautions
+- Not tested within Plant 3D. Successful cloud compilation is not runtime verification.
+- Native output directory detection reads a child control of the native dialog; it can fail if Autodesk's window implementation differs. If detection fails, `SPTC_ISOCOPY` stops without copying.
+- Do not run concurrent Production Iso jobs in the same source directory. DWG file timestamps and file sizes distinguish changed files; another user's changes could be included.
+- Avoid loading an old revision simultaneously. Restart Plant 3D to unload an earlier DLL before NETLOAD of this version.
+- No guarantee that a WinForms child control will remain visible or accept input inside Autodesk's modal window.
