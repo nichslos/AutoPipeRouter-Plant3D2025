@@ -275,6 +275,7 @@ internal static class NativeIsoLineSelectOverlay
     private static bool TryFindLineListBounds(IntPtr dialog, out RECT bounds)
     {
         bounds = default;
+        RECT bestBounds = default;
         bool found = false;
         int bestHeight = 0;
         if (!GetWindowRect(dialog, out RECT dlg)) return false;
@@ -296,13 +297,14 @@ internal static class NativeIsoLineSelectOverlay
                 bestHeight = r.Height;
                 // Transform Windows screen coordinates to native dialog client coordinates.
                 // Dialog includes nonclient frame, so actual client origin is used below.
-                bounds = r;
+                bestBounds = r;
                 found = true;
             }
             return true;
         }, IntPtr.Zero);
 
         if (!found) return false;
+        bounds = bestBounds;
         // Convert both corners into dialog client coordinates.
         POINT a = new() { X = bounds.Left, Y = bounds.Top };
         POINT b = new() { X = bounds.Right, Y = bounds.Bottom };
