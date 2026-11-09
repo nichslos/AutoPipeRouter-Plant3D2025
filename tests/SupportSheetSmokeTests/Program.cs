@@ -554,6 +554,70 @@ try{ SupportFocusedCubePlanner.BuildAutomatic(
     adaptiveSmall,Array.Empty<BoundingBox3>(),double.NaN); }
 catch(ArgumentOutOfRangeException){badAutoUnits=true;}
 Assert(badAutoUnits,"REV22.12 fail closed for missing DWG unit scale");
+// REV22.13: view titles are independent paper-space MText based on the
+// exact saved native ViewType labels, outside every Ortho viewport.
+string[] titlesInOrder={"TOP","BOTTOM","LEFT","RIGHT","FRONT",
+    "BACK","NW","NE","SW","SE"};
+double[] titleY={679.812,679.812,545.252,545.252,410.692,
+    410.692,276.132,276.132,141.572,141.572};
+double[] titleH={45.907,45.907,58.065,58.065,58.065,
+    58.065,81.104,81.104,81.104,81.104};
+double[] titleW={36.627,36.627,45.907,45.907,36.627,
+    36.627,58.36,58.36,58.36,58.36};
+var titleFrames=titlesInOrder.Select((name,i)=>
+    new NativeOrthoViewTitlePlan.Frame(
+        name,i%2==0?95:314.78,titleY[i],titleW[i],titleH[i])).ToArray();
+var reservedTitleFrames=NativeOrthoViewTitlePlan.ReserveBelow(
+    titleFrames,594,841);
+Assert(reservedTitleFrames.ShiftY>9&&reservedTitleFrames.ShiftY<11,
+    "REV22.13 automatically reserve bottom title band without changing group geometry");
+Assert(reservedTitleFrames.Titles.Count==10,
+    "REV22.13 ten distinct titles produced");
+Assert(reservedTitleFrames.Titles[0].Text=="TOP VIEW"&&
+    reservedTitleFrames.Titles[1].Text=="BOTTOM VIEW"&&
+    reservedTitleFrames.Titles[6].Text=="NW ISOMETRIC VIEW"&&
+    reservedTitleFrames.Titles[9].Text=="SE ISOMETRIC VIEW",
+    "REV22.13 title strings match native preset names");
+for(int i=0;i<10;i++)
+{
+    var original=titleFrames[i];
+    var adjusted=reservedTitleFrames.Frames[i];
+    var title=reservedTitleFrames.Titles[i];
+    Assert(adjusted.X==original.X&&
+        Math.Abs(adjusted.Y-original.Y-reservedTitleFrames.ShiftY)<1e-6&&
+        adjusted.W==original.W&&adjusted.H==original.H,
+        "REV22.13 preserve projection spacing, widths and heights");
+    Assert(title.TopY<adjusted.Y-adjusted.H/2 &&
+        title.TopY-title.Height>=841*.12-1e-6,
+        "REV22.13 "+title.Name+" caption below its frame and above title block");
+}
+bool unknownCaptionRejected=false;
+try{NativeOrthoViewTitlePlan.CaptionFor("Current");}
+catch(ArgumentException){unknownCaptionRejected=true;}
+Assert(unknownCaptionRejected,
+    "REV22.13 Current View never receives an invented title");
+bool overlapRejected=false;
+try
+{
+    var overlapped=reservedTitleFrames.Frames.ToArray();
+    overlapped[2]=overlapped[2] with{
+        X=overlapped[0].X,
+        Y=reservedTitleFrames.Titles[0].TopY-3
+    };
+    NativeOrthoViewTitlePlan.BuildTitles(overlapped,594,841);
+}
+catch(InvalidOperationException){overlapRejected=true;}
+Assert(overlapRejected,"REV22.13 reject title/viewport collisions");
+bool noRoomRejected=false;
+try
+{
+    var tooHigh=titleFrames.Select(f=>f with {Y=f.Y+90}).ToArray();
+    NativeOrthoViewTitlePlan.ReserveBelow(tooHigh,594,841);
+}
+catch(InvalidOperationException){noRoomRejected=true;}
+Assert(noRoomRejected,"REV22.13 fail closed if caption group exceeds sheet keepout");
+Console.WriteLine("PASS: REV22.13 ten native preset view titles, whole-group caption clearance and no overlaps.");
+
 Console.WriteLine("PASS: REV22.12 numeric-free automatically derived SupportFocus clearances and long-route clipping.");
 
 Console.WriteLine("PASS: REV22.11 compact support-based OrthoCube with long-route XY clipping and local Z selection.");
