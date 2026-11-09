@@ -683,6 +683,27 @@ jobs:
           }
           if($new -match 'SupportOrthoSummaryPanel15.Build\(') { throw 'No combined legend in per-member revision' }
           if($new -notmatch 'new MText' -or $new -notmatch 'new Line\(') { throw 'Leader and member labels missing' }
+      - name: Verify REV22.20 horizontal TOS text spacing only
+        shell: pwsh
+        run: |
+          $new = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoTenViewTosSpacingTest.cs' -Raw
+          $old = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoTenViewHorizontalTosTest.cs' -Raw
+          $plan = Get-Content 'src/SPTC.SupportDrawings/SupportOrthoMemberCalloutPlan20.cs' -Raw
+          $priorPlan = Get-Content 'src/SPTC.SupportDrawings/SupportOrthoMemberCalloutPlan19.cs' -Raw
+          if($new -notmatch 'CommandMethod\("SPTC_ORTHO22_20_TOS_SPACING_TEST"') { throw 'REV22.20 isolated command missing' }
+          if($old -notmatch 'CommandMethod\("SPTC_ORTHO22_19_HORIZONTAL_TOS_TEST"') { throw 'Previous REV22.19 preserved command missing' }
+          if($new -notmatch 'REV22.20 TEST') { throw 'Copied project authorization missing' }
+          foreach($token in @('SupportOrthoHorizontalSource19.Read','SupportOrthoMemberCalloutPlan20.Build','CreateNativePaperMemberLeaders20','STEP10_HORIZONTAL_TOS_LABEL_COUNT','STEP10_ALL_TEN_NATIVE_VIEWS_REGISTERED','STEP10_VIEW_TITLE_COUNT','SupportFocusedCubePlanner.BuildAutomatic')) {
+            if(-not $new.Contains($token)) { throw "REV22.20 member/camera invariant missing: $token" }
+          }
+          if($plan -notmatch 'bool addTos=member.IsHorizontal;') { throw 'REV22.20 TOS must remain horizontal-only' }
+          if(-not $plan.Contains('"TOS ~ ":"TOS EL. "')) { throw 'REV22.20 approximate TOS spacing not applied' }
+          if(-not $plan.Contains('label+"\n\n"+tos')) { throw 'REV22.20 blank annotation paragraph not applied' }
+          if(-not $plan.Contains('double height=addTos?TextLineHeightMm*3:')) { throw 'REV22.20 TOS 3-line bounding height not reserved' }
+          if(-not $plan.Contains('n.Text.Contains("TOS ~ ")')) { throw 'REV22.20 approximate TOS detection must use spaced tilde' }
+          if($plan.Contains('"TOS~ "')) { throw 'Unspaced TOS tilde persists in the new planner' }
+          if(-not $priorPlan.Contains('"TOS~ "')) { throw 'Do not change REV22.19 fallback' }
+          if($new -notmatch 'Replace\("\\n","\\\\P"\)') { throw 'REV22.20 native MText must convert double newline to two paragraph breaks' }
       - name: Compile SPTC Support Drawings
         run: dotnet build src/SPTC.SupportDrawings/SPTC.SupportDrawings.csproj -c Release
       - name: Verify compiled DLL
@@ -694,7 +715,7 @@ jobs:
       - name: Upload DLL artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SPTC-SupportDrawings-Plant3D2025-REV22_19
+          name: SPTC-SupportDrawings-Plant3D2025-REV22_20
           path: src/SPTC.SupportDrawings/bin/Release/net8.0-windows/SPTC.SupportDrawings.dll
           retention-days: 30
           if-no-files-found: error
