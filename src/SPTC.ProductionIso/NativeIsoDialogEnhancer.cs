@@ -5,6 +5,7 @@ using System.Drawing;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 using Autodesk.AutoCAD.ApplicationServices;
 
@@ -32,24 +33,31 @@ internal static class NativeIsoDialogEnhancer
     private static string? _source;
     private static Document? _document;
     private static int _noWindowTicks;
+    private static DateTime _launchUtc;
+    private static Task<CopyReport>? _copyTask;
     private static bool _nativeSeen;
     private static bool _resultsSeen;
     private static DateTime _nativeClosedAt;
-    private static readonly Dictionary<string, (long Size, long Modified)> Before =
-        new(StringComparer.OrdinalIgnoreCase);
+    private sealed record CopyReport(int Copied, int Skipped, string Destination);
 
     public static void Launch(Document doc)
     {
+        if (_copyTask is { IsCompleted: false })
+        {
+            doc.Editor.WriteMessage("\nSPTC: A background ISO export is still running.");
+            return;
+        }
         Detach();
+        _copyTask = null;
         _document = doc;
         _source = null;
         _destination = "";
-        Before.Clear();
+        _launchUtc = DateTime.UtcNow;
         _noWindowTicks = 0;
         _nativeSeen = false;
         _resultsSeen = false;
         _nativeClosedAt = DateTime.MinValue;
-        _watch = new System.Windows.Forms.Timer { Interval = 300 };
+        _watch = new System.Windows.Forms.Timer { Interval = 1500 };
         _watch.Tick += OnTick;
         _watch.Start();
         doc.SendStringToExecute("_.PLANTPRODUCTIONISO ", true, false, false);
@@ -86,6 +94,26 @@ internal static class NativeIsoDialogEnhancer
     {
         try
         {
+            // File IO runs in Task.Run; UI timer only checks window visibility.
+            if (_copyTask is not null)
+            {
+                if (!_copyTask.IsCompleted) return;
+                Task<CopyReport> completed = _copyTask;
+                _copyTask = null;
+                Detach();
+                if (completed.IsFaulted)
+                    _document?.Editor.WriteMessage("\nSPTC ISO export error: " + completed.Exception?.GetBaseException().Message);
+                else if (completed.IsCanceled)
+                    _document?.Editor.WriteMessage("\nSPTC ISO export canceled.");
+                else
+                {
+                    CopyReport report = completed.Result;
+                    _document?.Editor.WriteMessage(
+                        $"\nSPTC ISO: {report.Copied} DWG(s) copied to {report.Destination}; {report.Skipped} skipped. Original DWGs unchanged.");
+                }
+                return;
+            }
+
             IntPtr native = FindDialog("Create Production Iso");
             if (native != IntPtr.Zero)
             {
@@ -97,22 +125,18 @@ internal static class NativeIsoDialogEnhancer
                     Attach(native);
                 }
 
-                string? current = ReadSourcePath(native);
-                if (current != null && !current.Equals(_source, StringComparison.OrdinalIgnoreCase))
+                // Read native folder once; do NOT scan the network on this UI timer.
+                if (_source is null)
                 {
-                    _source = current;
-                    Before.Clear();
-                    foreach (var item in Snapshot(current)) Before[item.Key] = item.Value;
-                    _document?.Editor.WriteMessage("\nSPTC ISO source: " + current);
+                    _source = ReadSourcePath(native);
+                    if (_source is not null)
+                        _document?.Editor.WriteMessage("\nSPTC ISO native source: " + _source);
                 }
-                PositionOverlay(native);
                 return;
             }
 
             if (_native != IntPtr.Zero)
             {
-                // Native window dismissed after Create or Cancel. Keep timer running
-                // until Autodesk's asynchronous Results window is closed.
                 RemoveOverlay();
                 _nativeClosedAt = DateTime.UtcNow;
             }
@@ -125,31 +149,27 @@ internal static class NativeIsoDialogEnhancer
 
             if (_resultsSeen)
             {
-                // The results dialog has closed. Native ISO generation has completed.
-                Detach();
-                if (!string.IsNullOrWhiteSpace(_destination))
+                if (!string.IsNullOrWhiteSpace(_destination) && _document != null)
+                    CopyCompleted(_document);
+                else
                 {
-                    _document?.Editor.WriteMessage("\nSPTC ISO: Results closed; exporting completed drawings...");
-                    if (_document != null) CopyCompleted(_document);
+                    Detach();
+                    _document?.Editor.WriteMessage("\nSPTC ISO: Custom folder empty; native default output preserved.");
                 }
-                else _document?.Editor.WriteMessage("\nSPTC ISO: No custom folder; ISO remains in default project folder.");
                 return;
             }
 
-            if (!_nativeSeen && ++_noWindowTicks > 150)
+            if (!_nativeSeen && ++_noWindowTicks > 40)
             {
                 Detach();
                 return;
             }
 
-            // A user can cancel the native dialog; no export is performed.
-            // Do not time out during normal ISO generation, which can be lengthy.
             if (_nativeClosedAt != DateTime.MinValue &&
                 (DateTime.UtcNow - _nativeClosedAt).TotalMinutes > 30)
             {
                 Detach();
-                _document?.Editor.WriteMessage(
-                    "\nSPTC ISO: Results dialog was not observed; no automatic copy performed. Use SPTC_ISOCOPY.");
+                _document?.Editor.WriteMessage("\nSPTC ISO: No Results dialog detected; export not started.");
             }
         }
         catch (Exception ex)
@@ -266,81 +286,82 @@ internal static class NativeIsoDialogEnhancer
         RemoveOverlay();
     }
 
-    private static Dictionary<string, (long Size, long Modified)> Snapshot(string folder)
+    // Runs exclusively on a worker thread. No Autodesk API calls occur here.
+    private static CopyReport CopyFiles(string source, string targetRoot, DateTime sinceUtc)
     {
-        var result = new Dictionary<string, (long, long)>(StringComparer.OrdinalIgnoreCase);
-        if (!Directory.Exists(folder)) return result;
-        try
+        int copied = 0, skipped = 0;
+        // Restrict to the native source folder only, not its entire project directory.
+        // LastWriteTime is a best-effort filter: avoid concurrent ISO generation in this folder.
+        foreach (string file in Directory.EnumerateFiles(source, "*.dwg", SearchOption.AllDirectories))
         {
-            foreach (string path in Directory.EnumerateFiles(folder, "*.dwg", SearchOption.AllDirectories))
+            try
             {
-                try
+                var info = new FileInfo(file);
+                if (info.LastWriteTimeUtc < sinceUtc.AddSeconds(-5)) continue;
+                using (var readLock = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.None)) { }
+
+                string relative = Path.GetRelativePath(source, file);
+                string destination = Path.Combine(targetRoot, relative);
+                string directory = Path.GetDirectoryName(destination)!;
+                Directory.CreateDirectory(directory);
+                if (File.Exists(destination))
                 {
-                    var f = new FileInfo(path);
-                    result[path] = (f.Length, f.LastWriteTimeUtc.Ticks);
+                    string stem = Path.GetFileNameWithoutExtension(destination);
+                    string ext = Path.GetExtension(destination);
+                    int n = 1;
+                    while (File.Exists(destination))
+                    {
+                        if (n > 100000) throw new IOException("Too many duplicate output names.");
+                        destination = Path.Combine(directory, stem + "_copy" + n++ + ext);
+                    }
                 }
-                catch (IOException) { }
-                catch (UnauthorizedAccessException) { }
+                File.Copy(file, destination, false);
+                copied++;
             }
+            catch (IOException) { skipped++; }
+            catch (UnauthorizedAccessException) { skipped++; }
         }
-        catch (IOException) { }
-        catch (UnauthorizedAccessException) { }
-        return result;
+        return new CopyReport(copied, skipped, targetRoot);
     }
 
-    private static bool NestedOrEqual(string child, string parent)
+    private static void EnsureMonitor()
     {
-        child = Path.TrimEndingDirectorySeparator(Path.GetFullPath(child));
-        parent = Path.TrimEndingDirectorySeparator(Path.GetFullPath(parent));
-        return child.Equals(parent, StringComparison.OrdinalIgnoreCase) ||
-               child.StartsWith(parent + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+        if (_watch != null) return;
+        _watch = new System.Windows.Forms.Timer { Interval = 1500 };
+        _watch.Tick += OnTick;
+        _watch.Start();
     }
 
     public static void CopyCompleted(Document doc)
     {
+        if (_copyTask is { IsCompleted: false })
+        {
+            doc.Editor.WriteMessage("\nSPTC ISO: Export is already running in the background.");
+            return;
+        }
+        if (_source is null || string.IsNullOrWhiteSpace(_destination))
+        {
+            doc.Editor.WriteMessage("\nSPTC ISO: Missing source or custom destination; no copy attempted.");
+            Detach();
+            return;
+        }
         try
         {
-            if (string.IsNullOrWhiteSpace(_source) || !Directory.Exists(_source))
-                throw new InvalidOperationException("Native Production Iso source folder was not detected. No files copied.");
-            if (string.IsNullOrWhiteSpace(_destination))
-            {
-                doc.Editor.WriteMessage("\nSPTC ISO: No custom folder selected; default output unchanged.");
-                return;
-            }
-            string source = Path.GetFullPath(_source), targetRoot = Path.GetFullPath(_destination);
-            if (NestedOrEqual(source, targetRoot) || NestedOrEqual(targetRoot, source))
-                throw new InvalidOperationException("Custom destination must be outside the native source and its parent folders.");
-
-            int copied = 0, skipped = 0;
-            foreach (var entry in Snapshot(source))
-            {
-                if (Before.TryGetValue(entry.Key, out var older) && older == entry.Value)
-                    continue;
-                string relative = Path.GetRelativePath(source, entry.Key);
-                string target = Path.Combine(targetRoot, relative);
-                try
-                {
-                    using (var lockCheck = new FileStream(entry.Key, FileMode.Open, FileAccess.Read, FileShare.None)) { }
-                    Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-                    if (File.Exists(target))
-                    {
-                        string name = Path.GetFileNameWithoutExtension(target);
-                        string ext = Path.GetExtension(target);
-                        int n = 1;
-                        do { target = Path.Combine(Path.GetDirectoryName(target)!, name + "_copy" + n++ + ext); }
-                        while (File.Exists(target) && n < 100000);
-                    }
-                    File.Copy(entry.Key, target, overwrite: false);
-                    copied++;
-                }
-                catch (IOException) { skipped++; }
-                catch (UnauthorizedAccessException) { skipped++; }
-            }
-            doc.Editor.WriteMessage($"\nSPTC ISO: Copied {copied} DWG(s), skipped {skipped}. Originals were not modified.");
+            string source = Path.GetFullPath(_source);
+            string destination = Path.GetFullPath(_destination);
+            // Never copy into/from a parent folder to prevent recursion.
+            if (NestedOrEqual(source, destination) || NestedOrEqual(destination, source))
+                throw new InvalidOperationException("The custom folder must be separate from the native ISO folder.");
+            // Validation and recursive enumeration are on the worker, not the CAD UI thread.
+            DateTime start = _launchUtc;
+            _copyTask = Task.Run(() => CopyFiles(source, destination, start));
+            EnsureMonitor();
+            doc.Editor.WriteMessage("\nSPTC ISO: Background copy started. Plant 3D remains responsive.");
         }
         catch (Exception ex)
         {
-            doc.Editor.WriteMessage("\nSPTC ISO export: " + ex.Message);
+            doc.Editor.WriteMessage("\nSPTC ISO copy not started: " + ex.Message);
+            Detach();
         }
     }
 }
