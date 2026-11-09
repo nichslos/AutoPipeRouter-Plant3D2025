@@ -50,7 +50,7 @@ internal sealed class NativeIsoToolbarClickFilter : IMessageFilter
     {
         _dialog = dialog;
         _toggle = toggle;
-        _delay = new System.Windows.Forms.Timer { Interval = 350 };
+        _delay = new System.Windows.Forms.Timer { Interval = 300 };
         _delay.Tick += (_, _) =>
         {
             _delay.Stop();
@@ -76,17 +76,16 @@ internal sealed class NativeIsoToolbarClickFilter : IMessageFilter
         _active = new NativeIsoToolbarClickFilter(dialog, toggle);
     }
 
-    // Keep the top-toolbar toggle aligned when user presses "DWG Only".
-    public static void MarkActiveFilterApplied(IntPtr dialog)
-    {
-        if (_active is { _disposed: false } current && current._dialog == dialog)
-            current._showingActive = true;
-    }
-
     private void Schedule()
     {
         if (_disposed) return;
+        // REV11: restoring ALL only clears an existing text filter and can be
+        // requested sooner. The native Drawing/Project button may still need
+        // its own time to refresh a large or network-backed project list.
+        // Keep the slightly longer debounce for applying the active tag
+        // after Autodesk's mode switch has had a chance to run.
         _delay.Stop();
+        _delay.Interval = _showingActive ? 100 : 300;
         _delay.Start();
     }
 
