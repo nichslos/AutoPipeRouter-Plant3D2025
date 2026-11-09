@@ -1,3 +1,37 @@
+# SPTC Support Drawings — REV22.7 Native Isometric Frame Center Fix (Experimental)
+
+**Evidence:** REV22.6.1 comparison against manually created native NW/NE/SW/SE shows matching normalized `ViewDirection`, 0° ≡ 360° `TwistAngle`, and 1:5 `CustomScale`, but the plugin-generated views appear blank or partly clipped while native reference views show geometry. Previously uploaded REV22.4 audit files also show this repeatable view-center reversal on all four views after native Update View:
+
+| ISO | REV22.5 center immediately after generation | Native Update View center |
+|---|---|---|
+| NW | (347.236462, -17.816316) | (-347.236462, 17.816316) |
+| NE | (-129.819230, 107.709582) | (129.819230, -107.709582) |
+| SW | (129.819230, -293.244548) | (-129.819230, 293.244548) |
+| SE | (-347.236462, -167.718651) | (347.236462, 167.718651) |
+
+**Hypothesis:** REV22.5 changed each native isometric paper viewport's `TwistAngle` from 180° to 0° but retained its `ViewCenter` in the previous rotated display coordinate system. That reorients the viewport without compensating the center, often sending the support off screen. The native Update View appears to compensate by reversing `ViewCenter` along both axes.
+
+**New independent experiment command:** `SPTC_ORTHO22_7_ISO_FRAME_TEST`. It copies a registered empty Ortho seed and generates all 10 native views in one click, preserving the working REV22.3 sizes, native short NW/NE/SW/SE view types, WCS camera vectors, native OrthoCube bounds, 1:5 scaling (or selected common scale), and the six standard axial views. Immediately after `GenerateOrthos` **for NW, NE, SW, SE only**, it reads the native viewport twist/center, verifies the WCS-up projection, and either:
+- If twist=180°: sets both `TwistAngle=0` and `ViewCenter=(-oldX,-oldY)` in one transaction on that newly created paper viewport.
+- If twist already equals 0° modulo 360°: preserves `ViewCenter` and normalizes twist.
+- If twist is neither 180° nor 0°: stops without editing the viewport, rather than guessing.
+
+Logs: `STEP8_<ISO>_ISO_TWIST_BEFORE_DEG`, `ISO_VIEWCENTER_BEFORE`, `ISO_TWIST_AFTER_DEG`, `ISO_VIEWCENTER_AFTER`, `VIEWCENTER_COMPENSATED`, `ISO_FRAME_COORDINATES_CHECK`. The existing actual paper-size, 10 native-view catalog, camera quadrant and saved native preset checks remain enabled. A failed check aborts further generation. Older REV22.5 and REV22.6.1 commands are **unchanged**.
+
+**CAUTION:** The script uses Autodesk's unsupported internal `GenerateOrthos` method. This is a controlled, test-only framing hypothesis, *not* a proven native Ortho source link or regeneration fix. Do not run against production files or edit `Ortho.dcf`.
+
+**Test procedure in a copied project:**
+1. Fully close Plant 3D 2025; reopen copied project; load new `SPTC.SupportDrawings.dll` with `NETLOAD`.
+2. Open the same registered source 3D support DWG, run `SPTC_ORTHO22_7_ISO_FRAME_TEST`.
+3. Pick the same two support members, empty registered native Ortho seed; consent with `REV22.7 TEST`; click once to place the group.
+4. **Before Edit View or Update View**, capture the NW/NE/SW/SE screenshot. Confirm all 4 supports are actually visible and centered. Save `*_REV22_7_RESULT.txt`.
+5. Use native Edit View / Update View twice, save and reopen, capture another screenshot and run `SPTC_ORTHO22_4_ISO_AUDIT`.
+6. Compare to your native gold reference screenshot. Send generation TXT, audit TXT, and before/after screenshots.
+
+**Acceptance:** All ten views registered with no collisions; 4 ISO `ISO_FRAME_COORDINATES_CHECK=PASS`; all four supports visible *immediately*; no disappearance after repeated Update View; native Edit View preset still shows NW/NE/SW/SE. Successful compilation alone is not runtime confirmation.
+
+---
+
 # REV22.6.1 — Fix JIT Crash in Native Iso Reference Capture
 
 **AutoCAD 2025 runtime failure:** `System.InvalidOperationException: Use SetRejectMessage first.` inside `NativeOrthoIsoReferenceComparison.TrySelectFour`, reproduced by `SPTC_ORTHO22_6_CAPTURE_NATIVE_ISO`. The cause was `PromptEntityOptions.AddAllowedClass(typeof(Viewport),false)` preceding `SetRejectMessage(...)`.
