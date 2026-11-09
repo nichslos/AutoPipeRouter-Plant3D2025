@@ -374,6 +374,40 @@ try
 }
 catch(ArgumentException){invalidRefRejected=true;}
 Assert(invalidRefRejected,"REV22.6 reject invalid reference direction");
+// REV22.7 live evidence: REV22.5 initially used zero TwistAngle but
+// retained center from native 180deg viewport. Later native Update View
+// reversed center coordinates; that shifted the model back into the frame.
+// Test both center coordinates rotate together, not only the paper twist.
+var knownCenters=new[]{
+    ("NW",347.236462,-17.816316),
+    ("NE",-129.819230,107.709582),
+    ("SW",129.819230,-293.244548),
+    ("SE",-347.236462,-167.718651)
+};
+foreach(var t in knownCenters)
+{
+    var before=new NativeOrthoIsoFramingGuard.ViewState(t.Item2,t.Item3,Math.PI);
+    var after=NativeOrthoIsoFramingGuard.NormalizeHalfTurn(before);
+    Assert(after.AppliedHalfTurn&&after.CenterX==-t.Item2&&
+        after.CenterY==-t.Item3&&after.TwistRadians==0,
+        "REV22.7 compensate native 180-to-0 twist for "+t.Item1);
+    Assert(NativeOrthoIsoFramingGuard.Matches(after,
+        new NativeOrthoIsoFramingGuard.ViewState(-t.Item2,-t.Item3,0)),
+        "REV22.7 native update center matches compensated center "+t.Item1);
+    Assert(!NativeOrthoIsoFramingGuard.Matches(after,before),
+        "REV22.7 old unadjusted center no longer passes "+t.Item1);
+}
+var zeroState=new NativeOrthoIsoFramingGuard.ViewState(35,-70,2*Math.PI);
+var zeroResult=NativeOrthoIsoFramingGuard.NormalizeHalfTurn(zeroState);
+Assert(!zeroResult.AppliedHalfTurn&&zeroResult.CenterX==35&&zeroResult.CenterY==-70,
+    "REV22.7 do not double-flip already normalized viewport");
+bool arbitraryTwistRejected=false;
+try{ NativeOrthoIsoFramingGuard.NormalizeHalfTurn(
+    new NativeOrthoIsoFramingGuard.ViewState(10,20,Math.PI/3)); }
+catch(InvalidOperationException){ arbitraryTwistRejected=true; }
+Assert(arbitraryTwistRejected,"REV22.7 reject unsupported arbitrary paper twists");
+Console.WriteLine("PASS: REV22.7 four native ISO view-center sign flips with guarded twist correction.");
+
 Console.WriteLine("PASS: REV22.6 native reference vs generated camera+twist comparison.");
 
 Console.WriteLine("PASS: REV22.5 four WCS projected-up isometric cameras and 180-degree twist correction.");
