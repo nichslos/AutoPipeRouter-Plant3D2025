@@ -530,6 +530,24 @@ jobs:
           if ($auto -match 'PLANTORTHOUPDATE_ALL_ENTERED|Editor.Command\("_.PLANTORTHOUPDATE"') { throw 'Failed REV22.9 automatic updater must not be reused' }
           if ($helper -notmatch 'Math.Clamp\(minHorizontalMm\*0.12,50.0,160.0\)') { throw 'REV22.12 adaptive XY bounds missing' }
           if ($helper -notmatch 'Math.Clamp\(heightMm\*0.45,300.0,1200.0\)') { throw 'REV22.12 adaptive Z bounds missing' }
+      - name: Verify REV22.13 ten native paper-space view titles
+        shell: pwsh
+        run: |
+          $new = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoTenViewWithTitlesTest.cs' -Raw
+          $planner = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoViewTitlePlan.cs' -Raw
+          $prior = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoTenViewAutoSupportCubeTest.cs' -Raw
+          if ($new -notmatch 'CommandMethod\("SPTC_ORTHO22_13_VIEW_TITLES_TEST"') { throw 'REV22.13 test command missing' }
+          if ($prior -notmatch 'CommandMethod\("SPTC_ORTHO22_12_AUTO_SUPPORT_CUBE_TEST"') { throw 'REV22.12 working fallback removed' }
+          if ($new -notmatch 'REV22.13 TEST') { throw 'Copied-project authorization missing' }
+          foreach($token in @('NativeOrthoViewTitlePlan.ReserveBelow','CreateNativePaperTitles','NativeOrthoViewTitlePlan.BuildTitles','STEP5_TITLE_RESERVED_SHIFT_Y_MM','STEP10_TITLE_LAYER','STEP10_VIEW_TITLE_COUNT','STEP10_TITLE_PLACEMENT_CHECK=PASS','SupportFocusedCubePlanner.BuildAutomatic','AXIAL_FRAME_ROTATION_CHECK','ISO_FRAME_COORDINATES_CHECK','STEP10_ALL_TEN_NATIVE_VIEWS_REGISTERED')) {
+            if (-not $new.Contains($token)) { throw "REV22.13 safeguard missing: $token" }
+          }
+          foreach($caption in @('TOP VIEW','BOTTOM VIEW','LEFT VIEW','RIGHT VIEW','FRONT VIEW','BACK VIEW','NW ISOMETRIC VIEW','NE ISOMETRIC VIEW','SW ISOMETRIC VIEW','SE ISOMETRIC VIEW')) {
+            if (-not $planner.Contains('"'+$caption+'"')) { throw "Missing native view caption $caption" }
+          }
+          if($new -match 'PLANTORTHOUPDATE_ALL_ENTERED|Editor.Command\("_.PLANTORTHOUPDATE"') { throw 'Do not reuse failing native auto update' }
+          if($new -notmatch 'new MText') { throw 'Titles must be native editable paper-space MText' }
+          if($new -notmatch 'AttachmentPoint.TopCenter') { throw 'Titles must be centered below their viewport' }
       - name: Compile SPTC Support Drawings
         run: dotnet build src/SPTC.SupportDrawings/SPTC.SupportDrawings.csproj -c Release
       - name: Verify compiled DLL
@@ -541,7 +559,7 @@ jobs:
       - name: Upload DLL artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SPTC-SupportDrawings-Plant3D2025-REV22_12
+          name: SPTC-SupportDrawings-Plant3D2025-REV22_13
           path: src/SPTC.SupportDrawings/bin/Release/net8.0-windows/SPTC.SupportDrawings.dll
           retention-days: 30
           if-no-files-found: error
