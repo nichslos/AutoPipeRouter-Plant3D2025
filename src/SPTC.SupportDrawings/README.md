@@ -1,3 +1,23 @@
+# SPTC Support Drawings — REV22.14: Block Name + Structural Member Size Annotations
+
+**Isolated command:** `SPTC_ORTHO22_14_STRUCTURE_ANNOTATIONS_TEST`. The previously visually verified REV22.13 command and REV22.12 SupportFocus stay unchanged. Test in **COPIED** AutoCAD Plant 3D 2025 project only.
+
+**Requested behavior:** After ten native Ortho views and view titles are generated, create ten new compact paper-space callout notes, each beside its associated viewport, with a short paper-space leader pointing to the viewport frame. On separate editable MText layer `SPTC_SUPPORT_ANNOTATIONS`, text height 2.8 mm.
+
+Each callout shows:
+- `BLOCK: <real BlockReference name>` (dynamic blocks resolve through their canonical DynamicBlockTableRecord, not anonymous `*U##` name).
+- `MEMBER SIZE: <CAD section-size metadata>`, multiple distinct values if present; e.g. `C100x50x5, L75x75x6`.
+
+The program reads section values conservatively from declared source `SECTION`, `SECTION_SIZE`, `SIZE`, `MEMBER_SIZE`, `PROFILE`, `CHANNEL_SIZE`, `ANGLE_SIZE`, `PLATE_SIZE`, etc. block attribute tags; constant attributes; nested block attributes/names and structure-member section-named properties, plus explicit C/L/H/CH/ANGLE/CHANNEL tokens on member layers. It inspects **up to six block definition levels**, never explodes entities or modifies the source. It does NOT infer structural sections from world bounding-box sizes (which would misrepresent actual rolled-steel profiles). If no trustworthy section designation is stored, the note reads `MEMBER SIZE: NOT AVAILABLE (NO SECTION METADATA)`. In this case, inspect the `REV22_14_SOURCE_EVIDENCE` log and add a proper block attribute to the source if desired. It still annotates the true block name.
+
+Callouts reference the overall structural-support VIEW, not a particular internal steel piece; no unsupported associative Plant 3D native annotation or 3D member-to-leader link is claimed. Each short paper-space leader ends at the view frame. The existing 10 native view definitions, clipping, rotation fixes, 1:30 scale, one-click positioning and previous title annotations are untouched. Callout paper bounds are calculated and collision-checked against all ten viewports and other notes; no text may enter the right 22% or bottom 12% title-block keepout. Geometry, source block, Ortho.dcf, and native view metadata are not edited.
+
+**Runtime test:** Restart Plant 3D, `NETLOAD` the new DLL, open a copied model, run the command, choose SupportFocus, select the **3D structural-support block reference**, optionally select nearby pipes, select an EMPTY registered native Ortho seed, type `REV22.14 TEST` and click once. Inspect ten view titles, ten callouts, actual block name, exact listed structural size(s), and that there are no overlaps. Save/reopen, Update View twice and check labels persist. Share the `*_REV22_14_RESULT.txt` and a screenshot.
+
+**Important:** If the support block was created from anonymous 3D solids and contains no explicit section data, CAD does not retain a reliable C/L/H section size automatically. In that case the model must be labeled in its block attributes or another trusted metadata store; the plugin deliberately does not guess from geometric extents. Non-production Autodesk internal `GenerateOrthos` API is still invoked.
+
+---
+
 # SPTC Support Drawings — REV22.13: Ten Native Ortho View Titles
 
 **User request:** Automatically place an editable, printed view title on every view created by SupportFocus. Example: `TOP VIEW`. Do not alter the working REV22.12 automatic SupportFocus/Block Reference handling, native OrthoCube crop, 10 view presets, 6 axial and 4 ISO rotations, 1-click placement, scale or project-linked native views.
