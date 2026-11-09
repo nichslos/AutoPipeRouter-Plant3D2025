@@ -451,6 +451,24 @@ jobs:
           if ($guard -notmatch '\-before.CenterX,\-before.CenterY,0,true') { throw 'REV22.7 must rotate BOTH ViewCenter axes for half-turn' }
           if ($guard -notmatch 'IsZeroTwist') { throw 'REV22.7 must not double-flip normalized center' }
           if ($new -notmatch 'vp.ViewCenter=new Point2d') { throw 'REV22.7 must atomically set corrected ViewCenter' }
+      - name: Verify REV22.8 native standard preset fix is isolated
+        shell: pwsh
+        run: |
+          $new = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoTenViewAxialPresetFixTest.cs' -Raw
+          $helper = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoAxialEditorPreset.cs' -Raw
+          $prior = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoTenViewIsoFrameFixTest.cs' -Raw
+          if ($new -notmatch 'CommandMethod\("SPTC_ORTHO22_8_AXIAL_PRESET_TEST"') { throw 'REV22.8 command missing' }
+          if ($prior -notmatch 'CommandMethod\("SPTC_ORTHO22_7_ISO_FRAME_TEST"') { throw 'REV22.7 generator fallback removed' }
+          if ($new -notmatch 'REV22.8 TEST') { throw 'Copied-project consent missing' }
+          foreach($token in @('NativeOrthoAxialEditorPreset.Resolve','GetViewTypeFromName','AXIAL_CANDIDATES','EDITOR_PRESET','SAVED_VIEWDEF_TYPE','SAVED_TYPE_CHECK','ISO_FRAME_COORDINATES_CHECK','STEP10_ALL_TEN_NATIVE_VIEWS_REGISTERED')) {
+            if (-not $new.Contains($token)) { throw "Missing REV22.8 verification: $token" }
+          }
+          foreach($name in @('TOP','BOTTOM','LEFT','RIGHT','FRONT','BACK')) {
+            if (-not $helper.Contains('"'+$name+'"')) { throw "Missing axial preset: $name" }
+          }
+          if ($helper -notmatch 'Refusing Current View fallback') { throw 'Unrecognized native preset must fail closed' }
+          if ($new -notmatch 'NativeOrthoIsoViewType.IsIsometric\(label\)') { throw 'ISO-only framing correction missing' }
+          if ($new -notmatch 'NativeOrthoAxialEditorPreset.IsAxial\(label\)') { throw 'Six axial saved-type checks missing' }
       - name: Compile SPTC Support Drawings
         run: dotnet build src/SPTC.SupportDrawings/SPTC.SupportDrawings.csproj -c Release
       - name: Verify compiled DLL
@@ -462,7 +480,7 @@ jobs:
       - name: Upload DLL artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SPTC-SupportDrawings-Plant3D2025-REV22_7
+          name: SPTC-SupportDrawings-Plant3D2025-REV22_8
           path: src/SPTC.SupportDrawings/bin/Release/net8.0-windows/SPTC.SupportDrawings.dll
           retention-days: 30
           if-no-files-found: error
