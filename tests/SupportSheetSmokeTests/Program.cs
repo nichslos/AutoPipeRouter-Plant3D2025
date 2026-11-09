@@ -717,6 +717,33 @@ bool sourceCountRejected=false;
 try{SupportOrthoSelection15.Build(0,0,0,Array.Empty<string>(),Array.Empty<string>());}
 catch(ArgumentOutOfRangeException){sourceCountRejected=true;}
 Assert(sourceCountRejected,"REV22.15 reject empty support annotations");
+// REV22.16: the user-verified Plant 3D Properties palette exposes
+// Structure Member.Size="Sloping channel 100x50 web-5 fl-7.5".
+// Preserve that exact DataLinksManager value; do not infer member sizes
+// from Length, Top of Steel, Bottom of Steel or 3D bounding box.
+const string plantSteelSize="Sloping channel 100x50 web-5 fl-7.5";
+Assert(SupportOrthoMemberMetadata.SectionFromAttribute("SIZE",plantSteelSize)
+    ==plantSteelSize,
+    "REV22.16 accept Plant 3D Structure Member.Size exact string");
+Assert(SupportOrthoMemberMetadata.SectionFromAttribute(
+    "Long Description (Size)","Member "+plantSteelSize)==null,
+    "REV22.16 only retrieve the exact Size property and not accidentally long descriptions");
+var realPlantMetadata=SupportOrthoSelection15.Build(
+    21,0,13,Array.Empty<string>(),new[]{
+        plantSteelSize,"Sloping angle 75x75 thk-6",plantSteelSize
+    });
+Assert(realPlantMetadata.MemberSizes.Count==2&&
+    realPlantMetadata.StructuralMemberCount==13&&
+    realPlantMetadata.Identity=="21 OBJECTS",
+    "REV22.16 keep 13 source-linked Structure Members and distinct exact profile names");
+var realPlantPanel=SupportOrthoSummaryPanel15.Build(
+    reservedTitleFrames.Frames,reservedTitleFrames.Titles,
+    realPlantMetadata,594,841);
+Assert(realPlantPanel.SizeLine.Contains(plantSteelSize)&&
+    realPlantPanel.IdentityLine=="ASSEMBLY: 21 OBJECTS",
+    "REV22.16 one clean panel with exactly source-recorded Plant structural section");
+Console.WriteLine("PASS: REV22.16 Plant 3D structural Size field and original 10-view panel boundaries.");
+
 Console.WriteLine("PASS: REV22.15 one non-redundant, safe structural support summary for block and separately selected members.");
 
 Console.WriteLine("PASS: REV22.14 metadata-evidenced block/steel labels with all 10 safe paper-space callouts.");
