@@ -25,3 +25,13 @@ Network directory enumeration, file inspection and copying are run entirely on a
 - Destination files are never overwritten; `_copyN` is added to the name if an output file already exists.
 - The background file watcher can poll for up to 10 minutes. If Plant 3D generates no DWG during that period, no output is copied.
 - Native UI injection into a third-party dialog is an unsupported experimental technique; monitor Plant 3D responsiveness when testing. A successful GitHub compilation does not establish runtime correctness.
+
+## Select All checkbox test (REV05 + line selector)
+
+- Starts from the **confirmed working REV05** commit, not REV06. All copying and export code is unchanged.
+- A **Select All** checkbox is injected in the blank area at the bottom of the **Display lines / Line Numbers** pane.
+- Checking the new control attempts to select all lines; unchecking attempts to clear all lines. This uses the underlying native selection control when it is accessible through WinForms or Win32 ListView APIs. It does not use repeated mouse clicks or scroll through every line.
+- If Plant 3D uses a different UI control, the new checkbox refuses to modify the list and displays a fallback explanation; use the Autodesk-native option **right-click inside Line Numbers > Select all lines** (or **Clear all lines**).
+- Check that **all line boxes** become checked *and* the native **Create** button becomes enabled before using the enhancement for production work. First test on an isolated sample project.
+- This is an experimental UI extension, not a documented Autodesk API. Avoid selecting every line in a large project until selection correctness has been verified.
+- Restart Plant 3D between DLL versions loaded with `NETLOAD`; an older DLL otherwise remains loaded for the session.
