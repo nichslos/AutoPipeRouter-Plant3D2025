@@ -30,13 +30,17 @@ public static class SupportOrthoMemberMetadata
         @"(?<![A-Z0-9])(?:CHANNEL|ANGLE|CH|C|L|H|I|U|SHS|RHS|PIPE)\s*[-_ ]?\s*\d{2,4}(?:\s*[X×*]\s*\d+(?:\.\d+)?){0,3}(?![A-Z0-9])",
         RegexOptions.Compiled|RegexOptions.CultureInvariant|RegexOptions.IgnoreCase);
 
-    public static string? SectionFromName(string? text)
+    public static IReadOnlyList<string> SectionsFromName(string? text)
     {
-        if(string.IsNullOrWhiteSpace(text))return null;
-        Match m=ProfileName.Match(text);
-        if(!m.Success)return null;
-        return Clean(m.Value);
+        if(string.IsNullOrWhiteSpace(text))return Array.Empty<string>();
+        return ProfileName.Matches(text).Cast<Match>()
+            .Where(m=>m.Success).Select(m=>Clean(m.Value))
+            .Where(v=>v.Length>0).Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
     }
+
+    public static string? SectionFromName(string? text) =>
+        SectionsFromName(text).FirstOrDefault();
 
     public static string? SectionFromAttribute(string? name,string? value)
     {
