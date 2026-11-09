@@ -74,8 +74,7 @@ internal static class SupportOrthoSourceReader
     private static void AddNameSize(string? value,string provenance,
         List<string> sizes,List<string> evidence)
     {
-        string? size=SupportOrthoMemberMetadata.SectionFromName(value);
-        if(size!=null)
+        foreach(string size in SupportOrthoMemberMetadata.SectionsFromName(value))
         {
             sizes.Add(size);
             evidence.Add("SIZE:"+provenance+"="+size);
