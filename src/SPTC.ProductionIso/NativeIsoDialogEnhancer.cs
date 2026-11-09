@@ -40,6 +40,7 @@ internal static class NativeIsoDialogEnhancer
     private static bool _nativeSeen;
     private static bool _resultsSeen;
     private static DateTime _nativeClosedAt;
+    private static bool _applyDwgScopeOnce;
     private sealed record CopyReport(int Copied, int Skipped, string Destination);
 
     public static void Launch(Document doc)
@@ -61,6 +62,9 @@ internal static class NativeIsoDialogEnhancer
         _nativeSeen = false;
         _resultsSeen = false;
         _nativeClosedAt = DateTime.MinValue;
+        // REV07: only live Plant 3D objects in the open model are put into
+        // AutoCAD's PickFirst set. Existing project/database metadata untouched.
+        _applyDwgScopeOnce = NativeDwgRouteScope.Prepare(doc);
         _watch = new System.Windows.Forms.Timer { Interval = 1500 };
         _watch.Tick += OnTick;
         _watch.Start();
@@ -133,6 +137,19 @@ internal static class NativeIsoDialogEnhancer
                 {
                     _native = native;
                     Attach(native);
+                }
+
+                // Activate Autodesk's own "Filter" mode once, if its native
+                // toolbar control can be positively identified. Otherwise
+                // leave the native mode alone and allow user to click Filter
+                // or the new "DWG Only" button below the line list.
+                if (_applyDwgScopeOnce)
+                {
+                    _applyDwgScopeOnce = false;
+                    bool enabled = NativeDwgRouteScope.TryApplyFilter(native);
+                    _document?.Editor.WriteMessage(enabled
+                        ? "\nSPTC REV07: Active DWG filter requested for live model objects."
+                        : "\nSPTC REV07: Click DWG Only or the third Filter icon for active drawing routes.");
                 }
 
                 // Path discovery only; never enumerate network DWGs on the UI thread.
