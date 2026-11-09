@@ -27,25 +27,24 @@ internal static class ProjectFolderLineCatalog
     public static string Diagnostic => _diagnostic;
     public static bool Ready => _ready;
 
+    // REV15: Show ONLY the immediate folders below Plant 3D Drawings,
+    // exactly one choice per top-level folder. DWGs in nested subfolders
+    // count toward their top-level parent but nested folders are never
+    // displayed as separate choices.
     public static IReadOnlyList<FolderChoice> Folders
     {
         get
         {
-            var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var topFolders = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (Drawing drawing in Registered)
             {
-                string folder = drawing.Folder;
+                string folder = drawing.Folder.Trim('\\');
                 if (string.IsNullOrWhiteSpace(folder)) continue;
-                // Include parent folders so their child DWGs can be filtered too.
-                while (!string.IsNullOrEmpty(folder))
-                {
-                    paths.Add(folder);
-                    int end = folder.LastIndexOf('\\');
-                    folder = end < 0 ? "" : folder[..end];
-                }
+                string directChild = folder.Split('\\', 2)[0].Trim();
+                if (directChild.Length > 0) topFolders.Add(directChild);
             }
-            return paths.OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
-                .Select(p => new FolderChoice(p, p.Replace('\\', ' '),
+            return topFolders.OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
+                .Select(p => new FolderChoice(p, p,
                     Registered.Count(d => IsWithin(d.Folder, p)))).ToList();
         }
     }
