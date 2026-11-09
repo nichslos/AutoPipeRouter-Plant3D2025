@@ -1,30 +1,23 @@
-# SPTC Production Iso — REV03 (automatic export test)
+# SPTC Production Iso — REV04 performance fix (test build)
 
-## What changed
-`SPTC_PRODISO` still opens Autodesk's **original Create Production Iso** dialog and inserts a Custom Save Location textbox and Browse button below Revision Number.
+## Primary fix
+REV03 performed recursive file enumeration on a mapped network drive (L:) in AutoCAD Plant 3D's UI thread, including scanning before native generation. This can make Plant 3D appear frozen.
 
-**REV03:** Once the native **Isometric Creation Results** dialog has appeared and is subsequently **closed**, the plugin automatically copies newly generated or updated Production Iso DWGs to the selected custom location. No second export command is required for this workflow.
+REV04 does not scan network folders on the UI thread. Native window checks run at 1500 ms intervals instead of 300 ms. After native **Isometric Creation Results** closes, DWG enumeration and copying run on a background worker. Results are reported on the command line after the worker finishes.
 
-The original DWG **continues to be generated into the configured default project folder**, and the Results window continues to report that location. The custom folder receives a copy, not a native-registered DWG. This is intentional: a direct per-run native destination override has not been verified in Plant 3D 2025.
+## Usage
+1. Exit AutoCAD Plant 3D completely to unload older DLLs.
+2. In Plant 3D 2025 run `NETLOAD` and load the REV04 `SPTC.ProductionIso.dll`.
+3. Run `SPTC_PRODISO`. In Autodesk's original dialog, choose **Custom Save Location** under Revision Number.
+4. Select the line number(s), generate Production Iso normally, and wait until it finishes.
+5. Close the Isometric Creation Results dialog; copying to the custom location then starts in the background.
+6. View the command line message `SPTC ISO: ... DWG(s) copied`.
 
-## How to use
-1. Extract the GitHub Actions artifact and load `SPTC.ProductionIso.dll` with `NETLOAD`.
-2. Run `SPTC_PRODISO`.
-3. Select **Custom Save Location** or leave it empty.
-4. Choose line numbers and click native **Create**.
-5. Wait until Autodesk says the ISO generation has completed, then **close the Isometric Creation Results window**.
-6. REV03 should automatically copy only new/changed DWGs to the custom folder. Check the AutoCAD command line for a count.
+If the custom folder is blank, no copying occurs and native ISO output remains in the default project folder.
 
-If the custom location was empty, generation stays at the original project path and no copy runs.
+## Important limitations
+The original Production Iso remains in the default `ProdIsos\Drawings` folder and remains project-registered. Custom output is a copy; no direct per-run native generation override has been verified for Plant 3D 2025.
 
-## Diagnostic / recovery command
-`SPTC_ISOCOPY` still exists as an optional manual retry after the generation finishes. It uses the recorded native source and destination.
+This technique attaches an experimental WinForms child control to Autodesk's native dialog. Runtime testing is required, and it may be affected by Plant 3D updates or UI scaling. The REV04 build aims to remove the most likely performance regression but is not yet runtime-validated.
 
-## Safety and known limitations
-- Does not modify Project Manager, Project.xml, IsoPart.xml, IsoConfig.xml, styles, the original DWGs, or shared project paths.
-- Detects the native source path by reading the original dialog's Save Isos to text; this may fail if UI control structure differs. If no native source is detected, the export command reports this instead of guessing.
-- Tracks changed DWGs using size and write timestamp, not line numbers; avoid concurrent ISO generation into the same project style.
-- Does not overwrite destination files; appends `_copyN` instead.
-- Results title must match `Isometric Creation Results`. If native Results is not detected, run `SPTC_ISOCOPY` manually.
-- The injected WinForms field is an undocumented experimental UI integration. Compiles on GitHub but still requires runtime validation in Plant 3D 2025.
-- **Restart Plant 3D** to unload the old DLL before `NETLOAD` for the new version.
+No changes are made to Project Manager, shared XML configurations, or existing DWGs. Do not run concurrent ISO jobs in the same output folder: changed file detection uses timestamps.
