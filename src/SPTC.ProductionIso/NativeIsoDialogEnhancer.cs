@@ -286,6 +286,14 @@ internal static class NativeIsoDialogEnhancer
         RemoveOverlay();
     }
 
+    private static bool NestedOrEqual(string child, string parent)
+    {
+        child = Path.TrimEndingDirectorySeparator(Path.GetFullPath(child));
+        parent = Path.TrimEndingDirectorySeparator(Path.GetFullPath(parent));
+        return child.Equals(parent, StringComparison.OrdinalIgnoreCase) ||
+               child.StartsWith(parent + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+    }
+
     // Runs exclusively on a worker thread. No Autodesk API calls occur here.
     private static CopyReport CopyFiles(string source, string targetRoot, DateTime sinceUtc)
     {
