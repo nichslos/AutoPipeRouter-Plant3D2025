@@ -1,3 +1,14 @@
+# SPTC Support Drawings — REV22.1: Native Isometric Current View Fix (Experimental)
+
+The user reports that REV22 NW, NE, SW and SE Isometric output is using Current View. In REV22 all four camera vectors and ViewType enums were distinct, but the unsupported generator's `strViewType` string was `NWIsometricView`, `NEIsometricView`, `SWIsometricView` or `SEIsometricView`. Those strings are not validated against Autodesk's native naming convention. Autodesk documents `NWIsometric`, `NEIsometric`, `SWIsometric`, `SEIsometric` as isometric scheme identifiers. REV22.1 tests these canonical strings as a possible fix; runtime proof is still required.
+
+REV22.1 is a NEW command `SPTC_ORTHO22_1_ISO_FIX_TEST`, preserving REV22 and all earlier commands unchanged. It changes only the native `strViewType` argument for NW, NE, SW, SE. Six standard views retain their exact type strings and vectors. REV22.1 logs (a) selected native enum, (b) previous type name and canonical native type name, (c) actual paper viewport camera before internal `GenerateOrthos`, and (d) actual camera after. It stops rather than reporting success if the viewport camera changes to Current View or any other incorrect direction.
+
+Test ONLY in a COPIED Plant 3D 2025 project: restart, NETLOAD REV22.1 DLL, open registered source 3D model, run `SPTC_ORTHO22_1_ISO_FIX_TEST`, select a support and an EMPTY Project Manager-created native Ortho seed, confirm warning, type `REV22.1 TEST`, click once on the A1 Ortho sheet. Review all 10 views and native Update View. Upload `*_REV22_1_RESULT.txt`, and screenshots of NW NE SW SE orientations. All native registrations and Update View are unverified until tested.
+
+Important: REV22.1 still uses the unsupported internal `GenerateOrthos` 16-argument method. Naming alone may not fix Current View if native internals use the editor's active camera; a green build indicates only C# compatibility, not native view correctness. Do not modify production Ortho.dcf or delete failed registered clones manually.
+
+---
 # SPTC Support Drawings — REV22: All Ten Views in One Experimental Group
 
 REV22 is a separate, unsupported native Plant 3D 2025 Ortho experiment for a COPIED TEST PROJECT ONLY. It does not replace REV19.4, REV20 or REV21.1.

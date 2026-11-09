@@ -236,6 +236,40 @@ Assert(tenA3.Denominator>=ten.Denominator,
     "REV22 smaller A3 paper must not have a larger view scale");
 Assert(ten.Status.StartsWith("PROPOSED_ONLY:"),
     "REV22 private API remains unverified until native runtime test");
+// REV22.1: use canonical native type strings for only four isometric views,
+// not the custom NWIsometricView etc strings that may be treated as Current View.
+foreach(string iso in new[]{"NW","NE","SW","SE"})
+{
+    string canonical=NativeOrthoIsoViewType.Resolve(iso,iso+"IsometricView");
+    Assert(canonical==iso+"Isometric","REV22.1 native iso identifier "+iso);
+    var direction=ten.Views.Single(v=>v.Name==iso);
+    Assert(NativeOrthoIsoViewType.IsIsometric(iso) &&
+        NativeOrthoIsoViewType.HasExpectedQuadrant(iso,direction.Dx,direction.Dy,direction.Dz),
+        "REV22.1 preset quadrant "+iso);
+    Assert(NativeOrthoIsoViewType.MatchesCamera(
+        iso,direction.Dx*4,direction.Dy*4,direction.Dz*4,
+        direction.Dx,direction.Dy,direction.Dz),
+        "REV22.1 normalized iso camera matches native WCS direction");
+    Assert(!NativeOrthoIsoViewType.MatchesCamera(
+        iso,0,0,1,direction.Dx,direction.Dy,direction.Dz),
+        "REV22.1 Current View TOP fallback rejected for "+iso);
+    Assert(!NativeOrthoIsoViewType.MatchesCamera(
+        iso,ten.Views.Single(v=>v.Name=="TOP").Dx,
+        ten.Views.Single(v=>v.Name=="TOP").Dy,
+        ten.Views.Single(v=>v.Name=="TOP").Dz,
+        direction.Dx,direction.Dy,direction.Dz),
+        "REV22.1 default TOP camera cannot masquerade as iso "+iso);
+}
+foreach(string standard in new[]{"TOP","BOTTOM","LEFT","RIGHT","FRONT","BACK"})
+{
+    var v=ten.Views.Single(v=>v.Name==standard);
+    Assert(NativeOrthoIsoViewType.Resolve(standard,v.TypeName)==v.TypeName,
+        "REV22.1 standard native string unchanged "+standard);
+    Assert(!NativeOrthoIsoViewType.IsIsometric(standard),
+        "REV22.1 standard view remains nonisometric "+standard);
+}
+Console.WriteLine("PASS: REV22.1 canonical NW NE SW SE native strings, no Current View fallback and six standard views unchanged.");
+
 Console.WriteLine("PASS: REV22 ten orthographic and isometric views, common scale and single-click fit.");
 
 Console.WriteLine("PASS: REV21.1 one-click automatic group translation and sheet guards.");

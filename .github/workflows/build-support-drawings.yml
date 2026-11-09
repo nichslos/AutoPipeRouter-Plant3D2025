@@ -302,6 +302,32 @@ jobs:
           $public = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoThreeViewOneCommandTest.cs' -Raw
           if ($previous -notmatch 'CommandMethod\("SPTC_ORTHO21_ONECLICK_INTERNAL_TEST"') { throw 'REV21 fallback missing' }
           if ($public -notmatch 'CommandMethod\("SPTC_ORTHO20_THREEVIEW_ONECMD_TEST"') { throw 'REV20 fallback missing' }
+      - name: Verify REV22.1 fixed isometric Current View fallback
+        shell: pwsh
+        run: |
+          $code = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoTenViewIsoFixTest.cs' -Raw
+          $helper = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoIsoViewType.cs' -Raw
+          $original = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoTenViewOneClickTest.cs' -Raw
+          if ($code -notmatch 'CommandMethod\("SPTC_ORTHO22_1_ISO_FIX_TEST"') { throw 'REV22.1 independent command missing' }
+          if ($code -notmatch 'REV22.1 TEST') { throw 'Explicit backup-project consent missing' }
+          if ($code -notmatch 'NativeOrthoIsoViewType.Resolve') { throw 'Native iso type normalization missing' }
+          if ($code -notmatch 'NATIVE_TYPE_NAME=') { throw 'Native iso string not logged' }
+          if ($code -notmatch 'ISOMETRIC_CAMERA_MATCH_BEFORE') { throw 'Isometric view camera must be validated before native generate' }
+          if ($code -notmatch 'ISOMETRIC_CAMERA_MATCH_AFTER') { throw 'Isometric camera must be audited after native generate' }
+          if ($code -notmatch 'STEP5_UNSUPPORTED_GENERATE_SIGNATURE_MATCH') { throw 'Private native signature check missing' }
+          if ($code -notmatch 'CUBE_EXTENTS_MATCHED') { throw 'Strict native OrthoCube checks missing' }
+          if ($code -notmatch 'CatalogMatches') { throw 'Native model view registration checks missing' }
+          if ($code -match 'SQLiteConnection|ExecuteNonQuery|SendStringToExecute|SetOrthoDwgVersion') { throw 'Direct metadata edits or UI scripting prohibited' }
+          if ($original -notmatch 'CommandMethod\("SPTC_ORTHO22_TENVIEW_ONECLICK_TEST"') { throw 'Original REV22 command modified' }
+          foreach($iso in @('NW','NE','SW','SE')) {
+            if ($helper -notmatch ('"'+$iso+'" => "'+$iso+'Isometric"')) { throw "Missing canonical native view identifier $iso" }
+          }
+          if ($helper -match 'NWIsometricView|NEIsometricView|SWIsometricView|SEIsometricView') {
+            # Previous names may appear in documentation comments, but not in switch mappings.
+            if ($helper -match '"NW" => "NWIsometricView"|"NE" => "NEIsometricView"|"SW" => "SWIsometricView"|"SE" => "SEIsometricView"') {
+              throw 'Legacy iso type name still used'
+            }
+          }
       - name: Compile SPTC Support Drawings
         run: dotnet build src/SPTC.SupportDrawings/SPTC.SupportDrawings.csproj -c Release
       - name: Verify compiled DLL
@@ -313,7 +339,7 @@ jobs:
       - name: Upload DLL artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SPTC-SupportDrawings-Plant3D2025-REV22
+          name: SPTC-SupportDrawings-Plant3D2025-REV22_1
           path: src/SPTC.SupportDrawings/bin/Release/net8.0-windows/SPTC.SupportDrawings.dll
           retention-days: 30
           if-no-files-found: error
