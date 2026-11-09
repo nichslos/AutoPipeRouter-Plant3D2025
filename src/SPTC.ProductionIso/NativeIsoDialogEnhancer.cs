@@ -62,9 +62,10 @@ internal static class NativeIsoDialogEnhancer
         _nativeSeen = false;
         _resultsSeen = false;
         _nativeClosedAt = DateTime.MinValue;
-        // REV07: only live Plant 3D objects in the open model are put into
-        // AutoCAD's PickFirst set. Existing project/database metadata untouched.
-        _applyDwgScopeOnce = NativeDwgRouteScope.Prepare(doc);
+        // REV08: read-only PnP3d model-to-line-group Tag validation.
+        // Do not use REV07 PickFirst filtering (it returned an empty list).
+        ActiveDwgTags.Scan(doc);
+        _applyDwgScopeOnce = ActiveDwgTags.Count == 1;
         _watch = new System.Windows.Forms.Timer { Interval = 1500 };
         _watch.Tick += OnTick;
         _watch.Start();
@@ -139,17 +140,13 @@ internal static class NativeIsoDialogEnhancer
                     Attach(native);
                 }
 
-                // Activate Autodesk's own "Filter" mode once, if its native
-                // toolbar control can be positively identified. Otherwise
-                // leave the native mode alone and allow user to click Filter
-                // or the new "DWG Only" button below the line list.
+                // REV08: apply an exact tag in Autodesk's native text filter
+                // for a verified SINGLE route. Never remove items or alter
+                // their underlying project membership. Keep Drawing/Project buttons.
                 if (_applyDwgScopeOnce)
                 {
                     _applyDwgScopeOnce = false;
-                    bool enabled = NativeDwgRouteScope.TryApplyFilter(native);
-                    _document?.Editor.WriteMessage(enabled
-                        ? "\nSPTC REV07: Active DWG filter requested for live model objects."
-                        : "\nSPTC REV07: Click DWG Only or the third Filter icon for active drawing routes.");
+                    ActiveDwgTags.ApplyOneTag(native, _document);
                 }
 
                 // Path discovery only; never enumerate network DWGs on the UI thread.
