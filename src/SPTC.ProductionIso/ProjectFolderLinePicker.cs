@@ -177,9 +177,9 @@ internal static class ProjectFolderLinePicker
             {
                 foreach (var choice in ProjectFolderLineCatalog.Folders)
                 {
-                    // Nested directories are indented using depth.
-                    int depth = choice.Key.Count(ch => ch == '\\');
-                    string label = new string(' ', depth * 2) + choice.Key.Split('\\').Last() +
+                    // Display full relative folder paths to distinguish
+                    // identically named subfolders under different parents.
+                    string label = choice.Key.Replace("\\", " > ") +
                                    $"  ({choice.DrawingCount} DWG)";
                     var item = new ToolStripMenuItem(label)
                     {
@@ -375,6 +375,18 @@ internal static class ProjectFolderLinePicker
         }
         finally { _updating = false; }
 
+        _folderLineList.ItemCheck += (_, e) =>
+        {
+            if (_updating || e.Index < 0 || e.Index >= VisibleEntries.Count) return;
+            bool requested = e.NewValue == CheckState.Checked;
+            if (!SetNativeChecked(VisibleEntries[e.Index], requested))
+            {
+                e.NewValue = e.CurrentValue;
+                _document?.Editor.WriteMessage(
+                    "\nSPTC REV13: Native line list changed; close folder filter and reopen it.");
+            }
+        };
+        _lineHost.Controls.Add(_folderLineList);
         if (entries.Count == 0)
         {
             var notice = new Label
@@ -388,18 +400,6 @@ internal static class ProjectFolderLinePicker
             _lineHost.Controls.Add(notice);
             notice.BringToFront();
         }
-        _folderLineList.ItemCheck += (_, e) =>
-        {
-            if (_updating || e.Index < 0 || e.Index >= VisibleEntries.Count) return;
-            bool requested = e.NewValue == CheckState.Checked;
-            if (!SetNativeChecked(VisibleEntries[e.Index], requested))
-            {
-                e.NewValue = e.CurrentValue;
-                _document?.Editor.WriteMessage(
-                    "\nSPTC REV13: Native line list changed; close folder filter and reopen it.");
-            }
-        };
-        _lineHost.Controls.Add(_folderLineList);
         _ = _lineHost.Handle;
         SetParent(_lineHost.Handle, _dialog);
         if (GetParent(_lineHost.Handle) != _dialog)
