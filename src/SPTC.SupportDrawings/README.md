@@ -1,3 +1,26 @@
+# REV22.22 — FIX: Structural Member Size and TOS were concatenated in actual AutoCAD MText
+
+**New command:** `SPTC_ORTHO22_22_MTEXT_SEPARATOR_TEST` in AutoCAD Plant 3D 2025. Test only in a COPIED registered project. Previous REV22.21 and earlier versions remain untouched.
+
+**Observed Plant 3D screenshot:** `[55D] Sloping channel 100x50 web-5 fl-7.5TOS ~ +1117.5745 mm`. The 22.21 annotation planner correctly produced one newline between Size and TOS, but the native MText writer incorrectly called `SupportOrthoMemberMetadata.SafeMText(item.Text).Replace("\\n","\\\\P")`. `SafeMText` calls `Clean`, which removes control characters including `\\n` BEFORE `Replace` could convert them to AutoCAD's paragraph command. This is why `fl-7.5TOS` was joined with no gap despite the earlier tests succeeding.
+
+**REV22.22 actual fix:** New `SupportOrthoMemberMText22.Encode` splits `item.Text` by source line breaks **before** individual per-line sanitization, then joins cleaned paragraphs with native AutoCAD MText `\\P`. The new generator uses `Contents=SupportOrthoMemberMText22.Encode(item.Text)`. The user-visible label renders as two real lines:
+
+```text
+[55D] Sloping channel 100x50 web-5 fl-7.5
+TOS ~ +1117.5745 mm
+```
+
+This is a genuine AutoCAD paragraph break, not spaces artificially inserted on the same line. There is no extra blank line. Exact Top of Steel still uses `TOS EL. +... mm`; approximate geometry-derived Top of Steel uses `TOS ~ +... mm` with spaces. **TOS remains HORIZONTAL-only**; vertical/inclined steel member tags are a single line and have no TOS. Actual PnP structural `Size`, elevation values, source member handles, ten native views/titles, SupportFocus, camera fixes, 1-click placement, and paper-space leader geometry are all unchanged.
+
+**Regression tests:** Verify the exact `\\P` native MText string for both LF and CRLF, no `fl-7.5TOS` concatenation, exact size and elevation values, unique one-line vertical tags, 130-label original paper layout, and the preceding REV22.21/19 tests. No change to the shared `SafeMText` helper, earlier commands or unrelated code.
+
+**Test:** Fully exit Plant 3D 2025, NETLOAD the new DLL, open a COPIED registered source TEST5 project, run `SPTC_ORTHO22_22_MTEXT_SEPARATOR_TEST`, choose SupportFocus, select 21 source structural objects (13 Plant 3D Structure Members), optionally 3 nearby pipes, choose an EMPTY registered native Ortho seed, confirm `REV22.22 TEST`, click once. Inspect FRONT and NW labels. The log contains `REV22_22_MTEXT_TWO_LINES=...` and the 10 native views/130 member annotation counts. Send `*_REV22_22_RESULT.txt` and screenshot for runtime visual verification.
+
+**Safety:** The custom paper-space leader/MText annotations are not native associative `PLANTORTHOANNOTATE`. The generator still invokes an undocumented native Ortho API and is experimental; copied projects only. REV22.21 remains the rollback.
+
+---
+
 # REV22.21 — Screenshot-matching Structural Member TOS Label (two lines, no blank row)
 
 **New isolated command:** `SPTC_ORTHO22_21_TOS_DIRECT_LINE_TEST` in AutoCAD Plant 3D 2025, copied registered test project only. The REV22.20 command remains unchanged and available.
