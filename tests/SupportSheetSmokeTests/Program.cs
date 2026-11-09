@@ -814,6 +814,71 @@ var outPlan=SupportOrthoMemberCalloutPlan17.Build(
     rev217Cameras,outOfView,594,841);
 Assert(outPlan.Callouts.Count==0&&outPlan.Skipped.Count==130,
     "REV22.17 safely skips members projected outside a saved Ortho viewport");
+// REV22.18: explicit start/end orientation overrides bounding extents.
+Assert(SupportOrthoVerticalMember18.IsVerticalAxis(
+    8504.0318,3120.7175,0,8504.0318,3120.7175,502.7872),
+    "REV22.18 recognize actual vertical steel column from Plant Geometry Start/End");
+Assert(!SupportOrthoVerticalMember18.IsVerticalAxis(
+    0,0,300,1000,0,300),
+    "REV22.18 reject horizontal structural beams");
+Assert(SupportOrthoVerticalMember18.IsStronglyVerticalBounds(
+    100,50,502.7872)&&
+    !SupportOrthoVerticalMember18.IsStronglyVerticalBounds(1000,50,75),
+    "REV22.18 strongly vertical extents fallback is never used for horizontal beams");
+var tosExact=SupportOrthoVerticalMember18.Evaluate(
+    100,50,502.7872,(8504.0318,3120.7175,0),
+    (8504.0318,3120.7175,502.7872),"502.7872",502.7872);
+Assert(tosExact.IsVertical&&
+    tosExact.TopOfSteelSource=="PLANT_TOP_OF_STEEL_PROPERTY"&&
+    SupportOrthoVerticalMember18.TosLabel(tosExact)=="TOS EL. +502.7872 mm",
+    "REV22.18 use exact source Top of Steel elevation beneath member tag");
+var tosFallback=SupportOrthoVerticalMember18.Evaluate(
+    100,50,502.7872,null,null,null,502.7872);
+Assert(tosFallback.IsVertical&&
+    tosFallback.DirectionSource=="STRONG_VERTICAL_BOUNDS"&&
+    SupportOrthoVerticalMember18.TosLabel(tosFallback)=="TOS~ +502.7872 mm",
+    "REV22.18 geometric fallback elevation is visibly marked approximate");
+var horizontalSteel=SupportOrthoVerticalMember18.Evaluate(
+    1000,50,80,(0,0,250),(1000,0,250),"900.000",900);
+Assert(!horizontalSteel.IsVertical&&
+    string.IsNullOrWhiteSpace(SupportOrthoVerticalMember18.TosLabel(horizontalSteel)),
+    "REV22.18 no TOS line for horizontal structural steel");
+var rev218Members=rev217Members.Select((m,i)=>
+    new SupportOrthoMemberCalloutPlan18.Member(
+        m.Handle,m.Size,m.X,m.Y,m.Z,
+        i<4,i<4?"+502.7872 mm":null,
+        i<3?"PLANT_TOP_OF_STEEL_PROPERTY":
+        i==3?"GEOMETRIC_TOP_APPROX":"NOT_VERTICAL")).ToArray();
+var rev218Callouts=SupportOrthoMemberCalloutPlan18.Build(
+    rev217Cameras,reservedTitleFrames.Titles,rev218Members,594,841);
+Assert(rev218Callouts.Callouts.Count==130&&
+    rev218Callouts.VerticalTosLines==40&&
+    rev218Callouts.ApproximateTosLines==10&&
+    rev218Callouts.Skipped.Count==0,
+    "REV22.18 130 uniquely routed leaders plus 40 vertical TOS second lines");
+Assert(rev218Callouts.Callouts
+    .Where(x=>x.HasTos).All(x=>x.Text.Contains("\nTOS"))&&
+    rev218Callouts.Callouts.Where(x=>!x.HasTos)
+        .All(x=>!x.Text.Contains("TOS")),
+    "REV22.18 second TOS line appears ONLY beneath vertical structural member name");
+Assert(rev218Callouts.Callouts.GroupBy(c=>c.View)
+    .All(g=>g.Count()==13&&
+        g.Select(x=>x.LabelTop).Distinct().Count()==13),
+    "REV22.18 13 separated native MText rows in each Ortho view");
+Assert(rev218Callouts.Callouts.All(c=>
+    c.AnchorX<c.LaneX&&c.LaneX<c.LabelX&&
+    c.LabelTop-c.LabelHeight>=841*.12&&
+    c.LabelX+c.LabelWidth<=594*.78),
+    "REV22.18 outward three-segment leaders and paper annotation keepouts");
+var rev218AllVertical=rev218Members.Select(x=>x with{
+    IsVertical=true,TosText="+502.7872 mm",
+    TosSource="PLANT_TOP_OF_STEEL_PROPERTY"}).ToArray();
+var rev218AllVerticalPlan=SupportOrthoMemberCalloutPlan18.Build(
+    rev217Cameras,reservedTitleFrames.Titles,rev218AllVertical,594,841);
+Assert(rev218AllVerticalPlan.Callouts.Count==130&&
+    rev218AllVerticalPlan.VerticalTosLines==130,
+    "REV22.18 two-line callouts remain collision-free even if all 13 steel pieces are vertical");
+Console.WriteLine("PASS: REV22.18 improved member leader routing, true vertical identification and exact/marked TOS elevation.");
 Console.WriteLine("PASS: REV22.17 130 true 3D source-member leaders and native camera projection without label overlap.");
 
 Console.WriteLine("PASS: REV22.16 Plant 3D structural Size field and original 10-view panel boundaries.");
