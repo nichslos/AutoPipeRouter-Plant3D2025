@@ -64,6 +64,43 @@ public static class SupportFocusedCubePlanner
         return new Result(support,focused,accepted,rejected,verticalClipped,xy,reach);
     }
 
+    /// <summary>
+    /// REV22.12: derive both SupportFocus clearances from the selected
+    /// structural support's actual dimensions. No user-supplied values.
+    /// The XY footprint is NEVER based on a long pipe's full route extents.
+    /// The capped Z reach prevents accidentally enclosing remote levels.
+    /// </summary>
+    public static AutoResult BuildAutomatic(
+        BoundingBox3 support,
+        IReadOnlyList<BoundingBox3> pipeBounds,
+        double sourceUnitToMm)
+    {
+        if(!double.IsFinite(sourceUnitToMm)||sourceUnitToMm<=0)
+            throw new ArgumentOutOfRangeException(nameof(sourceUnitToMm));
+        Valid(support);
+        double minHorizontalMm=Math.Min(support.SizeX,support.SizeY)*sourceUnitToMm;
+        double heightMm=support.SizeZ*sourceUnitToMm;
+        if(minHorizontalMm<=0||heightMm<=0||
+           !double.IsFinite(minHorizontalMm)||!double.IsFinite(heightMm))
+            throw new ArgumentException("REV22.12 support needs finite positive 3D extents.");
+
+        // 12% of smaller support footprint (per-side), limited to a
+        // practical 50-160 mm. Existing NativeOrthoLayout.Build() still
+        // adds its axis-specific padding after this first stage.
+        double autoXY=Math.Clamp(minHorizontalMm*0.12,50.0,160.0);
+
+        // Up to 45% of support height, 300-1200 mm each side.
+        // Selected nearby pipe extents can contribute ONLY their local
+        // vertical overlap; the Z cap rejects distant floors/routing.
+        double autoVertical=Math.Clamp(heightMm*0.45,300.0,1200.0);
+        Result cube=Build(support,pipeBounds,sourceUnitToMm,
+            autoXY,autoVertical);
+        return new AutoResult(cube,autoXY,autoVertical);
+    }
+
+    public sealed record AutoResult(
+        Result Cube,double XYClearanceMm,double PipeVerticalReachMm);
+
     private static void Valid(BoundingBox3 bounds)
     {
         if(!double.IsFinite(bounds.MinX)||!double.IsFinite(bounds.MinY)||
