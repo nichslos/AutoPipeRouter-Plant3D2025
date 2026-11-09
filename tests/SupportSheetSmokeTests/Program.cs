@@ -343,6 +343,39 @@ Assert(!NativeOrthoIsoTwistGuard.IsProjectedWorldUp(0,0,1,0,1,0),
     "REV22.5 do not assume world-up projection for TOP camera");
 Assert(!NativeOrthoIsoTwistGuard.IsZeroTwist(double.NaN),
     "REV22.5 reject nonfinite twist");
+// REV22.6: camera quadrant alone is insufficient. Compare normalized native
+// reference camera AND twist, where 360 degrees is equivalent to zero.
+var refNW=new NativeOrthoIsoReferenceMath.Pose(
+    "NW","A1",-1,1,1,0,.2);
+var generatedNW=new NativeOrthoIsoReferenceMath.Pose(
+    "NW","B9A",-157.43164,157.43164,157.43164,2*Math.PI,.2);
+var same=NativeOrthoIsoReferenceMath.Compare(refNW,generatedNW);
+Assert(same.OrientationMatches&&same.CameraMatches&&same.RollMatches&&same.ScaleMatches,
+    "REV22.6 normalized camera plus modulo-360 twist matches reference");
+var upsideDown=new NativeOrthoIsoReferenceMath.Pose(
+    "NW","B9A",-1,1,1,Math.PI,.2);
+var wrongRoll=NativeOrthoIsoReferenceMath.Compare(refNW,upsideDown);
+Assert(wrongRoll.CameraMatches&&!wrongRoll.RollMatches&&!wrongRoll.OrientationMatches,
+    "REV22.6 reject an upside-down viewport despite same camera direction");
+var differentQuadrant=new NativeOrthoIsoReferenceMath.Pose(
+    "NW","B9A",1,1,1,0,.2);
+Assert(!NativeOrthoIsoReferenceMath.Compare(refNW,differentQuadrant).CameraMatches,
+    "REV22.6 detect native direction mismatch");
+var differentScale=new NativeOrthoIsoReferenceMath.Pose(
+    "NW","B9A",-1,1,1,0,.1);
+var scaleInfo=NativeOrthoIsoReferenceMath.Compare(refNW,differentScale);
+Assert(scaleInfo.OrientationMatches&&!scaleInfo.ScaleMatches,
+    "REV22.6 scale difference is informational, not an orientation failure");
+bool invalidRefRejected=false;
+try
+{
+    NativeOrthoIsoReferenceMath.Compare(refNW,
+        new NativeOrthoIsoReferenceMath.Pose("NW","B9A",0,0,0,0,.2));
+}
+catch(ArgumentException){invalidRefRejected=true;}
+Assert(invalidRefRejected,"REV22.6 reject invalid reference direction");
+Console.WriteLine("PASS: REV22.6 native reference vs generated camera+twist comparison.");
+
 Console.WriteLine("PASS: REV22.5 four WCS projected-up isometric cameras and 180-degree twist correction.");
 
 Console.WriteLine("PASS: REV22.3 actual native viewport frame, collision and scale guards.");
