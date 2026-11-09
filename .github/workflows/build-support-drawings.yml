@@ -498,6 +498,22 @@ jobs:
           if ($new -match 'PLANTORTHOUPDATE_ALL_ENTERED|Editor.Command\("_.PLANTORTHOUPDATE"') { throw 'REV22.9 failed automatic update must not be reused' }
           if ($helper -notmatch 'before.CenterX,\-before.CenterY') { throw 'Both view center coordinates must be compensated' }
           if ($helper -notmatch 'IsZeroTwist' -or $helper -notmatch 'IsHalfTurn') { throw 'Only zero/180 initial twists are supported' }
+      - name: Verify REV22.11 optional support-focused pipe clipping
+        shell: pwsh
+        run: |
+          $new = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoTenViewSupportFocusedCubeTest.cs' -Raw
+          $helper = Get-Content 'src/SPTC.SupportDrawings/SupportFocusedCubePlanner.cs' -Raw
+          $old = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoTenViewAxialOrientationTest.cs' -Raw
+          if ($new -notmatch 'CommandMethod\("SPTC_ORTHO22_11_SUPPORT_CUBE_TEST"') { throw 'REV22.11 test command missing' }
+          if ($old -notmatch 'CommandMethod\("SPTC_ORTHO22_10_AXIAL_ORIENTATION_TEST"') { throw 'REV22.10 fallback removed' }
+          if ($new -notmatch 'REV22.11 TEST') { throw 'REV22.11 explicit copied-project consent missing' }
+          foreach($token in @('SupportFocus','Original','SupportFocusedCubePlanner.Build','REV22_11_FOCUS_XY_UNCHANGED_BY_PIPES','REV22_11_PIPE_BBOX_ACCEPTED','REV22_11_PIPE_Z_CLIPPED','NATIVE_CUBE_MIN','NATIVE_CUBE_MAX','AXIAL_FRAME_ROTATION_CHECK','ISO_FRAME_COORDINATES_CHECK','STEP10_ALL_TEN_NATIVE_VIEWS_REGISTERED')) {
+            if (-not $new.Contains($token)) { throw "REV22.11 missing required behavior: $token" }
+          }
+          if ($new -match 'PLANTORTHOUPDATE_ALL_ENTERED|Editor.Command\("_.PLANTORTHOUPDATE"') { throw 'REV22.9 rejected auto update must not be reused' }
+          if ($helper -notmatch 'minX=support.MinX-xy,maxX=support.MaxX\+xy') { throw 'Support rather than pipe route must determine cube X' }
+          if ($helper -notmatch 'minY=support.MinY-xy,maxY=support.MaxY\+xy') { throw 'Support rather than pipe route must determine cube Y' }
+          if ($helper -notmatch 'Math.Min\(pipe.MaxZ,support.MaxZ\+reach\)') { throw 'Selected long pipe Z must be bounded by local support reach' }
       - name: Compile SPTC Support Drawings
         run: dotnet build src/SPTC.SupportDrawings/SPTC.SupportDrawings.csproj -c Release
       - name: Verify compiled DLL
@@ -509,7 +525,7 @@ jobs:
       - name: Upload DLL artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SPTC-SupportDrawings-Plant3D2025-REV22_10
+          name: SPTC-SupportDrawings-Plant3D2025-REV22_11
           path: src/SPTC.SupportDrawings/bin/Release/net8.0-windows/SPTC.SupportDrawings.dll
           retention-days: 30
           if-no-files-found: error
