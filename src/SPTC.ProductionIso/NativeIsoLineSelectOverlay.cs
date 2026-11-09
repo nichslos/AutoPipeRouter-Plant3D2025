@@ -91,8 +91,8 @@ internal static class NativeIsoLineSelectOverlay
         _toggle.CheckedChanged += ToggleChanged;
         _host.Controls.Add(_toggle);
 
-        // REV07: reapply the native Filter mode to the active DWG's live
-        // Plant model entities; does not remove or rewrite project line tags.
+        // REV08: verify an actual PnP3dLineGroup Tag from the open DWG and
+        // apply it to Autodesk's own text filter (rather than PickFirst mode).
         _dwgOnly = new Button
         {
             Text = "DWG Only",
@@ -100,16 +100,15 @@ internal static class NativeIsoLineSelectOverlay
             Width = 87,
             Height = 24,
             Font = SystemFonts.MessageBoxFont,
-            Enabled = NativeDwgRouteScope.SelectionPrepared
+            Enabled = ActiveDwgTags.Count == 1
         };
         _dwgOnly.Click += (_, _) =>
         {
-            if (!NativeDwgRouteScope.TryApplyFilter(_dialog))
+            if (!ActiveDwgTags.ApplyOneTag(_dialog, null))
                 MessageBox.Show(
-                    "Automatic Filter activation was not available in this Plant 3D dialog. " +
-                    "Click the third (Filter) icon above the line list to filter the current drawing selection. " +
-                    "The original Drawing and Project buttons remain unchanged.",
-                    "SPTC REV07", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    "Could not apply the current DWG's verified line tag to the native filter.\n" +
+                    "Check SPTC_DWGTAGS in the AutoCAD command line. No project records were changed.",
+                    "SPTC REV08", MessageBoxButtons.OK, MessageBoxIcon.Information);
         };
         _host.Controls.Add(_dwgOnly);
         _ = _host.Handle;
