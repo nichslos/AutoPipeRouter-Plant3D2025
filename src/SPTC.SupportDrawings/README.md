@@ -1,3 +1,30 @@
+# SPTC Support Drawings — REV22.11: Compact Support-Focused OrthoCube with Local Pipe Runs
+
+**Requested behavior (November 9, 2026):** A long horizontal pipe crosses the top of a steel pipe support; the OrthoCube should wrap the **support and only the local crossing pipe section**, not the entire length of the pipe route. The native OrthoCube is a 3D crop and does not modify/shorten the 3D pipe itself.
+
+**New isolated command:** `SPTC_ORTHO22_11_SUPPORT_CUBE_TEST`. This retains `SPTC_ORTHO22_10_AXIAL_ORIENTATION_TEST` and all earlier commands, all ten native view presets, six axial corrections, four successful isometric corrections, common scale, one-click PAPER placement, copied native registered Ortho seed, and the safety guards against frame overlap.
+
+**Choose mode after running the command:**
+- `SupportFocus` (default): select structural support members only; do **not** window-select a long pipe as part of the support selection, or its full GeometricExtents would invalidate a compact support envelope. The command rejects selected objects whose managed type ends in `Pipe`, when recognizable.
+- `Original`: reuse REV22.10 original selection-bound box behavior, without any new pipe checks or clearance settings.
+
+In `SupportFocus`, enter horizontal clearance per side (default **100 mm**) and maximum nearby pipe reach above/below support (default **500 mm**). Optionally select one or more pipes whose local section crosses the support. This selection contributes **Z only** to the focused envelope; the source model reference continues to include source DWG geometry, which the native OrthoCube should clip by its bounds. Pipe X/Y are only tested for intersection with the selected support footprint ± clearance; **the pipe route's remote X/Y endpoints can never enlarge the cube**. A pipe outside that footprint or beyond the configured Z reach is rejected. Pipe Z extents are capped to the reach in case the selected object also has remote vertical geometry. The standard NativeOrthoLayout 10% padding is then applied. Pipe selection can be skipped; this yields a support-only compact cube, possibly requiring adjustment of the vertical clearance to include pipes above the support.
+
+**Limitation:** Axis-aligned CAD `GeometricExtents` are conservative boxes, not exact line-vs-box intersections. A distant bent pipe whose overall bounding box overlaps the support can appear to qualify even if no actual pipe segment passes through the cube. Selected route entities must be checked visually. This mode works when the structural support and pipe geometry are reachable in the current source DWG; pipe geometry in other Xrefs not enumerated by this command is not scanned or auto-selected. Native generator's support for clipping after Update View must be validated in a copied project before production.
+
+**Test procedure (copied/backup Plant 3D 2025 project only):**
+1. Restart Plant 3D, `NETLOAD` REV22.11 `SPTC.SupportDrawings.dll`, and open the saved registered support source DWG with the long pipe.
+2. Run `SPTC_ORTHO22_11_SUPPORT_CUBE_TEST`, choose `SupportFocus` (Enter). Select **only structural support members**, set XY clearance (e.g. 100 mm) and maximum local pipe reach (e.g. 500 mm). Select the long pipe entity/entities crossing the support, or press Enter to skip.
+3. Select an EMPTY native Project Manager Ortho seed, confirm new test drawing, type `REV22.11 TEST`, and click **once** inside the paper layout for all ten views.
+4. Before manually updating, verify that the native OrthoCube is compact in X/Y, encloses the entire support and the nearby pipe diameter, and clips the long pipe ends. Verify TOP/BOTTOM/LEFT/RIGHT/FRONT/BACK and NW/NE/SW/SE orientations still match the reference.
+5. Save `*_REV22_11_RESULT.txt` and screenshots of the source 3D support with long pipe and of the native Ortho Editor cube/ten views. Then manually Update View twice and verify the same clipping persists.
+
+**Expected diagnostics:** `REV22_11_CUBE_MODE=SupportFocus`, `REV22_11_SUPPORT_RAW_MIN/MAX`, `REV22_11_SELECTED_PIPE_BOUNDS_COUNT`, `REV22_11_PIPE_BBOX_ACCEPTED`, `REV22_11_PIPE_BBOX_REJECTED`, `REV22_11_PIPE_Z_CLIPPED`, `REV22_11_FOCUSED_MIN/MAX`, `NATIVE_CUBE_MIN/MAX`, and the existing ten native registration, paper size, iso/axial readback and collision checks. All such PASS values confirm internal metadata consistency, not that the pipe rendered or cropped correctly; visual runtime comparison remains essential.
+
+**No source geometry or Ortho.dcf direct edits.** This is still an experimental command because it invokes Autodesk's non-public `GenerateOrthos` API. Test only in a copied project.
+
+---
+
 # SPTC Support Drawings — REV22.10: Six Axial Orientation Test
 
 **Evidence, 2026-11-09:** REV22.9 generated all ten model-linked views with one click and a common 1:5 scale; all ten saved preset names passed. The plugin-generated TOP/BOTTOM/LEFT/RIGHT/FRONT/BACK geometry was visible, but the screenshots compared with those same views after manual native Update View indicate a consistent 180° difference. Unlike REV22.7 NW/NE/SW/SE, the six axial viewports did **not** have initial TwistAngle or ViewCenter recorded. REV22.9's attempted automatic `PLANTORTHOUPDATE All` failed with `eInvalidInput` and is **not used** in this revision.
