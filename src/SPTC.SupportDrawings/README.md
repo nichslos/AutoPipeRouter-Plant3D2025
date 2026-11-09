@@ -1,3 +1,29 @@
+# REV 22.16 — Read Plant 3D Structure Member.Size From Project DataLinks
+
+**Purpose:** The user's REV22.15 test selected 21 separate structural objects, including 13 actual Plant 3D Structure Members, but the compact panel incorrectly printed `MEMBER: SIZE NOT RECORDED`. A subsequent Properties screenshot confirms those native members *do* expose **Plant 3D > Structural > Size**, e.g. `Sloping channel 100x50 web-5 fl-7.5`, and `Long Description (Size)`. This information is stored in Plant 3D's PnP project database, not reliably in ordinary AutoCAD BlockReference attributes or .NET public entity properties.
+
+**New isolated command:** `SPTC_ORTHO22_16_PNP_STEEL_SIZE_TEST`. REV22.15, REV22.14 and REV22.13 test commands remain present and unchanged.
+
+**Read-only fix:** `SupportOrthoPlantProperties16.Inspect` keeps REV22.15's source CAD metadata inspection and additionally obtains `PlantApplication.CurrentProject.ProjectParts["Piping"].DataLinksManager`, invokes `FindAcPpRowId(ObjectId)` for selected **native StructureMember objects only**, then `GetAllProperties(rowId, true)`. It takes the actual project-recorded `Size` property (case-insensitive), preserving textual section designation exactly. It does not use Length/Top of Steel/Bottom of Steel or geometric bounding dimensions as a substitute; it never sets properties or writes the PnP DB. No additional third-party DLL is packaged; Autodesk's runtime is queried via reflection to preserve the existing standalone plugin build.
+
+**Paper-space display:** The single compact `STRUCTURAL SUPPORT` panel from REV22.15 remains in the safe central gap, with `ASSEMBLY: 21 OBJECTS` or an actual `BLOCK: ...` identity. If the 13 Structure Members share a Size, show it once as `MEMBER: Sloping channel 100x50 web-5 fl-7.5`; if different channel/angle sizes exist, show their distinct values. Unknown sizes are still marked `MEMBER: SIZE NOT RECORDED`; no guess is made. The ten native views, view titles, original native view metadata, group placement, automatic SupportFocus and long-pipe clipping are unchanged.
+
+**Diagnostics written in TXT:**
+- `REV22_16_PNP_STRUCTURE_CANDIDATES` — count of structure members eligible for DataLinks.
+- `REV22_16_PNP_LINKED_ROW_COUNT` — members linked to PnP rows.
+- `REV22_16_PNP_MEMBERS_WITH_SIZE` — number with actual Size property.
+- `REV22_16_MEMBER_SIZES` and `REV22_16_SOURCE_EVIDENCE` — exact values and their source handles.
+- `REV22_16_PNP_DIAGNOSTIC` — read-only diagnostics if a Plant API is absent or a row is not linked.
+- `STEP10_SUPPORT_PANEL_STATUS` and existing ten-view/title invariants.
+
+**Test:** Completely exit Plant 3D 2025, extract and NETLOAD REV22.16 DLL, use a COPIED registered project, run the new command, select `SupportFocus`, select the same 21 structural support objects (including the 13 native structure members), optionally select the three pipe routes, choose an EMPTY registered native Ortho seed, enter `REV22.16 TEST`, click once. Inspect the PnP linked-row count, steel-size values, final compact panel, and ten Ortho views. Share `*_REV22_16_RESULT.txt` and screenshot. Save/reopen and test native Update View independently.
+
+**Autodesk reference:** Autodesk Community confirms `DataLinksManager.GetAllProperties(partRowId, true)` returns the structural-member `Size` and `Length` fields: https://forums.autodesk.com/t5/autocad-plant-3d-forum/how-to-read-the-structural-member-profile-information-using-api/td-p/10201143. Autodesk also documents the native **Structure Member.Size** field for customized `PLANTORTHOANNOTATE` styles, as an alternative to this custom sheet annotation: https://www.autodesk.com/support/technical/article/caas/sfdcarticles/sfdcarticles/How-to-create-an-orthographic-annotation-that-shows-the-structure-member-s-size-in-AutoCAD-Plant-3D.html.
+
+**Status:** The CI smoke suite can validate compilation, existing pure layout calculations, PnP access guards and native viewer code signatures, but cannot execute Autodesk PnP project retrieval without a live Plant 3D instance. Runtime validation is required. REV22.13 remains the original visually verified fallback. The experimental internal `GenerateOrthos` API is still used, so copied projects only.
+
+---
+
 # REV 22.15 — Compact Structural Annotations for Blocks AND Individual Members
 
 **Isolated command:** `SPTC_ORTHO22_15_COMPACT_STEEL_ANNOTATIONS_TEST` (Plant 3D 2025, copied/test project only). REV22.13 and REV22.14 commands remain unchanged and available in the DLL.
