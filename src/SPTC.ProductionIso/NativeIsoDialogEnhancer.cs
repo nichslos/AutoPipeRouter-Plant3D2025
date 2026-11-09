@@ -271,6 +271,8 @@ internal static class NativeIsoDialogEnhancer
             SetParent(_overlay.Handle, dialog);
             PositionOverlay(dialog);
             _overlay.Show();
+            // Optional Select All checkbox at bottom-left; REV05 save/export untouched.
+            NativeIsoLineSelectOverlay.Attach(dialog);
             _document?.Editor.WriteMessage("\nSPTC: Original Production Iso dialog located; custom folder field attached.");
         }
         catch (Exception ex)
@@ -289,10 +291,12 @@ internal static class NativeIsoDialogEnhancer
         int y = (int)(bounds.Height * 0.384);
         int w = Math.Max(300, bounds.Width - x - 15);
         SetWindowPos(_overlay.Handle, IntPtr.Zero, x, y, w, 34, 0x0004 | 0x0040);
+        NativeIsoLineSelectOverlay.Position(dialog);
     }
 
     private static void RemoveOverlay()
     {
+        NativeIsoLineSelectOverlay.Hide();
         _native = IntPtr.Zero;
         try { _overlay?.Dispose(); } catch { }
         _overlay = null;
