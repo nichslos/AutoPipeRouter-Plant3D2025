@@ -29,5 +29,6 @@
     <Compile Include="../../src/SPTC.SupportDrawings/SupportOrthoCalloutPlan.cs" Link="SupportOrthoCalloutPlan.cs" />
     <Compile Include="../../src/SPTC.SupportDrawings/SupportOrthoSelection15.cs" Link="SupportOrthoSelection15.cs" />
     <Compile Include="../../src/SPTC.SupportDrawings/SupportOrthoSummaryPanel15.cs" Link="SupportOrthoSummaryPanel15.cs" />
+    <Compile Include="../../src/SPTC.SupportDrawings/SupportOrthoMemberCalloutPlan17.cs" Link="SupportOrthoMemberCalloutPlan17.cs" />
   </ItemGroup>
 </Project>
