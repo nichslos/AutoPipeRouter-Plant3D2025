@@ -83,7 +83,10 @@ internal sealed class NativeIsoToolbarClickFilter : IMessageFilter
             Control? control = Control.FromHandle(hwnd);
             if (control == null) return true;
 
-            if (control is ToolStrip strip)
+            if (control is ToolStrip strip && GetWindowRect(hwnd, out RECT stripRect) &&
+                IsTopModeButton(dialog,
+                    stripRect.Left + stripRect.Width / 2,
+                    stripRect.Top + stripRect.Height / 2))
             {
                 foreach (ToolStripItem item in strip.Items)
                 {
