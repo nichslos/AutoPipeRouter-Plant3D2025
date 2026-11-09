@@ -1,3 +1,17 @@
+# SPTC Support Drawings — REV22.8: TOP/BOTTOM/LEFT/RIGHT/FRONT/BACK Native Edit View Presets
+
+**Runtime user finding:** REV22.7 successfully shows all four isometrics (NW, NE, SW, SE) with full support geometry after correcting native viewport rotation and center. The remaining six orthographic/axial views appear as **Current View** when opened in the Plant 3D 2025 native Ortho Editor.
+
+**Root-cause candidate from source:** Earlier commands saved `TopView`, `BottomView`, `LeftView`, `RightView`, `FrontView`, `BackView` into `GenerateOrthos` `strViewType`, but only confirmed the parser recognition of the four isometric strings `NW`, `NE`, `SW`, `SE`. Actual native `UIUtils.GetViewTypeFromName(string)` recognition of the six standard strings was never verified. REV22.8 does not assume any undocumented name is correct. It probes the *installed* Plant 3D 2025 Edit View parser for each axial view (short enum name first, previous `*View` form, and other labels), selects the first name mapping exactly to its expected native `ViewType` enum, and aborts before any geometry generation if no candidate matches.
+
+**New isolated command:** `SPTC_ORTHO22_8_AXIAL_PRESET_TEST` (copied project/empty registered native Ortho seed only). The earlier `SPTC_ORTHO22_7_ISO_FRAME_TEST` command and working NW/NE/SW/SE camera, native type identifiers, twist and ViewCenter compensation, one-click layout and six standard camera vectors are unchanged. REV22.8 additionally checks parser matches for **all ten views** and reads back each saved `IDwgViewDef.ViewType` for all six axial views; a saved type mismatch stops the test. Logs include `STEP5_<AXIAL>_AXIAL_CANDIDATES`, `STEP5_<AXIAL>_EDITOR_PRESET`, `STEP8_<AXIAL>_SAVED_VIEWDEF_TYPE` and `STEP8_<AXIAL>_SAVED_TYPE_CHECK`.
+
+**How to test:** Fully restart Plant 3D 2025 and `NETLOAD` the REV22.8 DLL. In a backed-up/copied project, open the same registered source model DWG as REV22.7 and run `SPTC_ORTHO22_8_AXIAL_PRESET_TEST`. Select the same support members and an empty project-registered native Ortho seed. Accept the warning and type `REV22.8 TEST`, click **once** in the paper layout, and save the new `_ORTHO_R28AXIAL_` drawing. Verify the **Edit View preset selector** individually for TOP/BOTTOM/LEFT/RIGHT/FRONT/BACK and all NW/NE/SW/SE; capture screenshots. Run native **Update View twice**, save and reopen, and check that the six axial labels remain correct, four isometrics remain fully visible, and no viewport overlaps occur. Send `*_REV22_8_RESULT.txt` and after-update screenshot(s).
+
+**Limitations:** Native Edit View parser and `GenerateOrthos` are Autodesk internal APIs. Parser matching and readback tests do not prove Edit View UI behavior or Update View persistence: only actual Plant 3D 2025 runtime acceptance can do that. If an axial candidate is not recognized, this test intentionally fails without inventing a type identifier or altering previous working commands.
+
+---
+
 # SPTC Support Drawings — REV22.7 Native Isometric Frame Center Fix (Experimental)
 
 **Evidence:** REV22.6.1 comparison against manually created native NW/NE/SW/SE shows matching normalized `ViewDirection`, 0° ≡ 360° `TwistAngle`, and 1:5 `CustomScale`, but the plugin-generated views appear blank or partly clipped while native reference views show geometry. Previously uploaded REV22.4 audit files also show this repeatable view-center reversal on all four views after native Update View:
