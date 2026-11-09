@@ -474,6 +474,50 @@ try
 }
 catch(ArgumentException){nonfiniteAxialRefused=true;}
 Assert(nonfiniteAxialRefused,"REV22.10 reject invalid axial viewport center");
+// REV22.11: long pipe runs never expand the support-focused XY cube.
+var supportBox=new BoundingBox3(0,0,0,250,150,2000);
+var longRoute=new BoundingBox3(-100000,25,2075,100000,100,2180);
+var focus=SupportFocusedCubePlanner.Build(
+    supportBox,new[]{longRoute},1,100,500);
+Assert(focus.PipesAccepted==1&&focus.PipesRejected==0,
+    "REV22.11 accepts horizontal long pipe over support");
+Assert(focus.FocusBounds.MinX==-100&&focus.FocusBounds.MaxX==350&&
+    focus.FocusBounds.MinY==-100&&focus.FocusBounds.MaxY==250,
+    "REV22.11 excludes far pipe endpoints from XY footprint");
+Assert(focus.FocusBounds.MinZ==0&&focus.FocusBounds.MaxZ==2180,
+    "REV22.11 includes local pipe outside diameter and support elevation");
+Assert(focus.FocusBounds.SizeX<1000&&
+    focus.FocusBounds.SizeX<longRoute.SizeX/100,
+    "REV22.11 no enlarged pipe route OrthoCube");
+var padded=NativeOrthoLayout.Build(focus.FocusBounds,1);
+Assert(padded.PaddedCube.SizeX<1000&&padded.PaddedCube.MaxZ>2180,
+    "REV22.11 native layout receives compact padded cube");
+var farRoute=new BoundingBox3(-100000,3000,2075,100000,3100,2180);
+var farVertical=new BoundingBox3(-100000,25,5000,100000,100,6000);
+var unrelated=SupportFocusedCubePlanner.Build(
+    supportBox,new[]{farRoute,farVertical},1,100,500);
+Assert(unrelated.PipesAccepted==0&&unrelated.PipesRejected==2&&
+    unrelated.FocusBounds.MinZ==supportBox.MinZ&&
+    unrelated.FocusBounds.MaxZ==supportBox.MaxZ,
+    "REV22.11 exclude XY-disjoint and far-above-support pipe bounds");
+var extremelyTallPipe=new BoundingBox3(-100000,25,-5000,100000,100,8000);
+var capped=SupportFocusedCubePlanner.Build(
+    supportBox,new[]{extremelyTallPipe},1,100,500);
+Assert(capped.PipesAccepted==1&&capped.PipesVerticalClipped==1&&
+    capped.FocusBounds.MinZ==-500&&capped.FocusBounds.MaxZ==2500,
+    "REV22.11 cap local vertical reach without stretching to route elevation");
+var noPipes=SupportFocusedCubePlanner.Build(
+    supportBox,Array.Empty<BoundingBox3>(),1,50,500);
+Assert(noPipes.PipesAccepted==0&&noPipes.FocusBounds.SizeX==350,
+    "REV22.11 support-focused mode works without selecting pipes");
+bool invalidCubeRejected=false;
+try{
+    SupportFocusedCubePlanner.Build(supportBox,
+        new[]{new BoundingBox3(0,0,0,double.NaN,10,10)},1);
+}catch(ArgumentException){invalidCubeRejected=true;}
+Assert(invalidCubeRejected,"REV22.11 reject invalid pipe bounding extents");
+Console.WriteLine("PASS: REV22.11 compact support-based OrthoCube with long-route XY clipping and local Z selection.");
+
 Console.WriteLine("PASS: REV22.10 six axial half-turn and center guards.");
 
 Console.WriteLine("PASS: REV22.8 six native axial Edit View presets are runtime-recognized or fail closed.");
