@@ -1,3 +1,21 @@
+# REV 22.19 — CORRECTION: TOS elevation for HORIZONTAL structural steel ONLY
+
+**New isolated command:** `SPTC_ORTHO22_19_HORIZONTAL_TOS_TEST` in AutoCAD Plant 3D 2025. Keep REV22.18 and REV22.17 commands unchanged as fallbacks. Test only in a COPIED registered Plant 3D project; authorize with `REV22.19 TEST`.
+
+**User correction:** The previous REV22.18 added Top of Steel (TOS) beneath VERTICAL steel. That is not the intended requirement. REV22.19 **removes TOS from ALL vertical structural member annotations**; a second line `TOS EL. +... mm` appears ONLY beneath the Size/handle annotation of confirmed HORIZONTAL structural members. Members whose orientation is clearly inclined are excluded as well. All members, vertical/horizontal/inclined, continue to get their own separate true PnP `Structure Member.Size` labels and projected leader lines across the ten native views.
+
+**Authoritative horizontal test:** Use native StartPoint/EndPoint or exposed Start X/Y/Z, End X/Y/Z to determine member direction: horizontal span at least 150 mm and absolute Z component at most 15% of axis length. If native start/end endpoints are absent, a strongly horizontal bounding extent (XY span at least 150 mm and more than 1.8× Z extent) is used as an explicitly logged fallback, never the rule `not vertical = horizontal`. This means a vertical column never receives an elevation merely because it has a reported TopOfSteel field. User should inspect `HORIZONTAL` and `DIRECTION_SOURCE` entries for representative members in the new result TXT.
+
+**TOS source:** As before, read the genuine `TopOfSteel` value exposed through Plant 3D's structural member or the Piping `DataLinksManager.GetAllProperties`. Exact project values appear as `TOS EL. +502.7872 mm`; if not retrievable, display upper geometric Z for a **confirmed horizontal member only** as visibly approximate `TOS~ +502.7872 mm`. No TOS for vertical/clearly inclined steel. Unit assumption mm (TEST5 project units). Top of Steel is an elevation, not a tag-length or projected paper coordinate.
+
+**Presentation:** Retain REV22.18's improved orthogonal per-member leader lanes, increased label spacing, and one native editable paper-space MText per structure member per view, with paragraph break before horizontal-only TOS. Preserve ten native Ortho views, REV22.13 titles, automatic SupportFocus/compact cube, pipe clipping, saved native camera presets, scale and one-click placement. Do not create a combined BOM legend.
+
+**Run in copied project:** Exit Plant 3D 2025, NETLOAD new DLL, select the TEST5 source with same 21 support objects (13 Plant native Structure Members), optionally 3 nearby pipes, choose empty registered native Ortho seed, type `REV22.19 TEST`, click once. Send `*_REV22_19_RESULT.txt` and closeups of FRONT/NW. Check `REV22_19_HORIZONTAL_SOURCE_MEMBER_COUNT`, `REV22_19_MEMBER_TOS`, `STEP10_HORIZONTAL_TOS_LABEL_COUNT`, `STEP10_HORIZONTAL_TOS_EXPECTED`, `STEP10_MEMBER_ANNOTATIONS_CHECK`. Target 130 member labels if safely placed; horizontal-only TOS line count = 10 × eligible member count, if all labels fit. Check actual TOS numbers against Properties. Project-data property retrieval and leader appearance require live runtime verification.
+
+**Limitations:** Member labels and leaders are custom, nonassociative paper-space entities, not native associative `PLANTORTHOANNOTATE`; source updates may not reposition them. Geometric fallback must not be confused with verified Plant 3D Top of Steel. The internal native Ortho generation call is not part of Autodesk's public supported API: test only in copied projects.
+
+---
+
 # REV 22.18 — Improved individual structural-member leader routing and vertical TOS elevations
 
 **New isolated test command:** `SPTC_ORTHO22_18_VERTICAL_TOS_TEST` on AutoCAD Plant 3D **2025**. Use a copied, registered project and type `REV22.18 TEST`. The prior REV22.17 command is unchanged and remains available as the verified 130-leader baseline.
