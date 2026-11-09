@@ -1,22 +1,19 @@
-# SPTC Production Iso REV11 — Faster toggle, cleaner left panel
+# SPTC Production Iso REV12 — Align Custom Save Location row
 
-REV11 is based directly on REV10. Earlier REV05–REV10 branches and builds remain unchanged.
+Based directly on REV11. This revision makes one **layout-only** adjustment:
+the Custom Save Location label and entry field are shifted about 28 pixels left,
+to align their left edges with the native **Revision number** label and entry.
 
-## Changes
-- Removed the redundant **DWG Only** button from the lower-left corner. The **Select All** checkbox is preserved and now uses the full width of the footer.
-- The two Autodesk Drawing/Project buttons still toggle between full native line list and the verified active current-DWG tag, per REV10.
-- Reduced the plugin's debounce **when returning to the full list** from 350 ms to 100 ms. Applying the active route still waits 300 ms to allow Autodesk's mode transition.
-- **Important limitation:** Autodesk's native Drawing/Project list may still take time to retrieve pipeline tags from a project stored on a mapped/shared drive. This revision only reduces the plugin-imposed delay, not Autodesk's own database refresh time.
-- No edits to Plant 3D project databases, model files, Project Manager settings, IsoConfig.xml, Project.xml or IsoPart.xml.
-- The REV05 background ISO copy/export and the Custom Save Location field are unchanged.
+The Browse button remains at the same right edge. The original Create Production
+Iso window is still used. Select All, Drawing/Project active/full route toggle,
+and automatic export to a custom folder are unchanged.
 
 ## Test
-1. Exit Plant 3D 2025 completely, reopen, and NETLOAD this REV11 DLL.
-2. Run SPTC_PRODISO in the one-route test drawing.
-3. Verify the normal full line list is visible when the dialog first opens.
-4. Click the Drawing or Project icon at top-left: the verified active line number should be shown.
-5. Click again: native full list should reappear. The filter textbox should become blank.
-6. Repeat and test how quickly the list returns. On large network projects, the native query still determines most of the latency.
-7. Verify Select All works as before and that the Custom Save Location field is intact; generate a single test ISO only after checking selection.
+1. Completely close AutoCAD Plant 3D 2025 to unload the prior DLL.
+2. Reopen Plant 3D, run NETLOAD, choose this REV12 SPTC.ProductionIso.dll.
+3. Run SPTC_PRODISO. Check the horizontal alignment of the two rows.
+4. Verify Browse works, then optionally test one ISO export.
 
-This is an experimental dialog extension compiled via GitHub Actions. Compilation is not a substitute for in-Plant 3D runtime testing.
+No changes to Project Manager, ISO project XML, PnP records, model geometry, or
+existing DWGs. Native-dialog injection is experimental; source builds alone
+cannot verify exact alignment at the user's Windows display scaling.
