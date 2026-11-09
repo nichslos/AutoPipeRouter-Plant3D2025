@@ -610,7 +610,27 @@ jobs:
           if($new -match 'PLANTORTHOUPDATE_ALL_ENTERED|Editor.Command\("_.PLANTORTHOUPDATE"') { throw 'Do not reuse unverified native auto update' }
           if($new -match 'CreateNativePaperSupportAnnotations\(') { throw 'Do not repeat ten noisy annotation callouts' }
           if($new -notmatch 'CreateNativePaperSupportSummary') { throw 'One compact paper summary must remain' }
-      - name: Compile SPTC Support Drawings
+      - name: Verify REV22.17 per-structural-member native view leaders
+        shell: pwsh
+        run: |
+          $new = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoTenViewMemberLeadersTest.cs' -Raw
+          $pure = Get-Content 'src/SPTC.SupportDrawings/SupportOrthoMemberCalloutPlan17.cs' -Raw
+          $source = Get-Content 'src/SPTC.SupportDrawings/SupportOrthoMemberSource17.cs' -Raw
+          $prior = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoTenViewPnpSteelSizeTest.cs' -Raw
+          if($new -notmatch 'CommandMethod\("SPTC_ORTHO22_17_MEMBER_LEADERS_TEST"') { throw 'REV22.17 isolated command missing' }
+          if($prior -notmatch 'CommandMethod\("SPTC_ORTHO22_16_PNP_STEEL_SIZE_TEST"') { throw 'Working REV22.16 command missing' }
+          if($new -notmatch 'REV22.17 TEST') { throw 'COPIED test project guard missing' }
+          foreach($token in @('SupportOrthoPlantProperties16.Inspect','SupportOrthoMemberSource17.Read','ReadNativeMemberCameras','SupportOrthoMemberCalloutPlan17.Build','CreateNativePaperMemberLeaders','STEP10_INDIVIDUAL_MEMBER_ANNOTATION_COUNT','STEP10_MEMBER_LABEL','STEP10_MEMBER_ANNOTATIONS_CHECK','STEP10_ALL_TEN_NATIVE_VIEWS_REGISTERED','STEP10_VIEW_TITLE_COUNT','NativeOrthoViewTitlePlan.ReserveBelow','SupportFocusedCubePlanner.BuildAutomatic','AXIAL_FRAME_ROTATION_CHECK','ISO_FRAME_COORDINATES_CHECK')) {
+            if(-not $new.Contains($token)) { throw "REV22.17 per-member guard missing: $token" }
+          }
+          if($new -match 'SupportOrthoSummaryPanel15.Build\(') { throw 'REV22.17 still creates aggregated member size BOM box' }
+          foreach($token in @('WorldToPlane','ViewCenterX','TwistRadians','TextTop','View','Handle','Project','TextBoxMinimumMm')) {
+            if(-not $pure.Contains($token)) { throw "Per-member projector missing: $token" }
+          }
+          if(-not $source.Contains('PNP_STRUCTURE_SIZE handle=') -or -not $source.Contains('GeometricExtents')) { throw 'True source member IDs and 3D anchor points required' }
+          if($new -match 'PLANTORTHOUPDATE_ALL_ENTERED|Editor.Command\("_.PLANTORTHOUPDATE"') { throw 'Do not reuse native auto update' }
+          if($new -notmatch 'new MText' -or $new -notmatch 'new Line\(') { throw 'Paper-space editable leader and text missing' }
+
         run: dotnet build src/SPTC.SupportDrawings/SPTC.SupportDrawings.csproj -c Release
       - name: Verify compiled DLL
         shell: pwsh
@@ -621,7 +641,7 @@ jobs:
       - name: Upload DLL artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SPTC-SupportDrawings-Plant3D2025-REV22_16
+          name: SPTC-SupportDrawings-Plant3D2025-REV22_17
           path: src/SPTC.SupportDrawings/bin/Release/net8.0-windows/SPTC.SupportDrawings.dll
           retention-days: 30
           if-no-files-found: error
