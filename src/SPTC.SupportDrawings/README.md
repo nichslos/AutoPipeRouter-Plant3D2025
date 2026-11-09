@@ -1,3 +1,23 @@
+# SPTC Support Drawings — REV22.13: Ten Native Ortho View Titles
+
+**User request:** Automatically place an editable, printed view title on every view created by SupportFocus. Example: `TOP VIEW`. Do not alter the working REV22.12 automatic SupportFocus/Block Reference handling, native OrthoCube crop, 10 view presets, 6 axial and 4 ISO rotations, 1-click placement, scale or project-linked native views.
+
+**Isolated command:** `SPTC_ORTHO22_13_VIEW_TITLES_TEST` in an AutoCAD Plant 3D 2025 **copied test project**. It retains the exact REV22.12 workflow (choose SupportFocus or Original; select structural support members or a valid 3D Block Reference; optionally select crossing long pipes; choose EMPTY registered Ortho seed; authorize with `REV22.13 TEST`; one click places ten views). No numeric clearance inputs.
+
+**Titles created (one per saved native view):**
+- `TOP VIEW`, `BOTTOM VIEW`, `LEFT VIEW`, `RIGHT VIEW`, `FRONT VIEW`, `BACK VIEW`.
+- `NW ISOMETRIC VIEW`, `NE ISOMETRIC VIEW`, `SW ISOMETRIC VIEW`, `SE ISOMETRIC VIEW`.
+
+**Presentation:** All titles are editable native AutoCAD paper-space `MText`, centered **below** their corresponding Ortho viewport, 4 mm text height, on a separate `SPTC_VIEW_TITLES` layer using the current drawing's text style. Labels are independent paper-space annotations: not part of model geometry, OrthoCube, viewport content or native view-definition metadata.
+
+**Layout protection:** Pure `NativeOrthoViewTitlePlan` computes a 4 mm gap plus a reserved 6 mm title band below each viewport. If the group is too close to the native paper layout's bottom 12% title-block keepout, REV22.13 shifts the WHOLE 10-view group upward (one translation, not per-view movement) before native generation. The original 10 viewport relative spacing, X coordinates, sizes, scale, and 22% right keepout remain unchanged. The plan checks ten expected native preset labels exactly, bounds, all title/viewport and title/title intersections. An impossible sheet layout is rejected *before* any native views are generated. After successfully registering ten views, it checks the actual paper-space viewport frames then inserts the ten text objects atomically. The result TXT logs `STEP5_TITLE_RESERVED_SHIFT_Y_MM`, `STEP10_VIEW_TITLE_COUNT=10`, `STEP10_TITLE_TOP=TOP VIEW...`, and `STEP10_TITLE_PLACEMENT_CHECK=PASS`.
+
+**Runtime test:** Restart Plant 3D and `NETLOAD` the REV22.13 DLL, generate in a copied registered project using the command. Confirm all ten labels appear centered under their respective views, have readable text and do not cover the title block, neighboring views, pipes or supports. Edit a title using AutoCAD text editing to confirm it is normal MText. Save/reopen, then update the native Ortho views twice and ensure labels persist in paper space. Check the four NW/NE/SW/SE isometrics, six standard directions, and compact SupportFocus cube remain correct. Send `*_REV22_13_RESULT.txt` and screenshots before and after Update View.
+
+**Safety:** REV22.12 command remains unchanged as the verified fallback. REV22.13 still uses an unsupported Autodesk internal `GenerateOrthos` method and is NOT production-validated. Do not edit `Ortho.dcf` directly.
+
+---
+
 # SPTC Support Drawings — REV22.12: Automatic SupportFocus Clearance
 
 **User request:** Preserve the working REV22.11 SupportFocus compact OrthoCube but remove manual XY clearance and pipe Z-reach numeric inputs. REV22.12 is a new independent test command; REV22.11 remains available unchanged for a manually tuned comparison.
