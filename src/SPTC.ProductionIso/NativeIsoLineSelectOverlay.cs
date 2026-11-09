@@ -104,7 +104,9 @@ internal static class NativeIsoLineSelectOverlay
         };
         _dwgOnly.Click += (_, _) =>
         {
-            if (!ActiveDwgTags.ApplyOneTag(_dialog, null))
+            if (ActiveDwgTags.ApplyOneTag(_dialog, null))
+                NativeIsoToolbarClickFilter.MarkActiveFilterApplied(_dialog);
+            else
                 MessageBox.Show(
                     "Could not apply the current DWG's verified line tag to the native filter.\n" +
                     "Check SPTC_DWGTAGS in the AutoCAD command line. No project records were changed.",
