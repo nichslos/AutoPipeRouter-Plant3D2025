@@ -1,3 +1,26 @@
+# SPTC Support Drawings — REV22.12: Automatic SupportFocus Clearance
+
+**User request:** Preserve the working REV22.11 SupportFocus compact OrthoCube but remove manual XY clearance and pipe Z-reach numeric inputs. REV22.12 is a new independent test command; REV22.11 remains available unchanged for a manually tuned comparison.
+
+**Command:** `SPTC_ORTHO22_12_AUTO_SUPPORT_CUBE_TEST` (Plant 3D 2025; backed-up/copied registered project only).
+
+**Prompts now:** Choose `SupportFocus` (default) or `Original`; select **support members only**; optionally select crossing pipe route objects (Enter to skip); choose an **empty registered native Ortho seed**; authorize by typing `REV22.12 TEST`; place all ten views with one click. **No numeric clearance/reach values are requested** in SupportFocus.
+
+**New deterministic auto-settings, based on source DWG units:**
+- XY clearance **per side** = clamp(12% of the *smaller* selected support X/Y dimension, 50 mm, 160 mm).
+- Vertical pipe reach **each side** = clamp(45% of the selected support Z height, 300 mm, 1200 mm).
+- The existing NativeOrthoLayout 10%-per-axis padding (minimum 10 mm) still applies after this support-focused envelope.
+
+Example from tested source TEST5 support raw dimensions ~703.275 × 924.229 × 1382.489 mm: auto XY ~84.393 mm per side, auto pipe vertical reach ~622.12 mm; actual dimensions are computed from each selected support, **not hardcoded to TEST5**. Pipe X/Y extents are used only for intersection checks, never added to the cube footprint. The Z extents of selected pipes that intersect that footprint and height range can expand the cube vertically, subject to the automatic Z bound.
+
+**Logging:** `REV22_12_CUBE_MODE=SupportFocus`, `REV22_12_AUTOMATIC_CLEARANCE=True`, `REV22_12_AUTO_XY_CLEARANCE_MM`, `REV22_12_AUTO_PIPE_REACH_MM`, accepted/rejected pipe bounds, the actual focused and padded native cube bounds; the preserved axial+ISO camera, rotation, ten native view, scale and collision checks continue to run.
+
+**Caution:** Although there is no numeric input, the optional pipe selection is intentionally preserved for source-linked nearby pipe geometry. This is not automatic discovery of every pipe across all model references or Xrefs. The algorithm uses entity bounding boxes, which may overstate intersections for bent/disconnected objects. If a selected pipe is far above the support and outside the derived Z reach, the test fails without writing a new Ortho; use REV22.11 manually tuned mode if necessary. Inspect visually, verify clipping, and test native Update View before treating new output as production-ready.
+
+**Test procedure:** Fully restart Plant 3D, load REV22.12 DLL with `NETLOAD`, run the command on a copied project. Select the same support and crossing pipes as the successful REV22.11 case. Compare output to the REV22.11 model, and send the `*_REV22_12_RESULT.txt` and a 3D OrthoCube screenshot. Do not manually update before capturing the initial results. The code still invokes Autodesk's internal `GenerateOrthos` API; do not use this experiment on production projects.
+
+---
+
 # SPTC Support Drawings — REV22.11: Compact Support-Focused OrthoCube with Local Pipe Runs
 
 **Requested behavior (November 9, 2026):** A long horizontal pipe crosses the top of a steel pipe support; the OrthoCube should wrap the **support and only the local crossing pipe section**, not the entire length of the pipe route. The native OrthoCube is a 3D crop and does not modify/shorten the 3D pipe itself.
