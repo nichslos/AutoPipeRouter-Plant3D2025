@@ -650,7 +650,7 @@ jobs:
           foreach($token in @('IsVerticalAxis','IsStronglyVerticalBounds','TopOfSteelText','PLANT_TOP_OF_STEEL_PROPERTY','GEOMETRIC_TOP_APPROX','FormatElevation')) {
             if(-not $verticalRule.Contains($token)) { throw "REV22.18 directional or elevation guard missing: $token" }
           }
-          foreach($token in @('RowSpacingMm','LaneStepMm','TextLineHeightMm','IsVertical','TOS EL.','TOS~','LabelTop','Project','TextBox')) {
+          foreach($token in @('RowSpacingMm','LaneStepMm','TextLineHeightMm','IsVertical','TOS EL.','TOS~','LabelTop','Project','LabelGapFromFrameMm')) {
             if(-not $leader.Contains($token)) { throw "REV22.18 paper annotation routing missing: $token" }
           }
           if($new -match 'SupportOrthoSummaryPanel15.Build\(') { throw 'REV22.18 may not create old single combined summary' }
