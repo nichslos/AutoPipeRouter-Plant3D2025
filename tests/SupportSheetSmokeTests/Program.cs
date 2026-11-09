@@ -946,6 +946,40 @@ var allHorizontalPlan19=SupportOrthoMemberCalloutPlan19.Build(
 Assert(allHorizontalPlan19.Callouts.Count==130&&
     allHorizontalPlan19.HorizontalTosLines==130,
     "REV22.19 layout supports all 13 horizontal members each with TOS in ten native views");
+// REV22.20: formatting ONLY. Exact source Size/TOS unchanged.
+// Blank EMPTY paragraph between member name and horizontal TOS;
+// approximate indicator separated by a space, "TOS ~".
+var rev220Members=rev217Members.Select((m,i)=>
+    new SupportOrthoMemberCalloutPlan20.Member(
+        m.Handle,m.Size,m.X,m.Y,m.Z,
+        i<7, i<7?"+1117.5745 mm":null,
+        i<4?"GEOMETRIC_TOP_APPROX":
+        i<7?"PLANT_TOP_OF_STEEL_PROPERTY":"NOT_HORIZONTAL")).ToArray();
+var rev220Plan=SupportOrthoMemberCalloutPlan20.Build(
+    rev217Cameras,reservedTitleFrames.Titles,rev220Members,594,841);
+Assert(rev220Plan.Callouts.Count==130&&rev220Plan.Skipped.Count==0,
+    "REV22.20 all 13 real member captions fit in each of ten Ortho views");
+Assert(rev220Plan.HorizontalTosLines==70&&
+    rev220Plan.ApproximateTosLines==40,
+    "REV22.20 exact vs approximate horizontal TOS counts are not changed by display formatting");
+Assert(rev220Plan.Callouts.Where(x=>x.HasTos)
+    .All(x=>x.Text.Contains("\n\nTOS ")&&
+        !x.Text.Contains("\nTOS ")&&
+        !x.Text.Contains("TOS~")),
+    "REV22.20 TOS text must have an actual blank line and correct spacing");
+Assert(rev220Plan.Callouts.Any(x=>x.Text.Contains(
+    "\n\nTOS ~ +1117.5745 mm"))&&
+    rev220Plan.Callouts.Any(x=>x.Text.Contains(
+    "\n\nTOS EL. +1117.5745 mm")),
+    "REV22.20 exact user-requested formatting of approximate and source-exact TOS");
+Assert(rev220Plan.Callouts.Where(x=>!x.HasTos)
+    .All(x=>!x.Text.Contains("TOS")&&!x.Text.Contains("\n")),
+    "REV22.20 no TOS on vertical/non-horizontal member");
+Assert(rev220Plan.Callouts.All(x=>
+    x.LabelX+x.LabelWidth<=594*.78&&
+    x.LabelTop-x.LabelHeight>=841*.12),
+    "REV22.20 all three-line caption boxes preserve native paper keepout");
+Console.WriteLine("PASS: REV22.20 blank-line TOS formatting and spaced TOS ~; 130 labels, horizontal-only and native paper bounds preserved.");
 Console.WriteLine("PASS: REV22.19 TOS only on horizontal steel; vertical posts exclude it, 10-view leader layout preserved.");
 Console.WriteLine("PASS: REV22.18 improved member leader routing, true vertical identification and exact/marked TOS elevation.");
 Console.WriteLine("PASS: REV22.17 130 true 3D source-member leaders and native camera projection without label overlap.");
