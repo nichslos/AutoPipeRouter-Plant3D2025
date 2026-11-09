@@ -996,19 +996,19 @@ Assert(rev221Plan.HorizontalTosLines==70&&
     rev221Plan.ApproximateTosLines==40,
     "REV22.21 source-dependent TOS counts unchanged");
 Assert(rev221Plan.Callouts.Where(x=>x.HasTos)
-    .All(x=>x.Text.Split('\\n').Length==2&&
-        x.Text.Contains("\\nTOS ")&&
-        !x.Text.Contains("\\n\\n")&&
+    .All(x=>x.Text.Split('\n').Length==2&&
+        x.Text.Contains("\nTOS ")&&
+        !x.Text.Contains("\n\n")&&
         !x.Text.Contains("TOS~")),
     "REV22.21 precisely 2 lines and no blank paragraph for horizontal member TOS");
 var rev221Example=rev221Plan.Callouts.First(x=>
     x.HasTos&&x.Text.Contains("TOS ~ "));
 Assert(rev221Example.Text==
     "["+rev221Example.Handle+"] "+rev221Members.First(m=>
-        m.Handle==rev221Example.Handle).Size+"\\nTOS ~ +502.7872 mm",
+        m.Handle==rev221Example.Handle).Size+"\nTOS ~ +502.7872 mm",
     "REV22.21 exact screenshot approximate TOS on line immediately below member label");
 Assert(rev221Plan.Callouts.Where(x=>!x.HasTos)
-    .All(x=>!x.Text.Contains("TOS")&&!x.Text.Contains("\\n")),
+    .All(x=>!x.Text.Contains("TOS")&&!x.Text.Contains("\n")),
     "REV22.21 no TOS for vertical, round or non-horizontal members");
 Assert(rev221Plan.Callouts.All(x=>
     x.LabelX+x.LabelWidth<=594*.78&&
