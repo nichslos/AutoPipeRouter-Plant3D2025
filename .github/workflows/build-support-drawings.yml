@@ -469,6 +469,20 @@ jobs:
           if ($helper -notmatch 'Refusing Current View fallback') { throw 'Unrecognized native preset must fail closed' }
           if ($new -notmatch 'NativeOrthoIsoViewType.IsIsometric\(label\)') { throw 'ISO-only framing correction missing' }
           if ($new -notmatch 'NativeOrthoAxialEditorPreset.IsAxial\(label\)') { throw 'Six axial saved-type checks missing' }
+      - name: Verify REV22.9 one-click native automatic Update All
+        shell: pwsh
+        run: |
+          $new = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoTenViewAutoNativeUpdateTest.cs' -Raw
+          $old = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoTenViewAxialPresetFixTest.cs' -Raw
+          if ($new -notmatch 'CommandMethod\("SPTC_ORTHO22_9_AUTO_UPDATE_TEST"') { throw 'REV22.9 command missing' }
+          if ($old -notmatch 'CommandMethod\("SPTC_ORTHO22_8_AXIAL_PRESET_TEST"') { throw 'REV22.8 fallback missing' }
+          if ($new -notmatch 'REV22.9 TEST') { throw 'Explicit copied-project user consent missing' }
+          foreach($token in @('PLANTORTHOUPDATE','PLANTORTHOSILENTUPDATE','STEP11_AUTO_UPDATE_COMPLETED','STEP11_SILENTUPDATE_RESTORED','generatedViewNames.AddRange','originalPaperHandles.UnionWith','ALL_TEN_NATIVE_VIEWS_REGISTERED','NativeOrthoAxialEditorPreset.IsAxial','ISO_FRAME_COORDINATES_CHECK','SAVED_TYPE_CHECK','STEP11_POSTUPDATE_VIEWPORT_OVERLAP_OR_OFFSHEET')) {
+            if (-not $new.Contains($token)) { throw "Missing REV22.9 requirement: $token" }
+          }
+          if ($new -notmatch 'Editor.Command\("_.PLANTORTHOUPDATE","_All"\)') { throw 'Must run Autodesk supported PLANTORTHOUPDATE All' }
+          if ($new -notmatch 'AcadApp.SetSystemVariable\("PLANTORTHOSILENTUPDATE",oldSilent\)') { throw 'Must restore original native silent setting' }
+          if ($new -match 'Ortho.dcf\s*=|Ortho.dcf\s*\,') { throw 'Never directly write Ortho.dcf' }
       - name: Compile SPTC Support Drawings
         run: dotnet build src/SPTC.SupportDrawings/SPTC.SupportDrawings.csproj -c Release
       - name: Verify compiled DLL
@@ -480,7 +494,7 @@ jobs:
       - name: Upload DLL artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SPTC-SupportDrawings-Plant3D2025-REV22_8
+          name: SPTC-SupportDrawings-Plant3D2025-REV22_9
           path: src/SPTC.SupportDrawings/bin/Release/net8.0-windows/SPTC.SupportDrawings.dll
           retention-days: 30
           if-no-files-found: error
