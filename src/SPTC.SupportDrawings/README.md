@@ -1,3 +1,20 @@
+# REV22.21 — Screenshot-matching Structural Member TOS Label (two lines, no blank row)
+
+**New isolated command:** `SPTC_ORTHO22_21_TOS_DIRECT_LINE_TEST` in AutoCAD Plant 3D 2025, copied registered test project only. The REV22.20 command remains unchanged and available.
+
+The user's latest screenshot shows **the structural member name and the approximate TOS immediately beneath it**, with ONE line break, not a blank line. The tilde retains spaces:
+
+```text
+[557] Sloping channel 100x50 web-5 fl-7.5
+TOS ~ +502.7872 mm
+```
+
+The short stroke preceding the handle in the screenshot is the leader entering the MText label, not a newly prefixed hyphen in the underlying source member identity. REV22.21 changes only the REV22.20 label planner, from `label+"\\n\\n"+tos` to `label+"\\n"+tos`, and returns the two-line reserved bounding height. The display stays `TOS ~ +... mm` for geometric approximate elevation, while exact sourced elevation remains `TOS EL. +... mm`. Both use one line break after the steel Size. All source `Size` and TOS numerical data, member handles, eligibility (TOS on **horizontal** steel only), 10 native Ortho views, camera orientations, clipping, view titles, compact SupportFocus, one-click native layout, and per-member leader geometry are unchanged.
+
+**Test:** Fully close/restart Plant 3D 2025, NETLOAD the new DLL. On a copied project, run `SPTC_ORTHO22_21_TOS_DIRECT_LINE_TEST`, choose `SupportFocus`, select TEST5's same 21 support objects with 13 native structure members, optionally three nearby pipes, choose an EMPTY registered Ortho seed, confirm with `REV22.21 TEST` then click once. Verify all native Ortho views are present and that member handle 557 prints as in screenshot with TOS immediately below. Check `STEP10_INDIVIDUAL_MEMBER_ANNOTATION_COUNT` (130 target), `STEP10_HORIZONTAL_TOS_LABEL_COUNT` and `STEP10_MEMBER_ANNOTATIONS_CHECK`; send `*_REV22_21_RESULT.txt` and close-up screenshot. Do not test this unsupported internal Autodesk native Ortho API in production drawings.
+
+---
+
 # REV22.20 — Format horizontal-member TOS annotation with a blank line and a spaced tilde
 
 **New isolated Plant 3D 2025 command:** `SPTC_ORTHO22_20_TOS_SPACING_TEST`. The working REV22.19 command `SPTC_ORTHO22_19_HORIZONTAL_TOS_TEST` and all earlier versions remain unchanged.
