@@ -352,6 +352,22 @@ jobs:
           if ($code -notmatch 'CatalogMatches') { throw 'Must verify native view registration' }
           if ($code -match 'SQLiteConnection|ExecuteNonQuery|SendStringToExecute|SetOrthoDwgVersion') { throw 'Direct project DB changes prohibited' }
           if ($old -notmatch 'CommandMethod\("SPTC_ORTHO22_1_ISO_FIX_TEST"') { throw 'REV22.1 must remain available unchanged' }
+      - name: Verify REV22.3 isolated real-viewport paper-scale test
+        shell: pwsh
+        run: |
+          $code = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoTenViewScaleLayoutFixTest.cs' -Raw
+          $old = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoTenViewMetadataFixTest.cs' -Raw
+          $guard = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoViewportPaperGuard.cs' -Raw
+          if ($code -notmatch 'CommandMethod\("SPTC_ORTHO22_3_SCALE_LAYOUT_TEST"') { throw 'REV22.3 command missing' }
+          if ($old -notmatch 'CommandMethod\("SPTC_ORTHO22_2_EDITVIEW_FIX_TEST"') { throw 'REV22.2 fallback missing' }
+          if ($code -notmatch 'viewportId,item.Width,item.Height,bounds.SizeZ') { throw 'REV22.3 does not pass planned paper-space viewport size' }
+          if ($code -notmatch 'ReadPaperViewportFrame') { throw 'REV22.3 missing actual viewport measurement' }
+          if ($code -notmatch 'ACTUAL_PAPER_LAYOUT_CHECK') { throw 'REV22.3 missing strict post-generation check' }
+          if ($guard -notmatch 'NATIVE_FRAME_SIZE_CHANGED') { throw 'REV22.3 missing actual frame mismatch guard' }
+          if ($code -notmatch 'REV22.3 TEST') { throw 'REV22.3 user consent absent' }
+          if ($code -notmatch 'GetViewTypeFromName') { throw 'REV22.2 native isometric mapping not preserved' }
+          if ($code -notmatch 'SAVED_VIEWDEF_TYPE') { throw 'REV22.2 native metadata readback not preserved' }
+          if ($code -notmatch 'STEP10_ALL_TEN_NATIVE_VIEWS_REGISTERED') { throw 'Ten-view catalog verification not preserved' }
       - name: Compile SPTC Support Drawings
         run: dotnet build src/SPTC.SupportDrawings/SPTC.SupportDrawings.csproj -c Release
       - name: Verify compiled DLL
@@ -363,7 +379,7 @@ jobs:
       - name: Upload DLL artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SPTC-SupportDrawings-Plant3D2025-REV22_2
+          name: SPTC-SupportDrawings-Plant3D2025-REV22_3
           path: src/SPTC.SupportDrawings/bin/Release/net8.0-windows/SPTC.SupportDrawings.dll
           retention-days: 30
           if-no-files-found: error
