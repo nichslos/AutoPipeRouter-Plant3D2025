@@ -516,6 +516,46 @@ try{
         new[]{new BoundingBox3(0,0,0,double.NaN,10,10)},1);
 }catch(ArgumentException){invalidCubeRejected=true;}
 Assert(invalidCubeRejected,"REV22.11 reject invalid pipe bounding extents");
+// REV22.12: no typed XY or Z clearance. Geometry drives both values.
+var adaptiveSmall=new BoundingBox3(0,0,0,200,150,400);
+var adaptiveLarge=new BoundingBox3(0,0,0,1800,1400,3500);
+var autoSmall=SupportFocusedCubePlanner.BuildAutomatic(
+    adaptiveSmall,Array.Empty<BoundingBox3>(),1);
+var autoLarge=SupportFocusedCubePlanner.BuildAutomatic(
+    adaptiveLarge,Array.Empty<BoundingBox3>(),1);
+Assert(autoSmall.XYClearanceMm==50&&autoSmall.PipeVerticalReachMm==300,
+    "REV22.12 enforce minimum safe geometry-derived XY and Z reaches");
+Assert(autoLarge.XYClearanceMm==160&&autoLarge.PipeVerticalReachMm==1200,
+    "REV22.12 cap automatic clearances for large steel support");
+var adaptiveExample=new BoundingBox3(4471.098,3022.743,-6,
+    5174.373,3946.972,1376.489);
+var autoExample=SupportFocusedCubePlanner.BuildAutomatic(
+    adaptiveExample,new[]{new BoundingBox3(
+        -25000,3100,1350,25000,3200,1490)},1);
+Assert(autoExample.XYClearanceMm>80&&autoExample.XYClearanceMm<90,
+    "REV22.12 actual user support dimensions determine XY padding");
+Assert(autoExample.PipeVerticalReachMm>600&&
+    autoExample.PipeVerticalReachMm<650,
+    "REV22.12 actual user support dimensions determine vertical reach");
+Assert(autoExample.Cube.PipesAccepted==1 &&
+    autoExample.Cube.FocusBounds.MaxX<
+        adaptiveExample.MaxX+200 &&
+    autoExample.Cube.FocusBounds.MaxZ==1490,
+    "REV22.12 long pipe route remains XY-clipped and Z diameter included");
+var scaledMeters=SupportFocusedCubePlanner.BuildAutomatic(
+    new BoundingBox3(0,0,0,1.0,.5,1.5),
+    new[]{new BoundingBox3(-200,.2,1.6,200,.3,1.7)},1000);
+Assert(Math.Abs(scaledMeters.XYClearanceMm-60)<1e-7 &&
+    Math.Abs(scaledMeters.PipeVerticalReachMm-675)<1e-7 &&
+    scaledMeters.Cube.FocusBounds.MaxX<1.5,
+    "REV22.12 automatic units conversion and long-route containment");
+bool badAutoUnits=false;
+try{ SupportFocusedCubePlanner.BuildAutomatic(
+    adaptiveSmall,Array.Empty<BoundingBox3>(),double.NaN); }
+catch(ArgumentOutOfRangeException){badAutoUnits=true;}
+Assert(badAutoUnits,"REV22.12 fail closed for missing DWG unit scale");
+Console.WriteLine("PASS: REV22.12 numeric-free automatically derived SupportFocus clearances and long-route clipping.");
+
 Console.WriteLine("PASS: REV22.11 compact support-based OrthoCube with long-route XY clipping and local Z selection.");
 
 Console.WriteLine("PASS: REV22.10 six axial half-turn and center guards.");
