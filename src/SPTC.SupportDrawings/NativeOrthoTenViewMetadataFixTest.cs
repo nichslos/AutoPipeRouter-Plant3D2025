@@ -608,6 +608,22 @@ public sealed class NativeOrthoTenViewMetadataFixTest
                             Log("STEP8_"+label+"_PRIVATE_GENERATEORTHOS_RETURNED");
                             if(NativeOrthoIsoViewType.IsIsometric(label))
                             {
+                                // REV22.2: Edit View uses persisted native
+                                // IDwgViewDef.ViewType, not only viewport angle.
+                                string storedType=ReadNativeStoredViewType(nativeView,viewName);
+                                Log("STEP8_"+label+"_SAVED_VIEWDEF_TYPE="+storedType);
+                                if(storedType.StartsWith("UNAVAILABLE:",StringComparison.Ordinal))
+                                    Log("STEP8_"+label+"_SAVED_TYPE_CHECK=INCONCLUSIVE");
+                                else
+                                {
+                                    bool exact=NativeOrthoEditorPreset.IsExactIsoPreset(
+                                        label,storedType);
+                                    Log("STEP8_"+label+"_SAVED_TYPE_CHECK="+(exact?"PASS":"FAIL"));
+                                    if(!exact)throw new InvalidOperationException(
+                                        "REV22.2 "+label+
+                                        " was not saved with the native Ortho Editor "+
+                                        "preset identifier: "+storedType);
+                                }
                                 Vector3d actual=ReadViewportCamera(
                                     targetDoc.Database,viewportId);
                                 bool isoCameraMatches=NativeOrthoIsoViewType.MatchesCamera(
@@ -738,6 +754,66 @@ public sealed class NativeOrthoTenViewMetadataFixTest
             // have an active AutoCAD command context after switching to Ortho.
             // Never let eNotApplicable from WriteMessage mask the real exception.
             SafeWriteToActiveEditor("REV22 RESULT: " + report);
+        }
+    }
+
+    // REV22.2 read-only API reflection; verified from native DLL metadata:
+    // GetDwgSheetFromOrthoView(PlantOrthoView,out IDwgSheetDef) and
+    // GetViewDefByViewName(string,IDwgSheetDef,out IDwgViewDef).
+    private static string ReadNativeStoredViewType(object orthoView,string viewName)
+    {
+        try
+        {
+            Type? nativeUi=FindType(AppDomain.CurrentDomain.GetAssemblies(),
+                "Autodesk.ProcessPower.PnP3dOrthoDrawingsUI.UIUtils");
+            if(nativeUi==null)return "UNAVAILABLE:UIUtils missing";
+            const BindingFlags flags=BindingFlags.Static|
+                BindingFlags.NonPublic|BindingFlags.Public;
+            MethodInfo? getSheet=nativeUi.GetMethods(flags).FirstOrDefault(m=>
+            {
+                if(m.Name!="GetDwgSheetFromOrthoView"||
+                    m.ReturnType!=typeof(bool))return false;
+                ParameterInfo[] args=m.GetParameters();
+                return args.Length==2&&
+                    args[0].ParameterType.IsInstanceOfType(orthoView)&&
+                    args[1].ParameterType.IsByRef;
+            });
+            if(getSheet==null)return "UNAVAILABLE:Native sheet method missing";
+            object?[] sheetArgs={orthoView,null};
+            if(getSheet.Invoke(null,sheetArgs) is not bool hasSheet||!hasSheet||
+                sheetArgs[1]==null)
+                return "UNAVAILABLE:Native sheet definition unavailable";
+            object sheet=sheetArgs[1]!;
+            MethodInfo? getDef=nativeUi.GetMethods(flags).FirstOrDefault(m=>
+            {
+                if(m.Name!="GetViewDefByViewName"||
+                    m.ReturnType!=typeof(bool))return false;
+                ParameterInfo[] args=m.GetParameters();
+                return args.Length==3&&args[0].ParameterType==typeof(string)&&
+                    args[1].ParameterType.IsInstanceOfType(sheet)&&
+                    args[2].ParameterType.IsByRef;
+            });
+            if(getDef==null)return "UNAVAILABLE:Native view method missing";
+            object?[] viewArgs={viewName,sheet,null};
+            if(getDef.Invoke(null,viewArgs) is not bool hasView||!hasView||
+                viewArgs[2]==null)
+                return "UNAVAILABLE:Saved native view definition not found";
+            object nativeDef=viewArgs[2]!;
+            PropertyInfo? viewType=nativeDef.GetType().GetProperty(
+                "ViewType",BindingFlags.Public|BindingFlags.NonPublic|
+                BindingFlags.Instance);
+            if(viewType==null)
+                viewType=nativeDef.GetType().GetInterfaces()
+                    .Select(t=>t.GetProperty("ViewType"))
+                    .FirstOrDefault(p=>p!=null);
+            return viewType?.GetValue(nativeDef)?.ToString() ??
+                "UNAVAILABLE:Native ViewType inaccessible";
+        }
+        catch(System.Exception ex)
+        {
+            return "UNAVAILABLE:"+
+                ((ex is TargetInvocationException wrapped?
+                    wrapped.InnerException:ex)?.Message??ex.Message);
         }
     }
 
