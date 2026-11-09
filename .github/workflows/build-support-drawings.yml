@@ -418,6 +418,21 @@ jobs:
             if (-not $code.Contains($token)) { throw "Missing read-only comparison requirement $token" }
           }
           if ($math -notmatch 'Math.IEEERemainder') { throw '0 and 360 degrees must be equivalent' }
+      - name: Verify REV22.6.1 AutoCAD prompt initialization regression
+        shell: pwsh
+        run: |
+          $code = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoIsoReferenceComparison.cs' -Raw
+          $reject = $code.IndexOf('opts.SetRejectMessage(')
+          $allowed = $code.IndexOf('opts.AddAllowedClass(typeof(Viewport),false)')
+          if ($reject -lt 0 -or $allowed -lt 0 -or $reject -gt $allowed) {
+            throw 'REV22.6.1 must call SetRejectMessage BEFORE AddAllowedClass in TrySelectFour'
+          }
+          if ($code -notmatch 'CommandMethod\("SPTC_ORTHO22_6_CAPTURE_NATIVE_ISO"') {
+            throw 'Original native reference capture command must remain'
+          }
+          if ($code -notmatch 'CommandMethod\("SPTC_ORTHO22_6_COMPARE_NATIVE_ISO"') {
+            throw 'Original native reference compare command must remain'
+          }
       - name: Compile SPTC Support Drawings
         run: dotnet build src/SPTC.SupportDrawings/SPTC.SupportDrawings.csproj -c Release
       - name: Verify compiled DLL
@@ -429,7 +444,7 @@ jobs:
       - name: Upload DLL artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SPTC-SupportDrawings-Plant3D2025-REV22_6
+          name: SPTC-SupportDrawings-Plant3D2025-REV22_6_1
           path: src/SPTC.SupportDrawings/bin/Release/net8.0-windows/SPTC.SupportDrawings.dll
           retention-days: 30
           if-no-files-found: error
