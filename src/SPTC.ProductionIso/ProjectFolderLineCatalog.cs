@@ -309,12 +309,28 @@ internal static class ProjectFolderLineCatalog
     private static IEnumerable<object> ReadRows(object table, string filter)
     {
         // PnPTable.Select(string) is available on standard Plant 3D databases.
+        // Recheck DwgId on every returned row. An unfiltered fallback may NEVER
+        // be interpreted as belonging to one selected drawing.
         var select = table.GetType().GetMethod("Select", new[] { typeof(string) });
         object? rows = select?.Invoke(table, new object[] { filter });
         rows ??= GetProperty(table, "Rows");
-        if (rows is IEnumerable sequence)
-            foreach (object? row in sequence)
-                if (row != null) yield return row;
+        if (rows is not IEnumerable sequence)
+            yield break;
+
+        int requestedDwg = -1;
+        if (filter.StartsWith("DwgId=", StringComparison.OrdinalIgnoreCase))
+            int.TryParse(filter["DwgId=".Length..], out requestedDwg);
+
+        foreach (object? row in sequence)
+        {
+            if (row == null) continue;
+            if (requestedDwg > 0 && ReadInt(row, "DwgId") != requestedDwg)
+                continue;
+            if (filter.Contains("PnPID > 0", StringComparison.OrdinalIgnoreCase)
+                && ReadInt(row, "PnPID") <= 0)
+                continue;
+            yield return row;
+        }
     }
 
     private static string ReadCell(object row, string column)
