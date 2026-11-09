@@ -1014,6 +1014,31 @@ Assert(rev221Plan.Callouts.All(x=>
     x.LabelX+x.LabelWidth<=594*.78&&
     x.LabelTop-x.LabelHeight>=841*.12),
     "REV22.21 exact two-line height safely reserved in Ortho paper");
+// REV22.22 root cause: SafeMText() strips control characters including '\\n'
+// before the old .Replace("\\n","\\\\P") could convert to MText.
+// Split raw label FIRST, sanitize each line, then JOIN with true \\P.
+string rev222Source="[55D] Sloping channel 100x50 web-5 fl-7.5\\nTOS ~ +1117.5745 mm";
+string rev222Actual=SupportOrthoMemberMText22.Encode(rev222Source);
+Assert(rev222Actual==
+    "[55D] Sloping channel 100x50 web-5 fl-7.5\\\\PTOS ~ +1117.5745 mm",
+    "REV22.22 exact AutoCAD MText syntax: actual paragraph separator between fl-7.5 and TOS");
+Assert(!rev222Actual.Contains("fl-7.5TOS")&&
+    rev222Actual.Split(new[]{"\\\\P"},StringSplitOptions.None).Length==2,
+    "REV22.22 prevent the user-observed fl-7.5TOS glued-text bug");
+Assert(SupportOrthoMemberMText22.Encode("[539] Sloping channel 100x50 web-5 fl-7.5\\r\\nTOS ~ +502.7872 mm")
+    =="[539] Sloping channel 100x50 web-5 fl-7.5\\\\PTOS ~ +502.7872 mm",
+    "REV22.22 preserve line break with Windows CRLF source");
+Assert(SupportOrthoMemberMText22.Encode(
+    "[539] Sloping channel {100x50} web-5 fl-7.5\\nTOS ~ +502.7872 mm")
+    =="[539] Sloping channel 100x50 web-5 fl-7.5\\\\PTOS ~ +502.7872 mm",
+    "REV22.22 sanitize MText special characters without destroying paragraphs");
+Assert(SupportOrthoMemberMText22.Encode("[551] Round 80")=="[551] Round 80",
+    "REV22.22 unchanged one-line labels for vertical/nonhorizontal source members");
+Assert(rev221Plan.Callouts.Where(x=>x.HasTos)
+    .All(x=>SupportOrthoMemberMText22.Encode(x.Text).Contains("\\\\P")&&
+        !SupportOrthoMemberMText22.Encode(x.Text).Contains("fl-7.5TOS")),
+    "REV22.22 every horizontal steel TOS label reaches MText as separate paragraph");
+Console.WriteLine("PASS: REV22.22 exact native MText paragraph conversion, no fl-7.5TOS concatenation, no source model changes.");
 Console.WriteLine("PASS: REV22.21 screenshot-matching two lines without blank line, spaced TOS ~, preserved 130 labels.");
 Console.WriteLine("PASS: REV22.20 blank-line TOS formatting and spaced TOS ~; 130 labels, horizontal-only and native paper bounds preserved.");
 Console.WriteLine("PASS: REV22.19 TOS only on horizontal steel; vertical posts exclude it, 10-view leader layout preserved.");
