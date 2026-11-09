@@ -1,3 +1,13 @@
+# REV22.6.1 — Fix JIT Crash in Native Iso Reference Capture
+
+**AutoCAD 2025 runtime failure:** `System.InvalidOperationException: Use SetRejectMessage first.` inside `NativeOrthoIsoReferenceComparison.TrySelectFour`, reproduced by `SPTC_ORTHO22_6_CAPTURE_NATIVE_ISO`. The cause was `PromptEntityOptions.AddAllowedClass(typeof(Viewport),false)` preceding `SetRejectMessage(...)`.
+
+**Scope of fix:** In `TrySelectFour`, call `SetRejectMessage(...)` first and `AddAllowedClass(...)` second. No other viewport selection, drawing mutation, camera, twist, native view metadata, source reference, or one-click Ortho logic was altered. The **existing** `SPTC_ORTHO22_6_CAPTURE_NATIVE_ISO` and `SPTC_ORTHO22_6_COMPARE_NATIVE_ISO` command names stay unchanged. CI verifies prompt initialization order and builds a separate `SPTC-SupportDrawings-Plant3D2025-REV22_6_1` DLL artifact.
+
+**Install/test:** Fully close Plant 3D 2025 to unload the previously loaded plugin, reopen a copied project, `NETLOAD` the DLL from REV22.6.1, then run `SPTC_ORTHO22_6_CAPTURE_NATIVE_ISO` in an Ortho **paper layout** on a reference sheet containing manually created NW, NE, SW, SE viewports. Click the paper-space viewport borders in that order. Repeat with `SPTC_ORTHO22_6_COMPARE_NATIVE_ISO` on the plugin-generated sheet. Confirm no JIT dialog and inspect the reference/comparison TXT reports. DLL compilation does not prove Plant 3D runtime behavior until this test passes.
+
+---
+
 # SPTC Support Drawings — REV22.6: Compare Native Isometric Presets (Read-Only)
 
 **Evidence, 2026-11-09:** REV22.5 generated 10 native views using one click, with no detected viewport overlap. The four native isometric view names and WCS camera directions passed. REV22.4 audits before and after native Update View show that the viewports now retain **0° / 360°** twist, not the earlier 180° error. However, these logs do **not** establish that NW/NE/SW/SE generated linework matches manually created Plant 3D preset views. REV22.6 gathers an independent native reference before changing any more code.
