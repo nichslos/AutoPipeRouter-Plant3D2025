@@ -301,8 +301,10 @@ internal static class NativeIsoDialogEnhancer
     {
         if (_overlay == null || _overlay.IsDisposed || !GetClientRect(dialog, out Rectangle bounds))
             return;
-        // Coordinates relative to the native dialog client area. UI can vary with scaling.
-        int x = (int)(bounds.Width * 0.29);
+        // REV12: align Custom Save Location label and textbox with the native
+        // Revision number label and textbox (about 28 px further left).
+        // Preserve the right edge and Browse button location.
+        int x = Math.Max(0, (int)(bounds.Width * 0.29) - 28);
         int y = (int)(bounds.Height * 0.384);
         int w = Math.Max(300, bounds.Width - x - 15);
         SetWindowPos(_overlay.Handle, IntPtr.Zero, x, y, w, 34, 0x0004 | 0x0040);
