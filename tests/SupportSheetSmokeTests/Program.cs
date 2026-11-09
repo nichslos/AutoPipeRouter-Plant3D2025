@@ -742,6 +742,80 @@ var realPlantPanel=SupportOrthoSummaryPanel15.Build(
 Assert(realPlantPanel.SizeLine.Contains(plantSteelSize)&&
     realPlantPanel.IdentityLine=="ASSEMBLY: 21 OBJECTS",
     "REV22.16 one clean panel with exactly source-recorded Plant structural section");
+// REV22.17: projection is based on the saved native viewport camera pose.
+// Independently verify the real TEST5 direction/center examples:
+var rev217Top=new SupportOrthoMemberCalloutPlan17.Camera(
+    "TOP",100,693.22,63.732,48.134,0,0,1,7956.295,3484.858,0,1.0/30);
+var rev217Bottom=new SupportOrthoMemberCalloutPlan17.Camera(
+    "BOTTOM",320,693.22,63.732,48.134,0,0,-1,7956.295,-3484.858,
+    Math.PI,1.0/30);
+var rev217Left=new SupportOrthoMemberCalloutPlan17.Camera(
+    "LEFT",100,558.66,48.134,51.991,-1,0,0,-3484.858,612.937,0,1.0/30);
+var rev217Front=new SupportOrthoMemberCalloutPlan17.Camera(
+    "FRONT",100,424.1,63.732,51.991,0,-1,0,7956.295,612.937,0,1.0/30);
+var centerTop=SupportOrthoMemberCalloutPlan17.Project(
+    rev217Top,7956.295,3484.858,612.937);
+var centerBottom=SupportOrthoMemberCalloutPlan17.Project(
+    rev217Bottom,7956.295,3484.858,612.937);
+var centerLeft=SupportOrthoMemberCalloutPlan17.Project(
+    rev217Left,7956.295,3484.858,612.937);
+var centerFront=SupportOrthoMemberCalloutPlan17.Project(
+    rev217Front,7956.295,3484.858,612.937);
+Assert(Math.Abs(centerTop.X-100)<.001&&Math.Abs(centerTop.Y-693.22)<.001,
+    "REV22.17 TOP member projects to actual native paper center");
+Assert(Math.Abs(centerBottom.X-320)<.001&&
+    Math.Abs(centerBottom.Y-693.22)<.001,
+    "REV22.17 BOTTOM member respects saved 180-degree twist");
+Assert(Math.Abs(centerLeft.X-100)<.001&&
+    Math.Abs(centerLeft.Y-558.66)<.001,
+    "REV22.17 LEFT member uses Autodesk arbitrary axis");
+Assert(Math.Abs(centerFront.X-100)<.001&&
+    Math.Abs(centerFront.Y-424.1)<.001,
+    "REV22.17 FRONT member uses camera-up world Z");
+var rev217Cameras=reservedTitleFrames.Frames.Select(f=>
+    new SupportOrthoMemberCalloutPlan17.Camera(
+        f.Name,f.X,f.Y,f.W,f.H,0,0,1,
+        7956.295,3484.858,0,1.0/30)).ToArray();
+var rev217Members=Enumerable.Range(0,13).Select(i=>
+    new SupportOrthoMemberCalloutPlan17.Member(
+        (0x521+i).ToString("X"),
+        i==0?"Angle 75 thck 9":
+        i==1?"Round 80":
+        "Sloping channel 100x50 web-5 fl-7.5",
+        7956.295+(i-6)*55,
+        3484.858+((i%3)-1)*45,612.937)).ToArray();
+var perMemberPlan=SupportOrthoMemberCalloutPlan17.Build(
+    rev217Cameras,rev217Members,594,841);
+Assert(perMemberPlan.Callouts.Count==130&&
+    perMemberPlan.Skipped.Count==0&&
+    perMemberPlan.ViewsWithoutLabels.Count==0,
+    "REV22.17 13 real members x 10 native views =130 anchored callouts");
+Assert(perMemberPlan.Callouts
+    .GroupBy(c=>c.View).All(g=>g.Count()==13&&
+        g.Select(v=>v.Handle).Distinct().Count()==13),
+    "REV22.17 each member is independently identified per native view");
+Assert(perMemberPlan.Callouts.All(c=>
+    c.Text.StartsWith("[",StringComparison.Ordinal)&&
+    c.TextX>c.ElbowX&&
+    c.TextTop-c.TextHeight>=841*.12&&
+    c.TextX+c.TextWidth<=594*.78),
+    "REV22.17 member leaders stay in paper-space annotation gutters");
+bool duplicateMemberRejected=false;
+try
+{
+    SupportOrthoMemberCalloutPlan17.Build(rev217Cameras,
+        rev217Members.Concat(new[]{rev217Members[0]}).ToArray(),594,841);
+}
+catch(ArgumentException){duplicateMemberRejected=true;}
+Assert(duplicateMemberRejected,
+    "REV22.17 cannot create two different callouts for the same source member");
+var outOfView=rev217Members.Select(m=>m with {X=99999}).ToArray();
+var outPlan=SupportOrthoMemberCalloutPlan17.Build(
+    rev217Cameras,outOfView,594,841);
+Assert(outPlan.Callouts.Count==0&&outPlan.Skipped.Count==130,
+    "REV22.17 safely skips members projected outside a saved Ortho viewport");
+Console.WriteLine("PASS: REV22.17 130 true 3D source-member leaders and native camera projection without label overlap.");
+
 Console.WriteLine("PASS: REV22.16 Plant 3D structural Size field and original 10-view panel boundaries.");
 
 Console.WriteLine("PASS: REV22.15 one non-redundant, safe structural support summary for block and separately selected members.");
