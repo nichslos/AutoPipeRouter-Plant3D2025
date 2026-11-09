@@ -167,8 +167,10 @@ public sealed class NativeOrthoIsoReferenceComparison
         {
             var opts=new PromptEntityOptions(
                 "\nREV22.6: select "+name+" VIEWPORT BORDER (Esc to stop): ");
-            opts.AddAllowedClass(typeof(Viewport),false);
+            // REV22.6.1: AutoCAD 2025 requires SetRejectMessage BEFORE
+            // AddAllowedClass, otherwise it throws InvalidOperationException.
             opts.SetRejectMessage("\nSelect a paper-space Viewport border, not steel linework.");
+            opts.AddAllowedClass(typeof(Viewport),false);
             PromptEntityResult p=doc.Editor.GetEntity(opts);
             if(p.Status!=PromptStatus.OK)return false;
             if(!used.Add(p.ObjectId))
