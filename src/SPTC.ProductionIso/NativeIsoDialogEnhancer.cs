@@ -139,10 +139,14 @@ internal static class NativeIsoDialogEnhancer
                     // Do not touch the line filter on dialog opening.
                     // A click on Drawing or Project triggers an exact active-DWG
                     // filter after Autodesk finishes updating the line list.
-                    NativeIsoToolbarClickFilter.Attach(native, () =>
+                    NativeIsoToolbarClickFilter.Attach(native, showActive =>
                     {
-                        if (ActiveDwgTags.Count == 1)
-                            ActiveDwgTags.ApplyOneTag(native, _document);
+                        if (ActiveDwgTags.Count != 1) return false;
+                        // REV10: first click shows this DWG's actual route,
+                        // next click clears the filter and restores native lines.
+                        return showActive
+                            ? ActiveDwgTags.ApplyOneTag(native, _document)
+                            : ActiveDwgTags.ClearOneTag(native, _document);
                     });
                 }
 
