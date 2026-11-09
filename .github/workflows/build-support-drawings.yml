@@ -743,6 +743,24 @@ jobs:
             if(-not $new.Contains($token)) { throw "REV22.22 native view regression guard missing: $token" }
           }
           if(-not $planner.Contains('bool addTos=member.IsHorizontal;') -or -not $planner.Contains('"TOS ~ ":"TOS EL. "')) { throw 'Horizontal-only spaced-tilde display removed' }
+      - name: Verify REV22.23 nonwrapping native structural member DBText labels
+        shell: pwsh
+        run: |
+          $new = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoTenViewNoOverlapTextTest.cs' -Raw
+          $old = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoTenViewMTextSeparatorTest.cs' -Raw
+          $planner = Get-Content 'src/SPTC.SupportDrawings/SupportOrthoMemberCalloutPlan23.cs' -Raw
+          if($new -notmatch 'CommandMethod\("SPTC_ORTHO22_23_NO_OVERLAP_TEXT_TEST"') { throw 'Isolated REV22.23 command missing' }
+          if($old -notmatch 'CommandMethod\("SPTC_ORTHO22_22_MTEXT_SEPARATOR_TEST"') { throw 'REV22.22 rollback missing' }
+          if($new -notmatch 'REV22.23 TEST') { throw 'Copied-project confirmation missing' }
+          foreach($token in @('SupportOrthoMemberCalloutPlan23.Build','CreateNativePaperMemberLeaders23','REV22_23_NATIVE_TEXT_SKIPPED_COUNT','REV22_23_TEXT_MODE=SEPARATE_NON_WRAPPING_DBTEXT','STEP10_ALL_TEN_NATIVE_VIEWS_REGISTERED','STEP10_VIEW_TITLE_COUNT','STEP10_INDIVIDUAL_MEMBER_ANNOTATION_COUNT','STEP10_MEMBER_ANNOTATIONS_CHECK','SupportOrthoHorizontalSource19.Read','SupportFocusedCubePlanner.BuildAutomatic')) {
+            if(-not $new.Contains($token)) { throw "REV22.23 invariant missing: $token" }
+          }
+          if(-not $new.Contains('new DBText') -or -not $new.Contains('GeometricExtents')) { throw 'Must use real native DBText glyph measurement' }
+          if(-not $new.Contains('NATIVE_FONT_TOO_WIDE_AT_MINIMUM_HEIGHT') -or -not $new.Contains('name.Erase()')) { throw 'Fail-closed native label fitting not enforced' }
+          if($new.Contains('new MText'+'\n'+'            {'+'\n'+'                Contents=SupportOrthoMemberMText22.Encode(item.Text)')) { throw 'Old wrapping annotation path remains' }
+          if(-not $planner.Contains('bool addTos=member.IsHorizontal;') -or -not $planner.Contains('"TOS ~ ":"TOS EL. "')) { throw 'Horizontal-only TOS semantics missing' }
+          if(-not $planner.Contains('TextHeightMm=1.75') -or -not $planner.Contains('RowSpacingMm=1.8')) { throw 'Smaller text / wider row gaps not applied' }
+          if($new -notmatch 'LabelTop-item.LabelHeight') { throw 'Native glyph extents must fit reserved label box' }
       - name: Compile SPTC Support Drawings
         run: dotnet build src/SPTC.SupportDrawings/SPTC.SupportDrawings.csproj -c Release
       - name: Verify compiled DLL
@@ -754,7 +772,7 @@ jobs:
       - name: Upload DLL artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SPTC-SupportDrawings-Plant3D2025-REV22_22
+          name: SPTC-SupportDrawings-Plant3D2025-REV22_23
           path: src/SPTC.SupportDrawings/bin/Release/net8.0-windows/SPTC.SupportDrawings.dll
           retention-days: 30
           if-no-files-found: error
