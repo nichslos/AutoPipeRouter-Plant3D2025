@@ -964,7 +964,8 @@ Assert(rev220Plan.HorizontalTosLines==70&&
     "REV22.20 exact vs approximate horizontal TOS counts are not changed by display formatting");
 Assert(rev220Plan.Callouts.Where(x=>x.HasTos)
     .All(x=>x.Text.Contains("\n\nTOS ")&&
-        !x.Text.Contains("\nTOS ")&&
+        x.Text.Split('\n').Length==3&&
+        x.Text.Split('\n')[1]==""&&
         !x.Text.Contains("TOS~")),
     "REV22.20 TOS text must have an actual blank line and correct spacing");
 Assert(rev220Plan.Callouts.Any(x=>x.Text.Contains(
