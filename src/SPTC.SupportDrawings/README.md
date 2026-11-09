@@ -1,3 +1,24 @@
+# SPTC Support Drawings — REV22.10: Six Axial Orientation Test
+
+**Evidence, 2026-11-09:** REV22.9 generated all ten model-linked views with one click and a common 1:5 scale; all ten saved preset names passed. The plugin-generated TOP/BOTTOM/LEFT/RIGHT/FRONT/BACK geometry was visible, but the screenshots compared with those same views after manual native Update View indicate a consistent 180° difference. Unlike REV22.7 NW/NE/SW/SE, the six axial viewports did **not** have initial TwistAngle or ViewCenter recorded. REV22.9's attempted automatic `PLANTORTHOUPDATE All` failed with `eInvalidInput` and is **not used** in this revision.
+
+**New test command:** `SPTC_ORTHO22_10_AXIAL_ORIENTATION_TEST`. It derives from the proven independent REV22.8 ten-view generator and preserves the 4 working isometric camera vectors, NW/NE/SW/SE native saved types, ISO half-turn + ViewCenter correction, all six saved axial ViewType names, 1-click layout, 1:5 fit and collision checks.
+
+After each `GenerateOrthos` call **only for TOP/BOTTOM/LEFT/RIGHT/FRONT/BACK**, it reads the actual camera direction, `TwistAngle`, and `ViewCenter`. If the initial twist is exactly 0° or 180° modulo 360°, the isolated experiment applies an additional **180°** screen rotation and negates BOTH `ViewCenter` axes atomically on this *freshly generated test viewport*. It verifies that the camera direction remains unchanged and the twist/center values persist; otherwise it aborts rather than guessing. Diagnostics per axial view: `STEP8_<VIEW>_AXIAL_CAMERA_MATCH_BEFORE`, `AXIAL_TWIST_BEFORE_DEG`, `AXIAL_VIEWCENTER_BEFORE`, `AXIAL_TWIST_AFTER_DEG`, `AXIAL_VIEWCENTER_AFTER`, `AXIAL_CAMERA_MATCH_AFTER`, `AXIAL_FRAME_ROTATION_CHECK`. REV22.7 ISO logs remain intact, so successful ISO geometry can be rechecked.
+
+**Why experimental:** The screenshots establish a *visual* half-turn but do not independently prove the 6 initial native viewport twist/center differences. A viewport's projected geometry can also differ for other reasons (native view definitions, source transform, clipping). REV22.10 is a narrowly scoped test hypothesis, **not yet a confirmed fix**, and it does not change any native view-definition metadata or `Ortho.dcf`. It retains older working commands for comparison.
+
+**Test (COPY project only):**
+1. Completely close Plant 3D 2025, reopen the backed-up/copied project, `NETLOAD` the fresh REV22.10 DLL.
+2. Open the saved registered 3D support model, run `SPTC_ORTHO22_10_AXIAL_ORIENTATION_TEST`; select the same support members, choose an empty native registered Ortho seed, type `REV22.10 TEST`, and click once in the paper layout.
+3. **Do not manually Update View.** Screenshot the six orthographic projections immediately after the command and compare each with the manually updated REV22.9 reference screenshot. Capture NW/NE/SW/SE too, verifying they stay correct.
+4. Inspect `*_REV22_10_RESULT.txt` for six `AXIAL_FRAME_ROTATION_CHECK=PASS`, saved native view types, ten registered views and zero frame overlap. A PASS in the TXT only establishes that stored viewport numbers match the experimental operation, not that visible geometry is correct.
+5. Only after recording an initial screenshot, run native Edit View / Update View on all ten, save/reopen, capture a second screenshot and note if geometry moved/rotated again.
+
+**Acceptance:** All ten present immediately with their correct reference orientations and fit; no extra manual update required to reach correct appearance; all native presets and the four ISO views remain correct. If any frame remains wrong, send the TXT and both screenshots, and investigate native ViewTarget/ViewCenter mapping rather than applying further arbitrary flips.
+
+---
+
 # SPTC Support Drawings — REV22.9: Automatically Finalize All Ten Views
 
 **Runtime finding (2026-11-09):** The REV22.8 generated TXT reports all six TOP/BOTTOM/LEFT/RIGHT/FRONT/BACK strings recognized by the installed Plant 3D 2025 native Edit View parser, saved IDwgViewDef.ViewType matches each short name, ten views registered, and all four NW/NE/SW/SE isometrics correctly centered. Nevertheless, the user still has to invoke manual **Update View** after initial generation to see the standard view results correctly. This means the remaining requirement is automatic *native content regeneration/finalization*, not another camera-vector or ViewType-string change.
