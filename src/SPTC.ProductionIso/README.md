@@ -1,31 +1,30 @@
-# SPTC Production Iso REV14 — Folder picker no longer closes the native dialog
+# SPTC Production Iso REV15 — Filter-row folder selector and first-level folders only
 
-Based on REV13; all prior revisions remain unchanged.
+**Source baseline:** REV14; prior revisions unchanged.
 
-## Fix
-In REV13, the extra dropdown was placed directly over Autodesk's existing filter funnel and used a separate WinForms `ContextMenuStrip` popup. In the user's Plant 3D 2025 runtime, clicking it caused **Create Production Iso** to close instead of showing the folder choices.
+## Fixes requested
+- Put the folder-dropdown arrow back on the **Line Numbers Filter row**, close to the right end of the filter text field, **immediately left of** Autodesk's own filter funnel. The funnel remains operable. The separate **Folders** button at the bottom has been removed; the **Select All** footer is restored.
+- Keep REV14's safe **child panel inside the native Create Production Iso dialog**, rather than using REV13's focus-stealing ContextMenuStrip popup.
+- In the dropdown, show **only immediate child folders under Plant 3D Drawings**, not nested subfolders. Child DWGs still count toward their top-level parent, but the submenu never lists the nested folder individually.
+- Display folder names only, without appended DWG counts or paths.
+- **All Project (no folder filter)** restores the native unfiltered line list.
 
-REV14 removes that overlapping control and the popup. It adds a distinct **Folders ▾** button beside **Select All** at the bottom of the left panel. Clicking Folders opens a scrollable **child panel inside the existing Autodesk dialog**, not a separate popup/window. Clicking Folders again or the × button closes only this child panel. The Autodesk native filter funnel remains visible and usable.
+For example, the dropdown should show root-level names such as:
+`01_INSTRUCTION_No.1 & 2`, `02_INSTRUCTION_No.3`, `03_HOLD`, `04_WI2-05_WI-06_WI2-07.20260928`, `05_SPTC TESTING MODEL`, `ADD_COMPONENT`, `HARVEY MODEL`, `PCF_TEST_DATA`, `PLOT PLAN`, `temp`, provided those directories contain a registered project DWG. It should NOT list `02_INSTRUCTION_No.3 > SOURCE...` or other descendant folders.
 
-Folder sources and selection logic are still experimental REV13 behavior:
-- All Project (no folder filter) clears the custom folder view.
-- Registered Plant 3D Drawings folders are listed with DWG counts.
-- Selecting a folder tries to show its verified live line groups in the native-backed checked list.
-- If project APIs or the original native checked list cannot be resolved, REV14 reports diagnostics rather than altering the project.
-
-## Test safely
-1. Completely restart Plant 3D 2025 to unload the old NETLOADed DLL.
-2. `NETLOAD` the REV14 `SPTC.ProductionIso.dll`.
-3. Run `SPTC_PRODISO`.
-4. Check that **Select All** and **Folders ▾** appear together at the lower left.
-5. Click **Folders ▾** and confirm **Create Production Iso stays open** and a folder list appears inside it.
-6. If folders appear, select one known folder, inspect its line numbers, then choose **All Project**.
-7. Generate only one known-good ISO after native checked-state behavior has been verified.
-
-For troubleshooting use `SPTC_FOLDERDIAG`, then F2 to copy the line-by-line diagnostic.
+## Test
+1. Close and restart Plant 3D 2025; `NETLOAD` REV15's `SPTC.ProductionIso.dll`.
+2. Run `SPTC_PRODISO`. Verify the original funnel remains visible and a small **▾** arrow is immediately to its left on the same Filter row.
+3. Click the new ▾ arrow. The Production Iso dialog must **stay open**, with a child list under the filter row.
+4. Inspect the folder list. Only first-level folder names should appear, with an initial **All Project** option.
+5. Choose a known folder and verify its line numbers. If mapping fails or the native list is incompatible, do **not** generate an ISO; send `SPTC_FOLDERDIAG` and F2 output.
+6. Choose All Project and verify the native line list returns.
 
 ## Preserved
-REV05 background export/copy to custom save location; REV06 Select All; native Drawing/Project Active/All toggle; REV12 aligned Custom Save Location row. No edits to Project Manager, model geometry, PnP database or `IsoConfig.xml`.
+REV05 automatic copying to Custom Save Location, REV06 Select All, REV09–11 Active/All toggle, REV12 Custom Save Location alignment, and REV14 embedded list safety.
 
 ## Limitations
-Cloud build success alone does not verify Plant 3D's proprietary dialog implementation. REV14 is a test build until verified in the user's 2025 environment. The project folder catalog may return a diagnostic if the installed Piping DataLinks API does not match the expected signatures. No additional executable is required.
+- **Runtime verification required:** GitHub compilation is not a test of Autodesk's native dialog or folder database in the user's project.
+- The folder catalog reads only project-registered Piping DWGs; folders with no registered DWG cannot be inferred from the drawing records and may not appear.
+- The folder records are obtained read-only from Piping project data. Model, PnP data, Project Manager, and project XML configurations remain unchanged.
+- Test on one known route before batch ISO generation.
