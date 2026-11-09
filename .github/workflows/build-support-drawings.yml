@@ -656,6 +656,33 @@ jobs:
           if($new -match 'SupportOrthoSummaryPanel15.Build\(') { throw 'REV22.18 may not create old single combined summary' }
           if($new -match 'PLANTORTHOUPDATE_ALL_ENTERED|Editor.Command\("_.PLANTORTHOUPDATE"') { throw 'Autodesk native auto updater not tested' }
           if($new -notmatch 'new MText' -or $new -notmatch 'new Line\(') { throw 'Missing editable paper-space MText and leaders' }
+      - name: Verify REV22.19 horizontal-only Top of Steel and zero vertical TOS
+        shell: pwsh
+        run: |
+          $new = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoTenViewHorizontalTosTest.cs' -Raw
+          $source = Get-Content 'src/SPTC.SupportDrawings/SupportOrthoHorizontalSource19.cs' -Raw
+          $rule = Get-Content 'src/SPTC.SupportDrawings/SupportOrthoHorizontalMember19.cs' -Raw
+          $layout = Get-Content 'src/SPTC.SupportDrawings/SupportOrthoMemberCalloutPlan19.cs' -Raw
+          $prior = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoTenViewVerticalTosTest.cs' -Raw
+          if($new -notmatch 'CommandMethod\("SPTC_ORTHO22_19_HORIZONTAL_TOS_TEST"') { throw 'REV22.19 isolated command missing' }
+          if($prior -notmatch 'CommandMethod\("SPTC_ORTHO22_18_VERTICAL_TOS_TEST"') { throw 'REV22.18 baseline removed' }
+          if($new -notmatch 'REV22.19 TEST') { throw 'Copied project guard missing' }
+          foreach($token in @('SupportOrthoHorizontalSource19.Read','SupportOrthoMemberCalloutPlan19.Build','CreateNativePaperMemberLeaders19','STEP10_HORIZONTAL_TOS_LABEL_COUNT','STEP10_HORIZONTAL_TOS_EXPECTED','REV22_19_HORIZONTAL_SOURCE_MEMBER_COUNT','STEP10_MEMBER_ANNOTATIONS_CHECK','STEP10_ALL_TEN_NATIVE_VIEWS_REGISTERED','STEP10_VIEW_TITLE_COUNT','SupportFocusedCubePlanner.BuildAutomatic')) {
+            if(-not $new.Contains($token)) { throw "REV22.19 invariant missing: $token" }
+          }
+          foreach($token in @('IsHorizontalAxis','IsStronglyHorizontalBounds','NOT_HORIZONTAL','PLANT_TOP_OF_STEEL_PROPERTY','GEOMETRIC_TOP_APPROX','MaximumVerticalFraction')) {
+            if(-not $rule.Contains($token)) { throw "REV22.19 horizontal gate missing: $token" }
+          }
+          foreach($token in @('TopOfSteel','StartPoint','EndPoint','GetAllProperties','GeometricExtents','IsHorizontal')) {
+            if(-not $source.Contains($token)) { throw "REV22.19 source property path missing: $token" }
+          }
+          if($layout -notmatch 'bool addTos=member.IsHorizontal;') { throw 'REV22.19 TOS MUST be horizontal-only' }
+          if($layout -match 'bool addTos=member.IsVertical;') { throw 'Old vertical TOS condition detected' }
+          foreach($token in @('HorizontalTosLines','RowSpacingMm','LaneStepMm','LabelGapFromFrameMm','TOS EL.','TOS~')) {
+            if(-not $layout.Contains($token)) { throw "REV22.19 layout/token missing: $token" }
+          }
+          if($new -match 'SupportOrthoSummaryPanel15.Build\(') { throw 'No combined legend in per-member revision' }
+          if($new -notmatch 'new MText' -or $new -notmatch 'new Line\(') { throw 'Leader and member labels missing' }
       - name: Compile SPTC Support Drawings
         run: dotnet build src/SPTC.SupportDrawings/SPTC.SupportDrawings.csproj -c Release
       - name: Verify compiled DLL
@@ -667,7 +694,7 @@ jobs:
       - name: Upload DLL artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SPTC-SupportDrawings-Plant3D2025-REV22_18
+          name: SPTC-SupportDrawings-Plant3D2025-REV22_19
           path: src/SPTC.SupportDrawings/bin/Release/net8.0-windows/SPTC.SupportDrawings.dll
           retention-days: 30
           if-no-files-found: error
