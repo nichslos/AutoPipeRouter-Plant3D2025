@@ -20,5 +20,6 @@
     <Compile Include="../../src/SPTC.SupportDrawings/NativeOrthoViewportPaperGuard.cs" Link="NativeOrthoViewportPaperGuard.cs" />
     <Compile Include="../../src/SPTC.SupportDrawings/NativeOrthoIsoTwistGuard.cs" Link="NativeOrthoIsoTwistGuard.cs" />
     <Compile Include="../../src/SPTC.SupportDrawings/NativeOrthoIsoReferenceMath.cs" Link="NativeOrthoIsoReferenceMath.cs" />
+    <Compile Include="../../src/SPTC.SupportDrawings/NativeOrthoIsoFramingGuard.cs" Link="NativeOrthoIsoFramingGuard.cs" />
   </ItemGroup>
 </Project>
