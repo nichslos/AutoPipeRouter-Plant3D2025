@@ -1038,6 +1038,52 @@ Assert(rev221Plan.Callouts.Where(x=>x.HasTos)
     .All(x=>SupportOrthoMemberMText22.Encode(x.Text).Contains("\\P")&&
         !SupportOrthoMemberMText22.Encode(x.Text).Contains("fl-7.5TOS")),
     "REV22.22 every horizontal steel TOS label reaches MText as separate paragraph");
+// REV22.23: past generated REV22.22 labels wrapped without reserving
+// actual glyph height; DBText is intrinsically SINGLE-LINE, so no
+// "fl-7.5" soft-wrapping or TOS interleaving may occur.
+// The live AutoCAD writer additionally MEASURES native GeometricExtents
+// before emitting any leaders and fails closed when no room exists.
+var rev223Members=rev217Members.Select((m,i)=>
+    new SupportOrthoMemberCalloutPlan23.Member(
+        m.Handle,m.Size,m.X,m.Y,m.Z,
+        i<8,i<8?"+1117.5745 mm":null,
+        i<4?"GEOMETRIC_TOP_APPROX":
+        i<8?"PLANT_TOP_OF_STEEL_PROPERTY":"NOT_HORIZONTAL")).ToArray();
+var rev223Plan=SupportOrthoMemberCalloutPlan23.Build(
+    rev217Cameras,reservedTitleFrames.Titles,rev223Members,594,841);
+Assert(rev223Plan.Callouts.Count==130&&
+    rev223Plan.Skipped.Count==0,
+    "REV22.23 13 individual member tags fit in each of 10 native Ortho view gutters");
+Assert(rev223Plan.HorizontalTosLines==80 &&
+    rev223Plan.ApproximateTosLines==40,
+    "REV22.23 horizontal-only TOS labels and provenance counts preserved");
+Assert(rev223Plan.Callouts.Where(x=>x.HasTos)
+    .All(x=>x.Text.Split('\n').Length==2 &&
+        x.Text.Contains("\nTOS ") &&
+        !x.Text.Contains("\n\n")),
+    "REV22.23 horizontal steel always has exactly Size and TOS lines");
+Assert(rev223Plan.Callouts.Where(x=>!x.HasTos)
+    .All(x=>!x.Text.Contains("\n")&&!x.Text.Contains("TOS")),
+    "REV22.23 non-horizontal members have only their source name/Size");
+Assert(rev223Plan.Callouts.All(x=>
+    x.LabelX+x.LabelWidth<=594*.78 &&
+    x.LabelTop-x.LabelHeight>=841*.12 &&
+    x.LabelHeight==(x.HasTos?
+        SupportOrthoMemberCalloutPlan23.TextLineHeightMm*2:
+        SupportOrthoMemberCalloutPlan23.TextLineHeightMm)),
+    "REV22.23 DBText line-height reservations keep every label within paper bounds");
+Assert(rev223Plan.Callouts.GroupBy(x=>x.View)
+    .All(g=>g.Count()==13&&
+        g.Select(x=>x.LabelTop).Distinct().Count()==13),
+    "REV22.23 unique paper rows per member and native Ortho view");
+var veryLong223=rev223Members.Select((m,i)=>i==0?
+    m with {Size="EXTRA_LONG_STRUCTURAL_SIZE_DESIGNATION_"+
+        new string('X',260)}:m).ToArray();
+var longPlan223=SupportOrthoMemberCalloutPlan23.Build(
+    rev217Cameras,reservedTitleFrames.Titles,veryLong223,594,841);
+Assert(longPlan223.Callouts.Count==130,
+    "REV22.23 planner does not speculate glyph widths; live native DBText measures before writing");
+Console.WriteLine("PASS: REV22.23 nonwrapping DBText two-line member labels and 130-collision-safe paper rectangles.");
 Console.WriteLine("PASS: REV22.22 exact native MText paragraph conversion, no fl-7.5TOS concatenation, no source model changes.");
 Console.WriteLine("PASS: REV22.21 screenshot-matching two lines without blank line, spaced TOS ~, preserved 130 labels.");
 Console.WriteLine("PASS: REV22.20 blank-line TOS formatting and spaced TOS ~; 130 labels, horizontal-only and native paper bounds preserved.");
