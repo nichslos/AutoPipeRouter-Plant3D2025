@@ -27,5 +27,7 @@
     <Compile Include="../../src/SPTC.SupportDrawings/NativeOrthoViewTitlePlan.cs" Link="NativeOrthoViewTitlePlan.cs" />
     <Compile Include="../../src/SPTC.SupportDrawings/SupportOrthoMemberMetadata.cs" Link="SupportOrthoMemberMetadata.cs" />
     <Compile Include="../../src/SPTC.SupportDrawings/SupportOrthoCalloutPlan.cs" Link="SupportOrthoCalloutPlan.cs" />
+    <Compile Include="../../src/SPTC.SupportDrawings/SupportOrthoSelection15.cs" Link="SupportOrthoSelection15.cs" />
+    <Compile Include="../../src/SPTC.SupportDrawings/SupportOrthoSummaryPanel15.cs" Link="SupportOrthoSummaryPanel15.cs" />
   </ItemGroup>
 </Project>
