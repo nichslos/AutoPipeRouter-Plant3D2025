@@ -591,6 +591,25 @@ jobs:
           if($metadata -notmatch 'NOT RECORDED') { throw 'Unknown sections must not be invented' }
           if($panel -notmatch 'columns.Length!=2' -or $panel -notmatch 'PanelMarginMm') { throw 'Single safe central note placement missing' }
           if($new -notmatch 'new MText') { throw 'REV22.15 must write editable native paper-space MText' }
+      - name: Verify REV22.16 native Plant Structure Member Size data link
+        shell: pwsh
+        run: |
+          $new = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoTenViewPnpSteelSizeTest.cs' -Raw
+          $read = Get-Content 'src/SPTC.SupportDrawings/SupportOrthoPlantProperties16.cs' -Raw
+          $prior = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoTenViewCompactSteelAnnotationsTest.cs' -Raw
+          if ($new -notmatch 'CommandMethod\("SPTC_ORTHO22_16_PNP_STEEL_SIZE_TEST"') { throw 'Missing isolated REV22.16 command' }
+          if ($prior -notmatch 'CommandMethod\("SPTC_ORTHO22_15_COMPACT_STEEL_ANNOTATIONS_TEST"') { throw 'Verified REV22.15 command removed' }
+          if ($new -notmatch 'REV22.16 TEST') { throw 'Missing copied project consent code' }
+          foreach($token in @('SupportOrthoPlantProperties16.Inspect','REV22_16_PNP_STRUCTURE_CANDIDATES','REV22_16_PNP_LINKED_ROW_COUNT','REV22_16_PNP_MEMBERS_WITH_SIZE','SupportOrthoSummaryPanel15.Build','NativeOrthoViewTitlePlan.BuildTitles','SupportFocusedCubePlanner.BuildAutomatic','ISO_FRAME_COORDINATES_CHECK','AXIAL_FRAME_ROTATION_CHECK','STEP10_ALL_TEN_NATIVE_VIEWS_REGISTERED','STEP10_SUPPORT_PANEL_STATUS')) {
+            if (-not $new.Contains($token)) { throw "REV22.16 missing invariant: $token" }
+          }
+          foreach($token in @('Autodesk.ProcessPower.PlantInstance.PlantApplication','ProjectParts','Piping','DataLinksManager','FindAcPpRowId','GetAllProperties','StructureMember','"Size"','LinkedRows','MembersWithSize')) {
+            if (-not $read.Contains($token)) { throw "REV22.16 missing PnP source property path: $token" }
+          }
+          if($read -match 'SetProperties\(' -or $read -match 'SetProperty\(') { throw 'REV22.16 must never write PnP model properties' }
+          if($new -match 'PLANTORTHOUPDATE_ALL_ENTERED|Editor.Command\("_.PLANTORTHOUPDATE"') { throw 'Do not reuse unverified native auto update' }
+          if($new -match 'CreateNativePaperSupportAnnotations\(') { throw 'Do not repeat ten noisy annotation callouts' }
+          if($new -notmatch 'CreateNativePaperSupportSummary') { throw 'One compact paper summary must remain' }
       - name: Compile SPTC Support Drawings
         run: dotnet build src/SPTC.SupportDrawings/SPTC.SupportDrawings.csproj -c Release
       - name: Verify compiled DLL
@@ -602,7 +621,7 @@ jobs:
       - name: Upload DLL artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SPTC-SupportDrawings-Plant3D2025-REV22_15
+          name: SPTC-SupportDrawings-Plant3D2025-REV22_16
           path: src/SPTC.SupportDrawings/bin/Release/net8.0-windows/SPTC.SupportDrawings.dll
           retention-days: 30
           if-no-files-found: error
