@@ -13,6 +13,14 @@ public sealed class ProductionIsoCommands
             NativeIsoDialogEnhancer.Launch(doc);
     }
 
+    [CommandMethod("SPTC_ISOSTATUS", CommandFlags.Modal)]
+    public void Status()
+    {
+        var doc = AcadApp.DocumentManager.MdiActiveDocument;
+        if (doc is not null)
+            NativeIsoDialogEnhancer.Status(doc);
+    }
+
     [CommandMethod("SPTC_ISOCOPY", CommandFlags.Modal)]
     public void Copy()
     {
