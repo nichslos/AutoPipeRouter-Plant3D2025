@@ -32,6 +32,9 @@ internal static class NativeIsoDialogEnhancer
     private static string? _source;
     private static Document? _document;
     private static int _noWindowTicks;
+    private static bool _nativeSeen;
+    private static bool _resultsSeen;
+    private static DateTime _nativeClosedAt;
     private static readonly Dictionary<string, (long Size, long Modified)> Before =
         new(StringComparer.OrdinalIgnoreCase);
 
@@ -40,8 +43,12 @@ internal static class NativeIsoDialogEnhancer
         Detach();
         _document = doc;
         _source = null;
+        _destination = "";
         Before.Clear();
         _noWindowTicks = 0;
+        _nativeSeen = false;
+        _resultsSeen = false;
+        _nativeClosedAt = DateTime.MinValue;
         _watch = new System.Windows.Forms.Timer { Interval = 300 };
         _watch.Tick += OnTick;
         _watch.Start();
@@ -57,7 +64,7 @@ internal static class NativeIsoDialogEnhancer
         return buffer.ToString();
     }
 
-    private static IntPtr FindNativeDialog()
+    private static IntPtr FindDialog(string exactTitle)
     {
         IntPtr result = IntPtr.Zero;
         uint process = (uint)Process.GetCurrentProcess().Id;
@@ -65,7 +72,7 @@ internal static class NativeIsoDialogEnhancer
         {
             GetWindowThreadProcessId(handle, out uint pid);
             if (pid == process &&
-                WindowText(handle).Equals("Create Production Iso", StringComparison.OrdinalIgnoreCase))
+                WindowText(handle).Equals(exactTitle, StringComparison.OrdinalIgnoreCase))
             {
                 result = handle;
                 return false;
@@ -77,33 +84,79 @@ internal static class NativeIsoDialogEnhancer
 
     private static void OnTick(object? sender, EventArgs e)
     {
-        IntPtr found = FindNativeDialog();
-        if (found == IntPtr.Zero)
+        try
         {
+            IntPtr native = FindDialog("Create Production Iso");
+            if (native != IntPtr.Zero)
+            {
+                _nativeSeen = true;
+                _noWindowTicks = 0;
+                if (_native != native)
+                {
+                    _native = native;
+                    Attach(native);
+                }
+
+                string? current = ReadSourcePath(native);
+                if (current != null && !current.Equals(_source, StringComparison.OrdinalIgnoreCase))
+                {
+                    _source = current;
+                    Before.Clear();
+                    foreach (var item in Snapshot(current)) Before[item.Key] = item.Value;
+                    _document?.Editor.WriteMessage("\nSPTC ISO source: " + current);
+                }
+                PositionOverlay(native);
+                return;
+            }
+
             if (_native != IntPtr.Zero)
             {
-                // Dialog closed: retain chosen destination/source and BEFORE snapshot.
+                // Native window dismissed after Create or Cancel. Keep timer running
+                // until Autodesk's asynchronous Results window is closed.
+                RemoveOverlay();
+                _nativeClosedAt = DateTime.UtcNow;
+            }
+
+            if (FindDialog("Isometric Creation Results") != IntPtr.Zero)
+            {
+                _resultsSeen = true;
+                return;
+            }
+
+            if (_resultsSeen)
+            {
+                // The results dialog has closed. Native ISO generation has completed.
+                Detach();
+                if (!string.IsNullOrWhiteSpace(_destination))
+                {
+                    _document?.Editor.WriteMessage("\nSPTC ISO: Results closed; exporting completed drawings...");
+                    if (_document != null) CopyCompleted(_document);
+                }
+                else _document?.Editor.WriteMessage("\nSPTC ISO: No custom folder; ISO remains in default project folder.");
+                return;
+            }
+
+            if (!_nativeSeen && ++_noWindowTicks > 150)
+            {
                 Detach();
                 return;
             }
-            if (++_noWindowTicks > 150) Detach();
-            return;
-        }
 
-        _noWindowTicks = 0;
-        if (_native != found)
-        {
-            _native = found;
-            Attach(found);
+            // A user can cancel the native dialog; no export is performed.
+            // Do not time out during normal ISO generation, which can be lengthy.
+            if (_nativeClosedAt != DateTime.MinValue &&
+                (DateTime.UtcNow - _nativeClosedAt).TotalMinutes > 30)
+            {
+                Detach();
+                _document?.Editor.WriteMessage(
+                    "\nSPTC ISO: Results dialog was not observed; no automatic copy performed. Use SPTC_ISOCOPY.");
+            }
         }
-        string? current = ReadSourcePath(found);
-        if (current != null && !current.Equals(_source, StringComparison.OrdinalIgnoreCase))
+        catch (Exception ex)
         {
-            _source = current;
-            Before.Clear();
-            foreach (var item in Snapshot(current)) Before[item.Key] = item.Value;
+            Detach();
+            _document?.Editor.WriteMessage("\nSPTC ISO monitor: " + ex.Message);
         }
-        PositionOverlay(found);
     }
 
     private static string? ReadSourcePath(IntPtr dialog)
@@ -197,15 +250,20 @@ internal static class NativeIsoDialogEnhancer
         SetWindowPos(_overlay.Handle, IntPtr.Zero, x, y, w, 34, 0x0004 | 0x0040);
     }
 
+    private static void RemoveOverlay()
+    {
+        _native = IntPtr.Zero;
+        try { _overlay?.Dispose(); } catch { }
+        _overlay = null;
+        _destinationBox = null;
+    }
+
     private static void Detach()
     {
         _watch?.Stop();
         _watch?.Dispose();
         _watch = null;
-        _native = IntPtr.Zero;
-        try { _overlay?.Dispose(); } catch { }
-        _overlay = null;
-        _destinationBox = null;
+        RemoveOverlay();
     }
 
     private static Dictionary<string, (long Size, long Modified)> Snapshot(string folder)
@@ -245,7 +303,10 @@ internal static class NativeIsoDialogEnhancer
             if (string.IsNullOrWhiteSpace(_source) || !Directory.Exists(_source))
                 throw new InvalidOperationException("Native Production Iso source folder was not detected. No files copied.");
             if (string.IsNullOrWhiteSpace(_destination))
-                throw new InvalidOperationException("Choose Custom Save Location in the Production Iso dialog first.");
+            {
+                doc.Editor.WriteMessage("\nSPTC ISO: No custom folder selected; default output unchanged.");
+                return;
+            }
             string source = Path.GetFullPath(_source), targetRoot = Path.GetFullPath(_destination);
             if (NestedOrEqual(source, targetRoot) || NestedOrEqual(targetRoot, source))
                 throw new InvalidOperationException("Custom destination must be outside the native source and its parent folders.");
