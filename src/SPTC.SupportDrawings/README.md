@@ -1,3 +1,20 @@
+# SPTC Support Drawings — REV22.4: Read-Only Isometric Audit After Update
+
+**Observed REV22.3 screenshot (2026-11-09):** The four NW/NE/SW/SE frames are now compact and separate, but the user reports that their resulting projections remain incorrect. The screenshot does not show the native **Edit View** preset selection, the original Plant 3D viewport metadata, or the REV22.3 TXT log. Previous REV22.2 reports verified short native IDs and a matching camera *immediately after generation*, which does not prove that those values are retained after Edit View or Update View.
+
+**REV22.4 diagnostic command (does not generate views):** `SPTC_ORTHO22_4_ISO_AUDIT`.
+
+1. In a copied/backed-up Plant 3D 2025 project, open the generated native Ortho DWG. **Before** clicking Update View, run the audit command and click the real paper-space viewport border for **NW**, then **NE**, **SW**, **SE**, in that order.
+2. The command writes `<DWG>_REV22_4_ISO_AUDIT_<date>.txt` alongside the DWG; it does not modify the DWG, its view metadata, or `Ortho.dcf`.
+3. Use Plant 3D's native **Edit View** selector on each of the four. Capture whether it shows the actual preset or **Current View**. Do not alter the selection just to collect this evidence.
+4. Run native **Update View**, save/reopen as needed, then run `SPTC_ORTHO22_4_ISO_AUDIT` a second time in the same way. Supply both audit TXT files, the REV22.3 generation `*_REV22_3_RESULT.txt`, and the Edit View selector screenshot.
+
+**Recorded values:** user-identified viewport handles, WCS view directions and expected named isometric quadrants, twist angles (degrees), view targets, model view centers, paper-space positions and sizes, custom scales, and view heights. The audit does not assume NW/NE/SW/SE based on sorting or sheet coordinates. It checks camera direction against the standard WCS quadrant, but does **not** falsely equate that check with proof of correct native Edit View persistence or generated geometry.
+
+**Scope:** This is intentionally read-only investigation, not a claim to have fixed the incorrect isometric views. Do **not** change camera vectors, twist angles, metadata strings or existing production drawings without verifying the post-update state against a view produced by Plant 3D's native editor. REV22.3 generation and REV22.2 metadata fixes remain unchanged; the successful six axial views and ten-view one-click placement are preserved. The command may require clicking viewport *borders* rather than model linework.
+
+---
+
 # SPTC Support Drawings — REV22.3: Native Paper-Space Viewport Scale and Layout Test
 
 **User evidence:** `SPTC_TEST3_3EA_ORTHO_R22META_20261109_004924_0e0c_REV22_2_RESULT.txt` shows ten registered views, one click, four saved native isometric presets (`NW`, `NE`, `SW`, `SE`), and five overlapping viewport pairs. A TOP view planned at **76.163 × 19.950 mm** was actually **362.680 × 95.000 mm** on the 594 × 841 mm sheet. The same actual dimensions appeared in all ten viewports. The previous non-public `GenerateOrthos` call received unscaled `bounds.SizeX, bounds.SizeY` (362.68, 95) in its `viewportWidth` and `viewportHeight` parameters.
