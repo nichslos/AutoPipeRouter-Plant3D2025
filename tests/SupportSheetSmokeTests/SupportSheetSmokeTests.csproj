@@ -36,5 +36,6 @@
     <Compile Include="../../src/SPTC.SupportDrawings/SupportOrthoMemberCalloutPlan19.cs" Link="SupportOrthoMemberCalloutPlan19.cs" />
     <Compile Include="../../src/SPTC.SupportDrawings/SupportOrthoMemberCalloutPlan20.cs" Link="SupportOrthoMemberCalloutPlan20.cs" />
     <Compile Include="../../src/SPTC.SupportDrawings/SupportOrthoMemberCalloutPlan21.cs" Link="SupportOrthoMemberCalloutPlan21.cs" />
+    <Compile Include="../../src/SPTC.SupportDrawings/SupportOrthoMemberMText22.cs" Link="SupportOrthoMemberMText22.cs" />
   </ItemGroup>
 </Project>
