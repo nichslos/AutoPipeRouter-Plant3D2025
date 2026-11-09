@@ -583,13 +583,13 @@ public sealed class NativeOrthoTenViewIsoFixTest
                             {
                                 Vector3d actual=ReadViewportCamera(
                                     targetDoc.Database,viewportId);
-                                bool matches=NativeOrthoIsoViewType.MatchesCamera(
+                                bool isoCameraMatches=NativeOrthoIsoViewType.MatchesCamera(
                                     label,actual.X,actual.Y,actual.Z,
                                     item.Slot.Dx,item.Slot.Dy,item.Slot.Dz);
                                 Log("STEP8_"+label+"_ISOMETRIC_CAMERA_AFTER="+
                                     Point(actual.X,actual.Y,actual.Z));
-                                Log("STEP8_"+label+"_ISOMETRIC_CAMERA_MATCH_AFTER="+matches);
-                                if(!matches)
+                                Log("STEP8_"+label+"_ISOMETRIC_CAMERA_MATCH_AFTER="+isoCameraMatches);
+                                if(!isoCameraMatches)
                                     throw new InvalidOperationException(
                                         "REV22.1 "+label+
                                         " native generator reverted camera to Current View. "+
