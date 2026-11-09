@@ -23,5 +23,6 @@
     <Compile Include="../../src/SPTC.SupportDrawings/NativeOrthoIsoFramingGuard.cs" Link="NativeOrthoIsoFramingGuard.cs" />
     <Compile Include="../../src/SPTC.SupportDrawings/NativeOrthoAxialEditorPreset.cs" Link="NativeOrthoAxialEditorPreset.cs" />
     <Compile Include="../../src/SPTC.SupportDrawings/NativeOrthoAxialHalfTurnGuard.cs" Link="NativeOrthoAxialHalfTurnGuard.cs" />
+    <Compile Include="../../src/SPTC.SupportDrawings/SupportFocusedCubePlanner.cs" Link="SupportFocusedCubePlanner.cs" />
   </ItemGroup>
 </Project>
