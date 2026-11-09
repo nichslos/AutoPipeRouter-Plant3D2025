@@ -128,6 +128,15 @@ internal static class NativeIsoLineSelectOverlay
 
         try
         {
+            // REV13: Select All applies only to the visible folder routes.
+            // Do NOT select lines hidden behind the folder projection.
+            if (ProjectFolderLinePicker.FolderActive)
+            {
+                if (ProjectFolderLinePicker.TrySelectAllVisible(selected))
+                    return;
+                throw new InvalidOperationException(
+                    "Folder-specific native line selection is no longer available.");
+            }
             if (ApplySelection(_dialog, selected))
                 return;
         }
