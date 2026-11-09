@@ -1,3 +1,34 @@
+# REV 22.15 — Compact Structural Annotations for Blocks AND Individual Members
+
+**Isolated command:** `SPTC_ORTHO22_15_COMPACT_STEEL_ANNOTATIONS_TEST` (Plant 3D 2025, copied/test project only). REV22.13 and REV22.14 commands remain unchanged and available in the DLL.
+
+## Correction from REV22.14
+
+Runtime REV22.14 successfully registered 10 Ortho views, 10 view titles and 10 annotation callouts, but when the user selected 21 separate support objects (instead of one BlockReference), the labels repeated `NOT A BLOCK REFERENCE` and `NOT AVAILABLE (NO SECTION METADATA)` beside every view. This was both misleading and visually cluttered.
+
+REV22.15 reads the **actual selected entities** and distinguishes:
+- **Block Reference:** show the actual effective BlockReference name (dynamic block canonical name where possible).
+- **Separate structural objects:** `ASSEMBLY: 21 OBJECTS` (or actual selected count). Never mislabel the selected objects as a block.
+- **Recognized structural member sizes:** explicit values from section-size attributes, nested block or layer names, native structural-member section properties, and additional explicit `SECTION_SIZE=...` style XData or section-named extension-dictionary Xrecords. All metadata is read-only and documented in the result TXT with evidence.
+- **No size metadata:** display the short `MEMBER: SIZE NOT RECORDED` **once**. Steel sections cannot be determined reliably from an anonymous 3D solid's overall bounding extents, and the program does not invent any C100/L75 sizes.
+
+## Professional paper layout
+
+The old ten repeated annotation text blocks are replaced in REV22.15 with **ONE** compact editable paper-space support information panel, in the unused gap between left and right view columns:
+- Header: `STRUCTURAL SUPPORT`
+- Body: `BLOCK: <actual block name>` or `ASSEMBLY: <count> OBJECTS`
+- Body: `MEMBER: <actual CAD section sizes>` or `MEMBER: SIZE NOT RECORDED`
+- Native editable `MText` on `SPTC_SUPPORT_ANNOTATIONS`, body 2.8 mm; compact border and header separator.
+- View label `TOP VIEW`, etc., remains below each of the ten native views on `SPTC_VIEW_TITLES`. One-click placement, compact SupportFocus cube, long-pipe XY clipping, correct six axial/four iso cameras, native Ortho metadata, common scale, and title-block keepout remain unchanged.
+
+The summary planner checks actual viewport and title frames before drawing the note; if a particular seed has no safe central gap, it skips **the annotation only** and logs `STEP10_SUPPORT_PANEL_STATUS=SKIPPED_NO_SAFE_SPACE`. It never disrupts the already-generated native ten Ortho views and titles.
+
+**Test:** Exit Plant 3D, NETLOAD the new REV22.15 DLL, run `SPTC_ORTHO22_15_COMPACT_STEEL_ANNOTATIONS_TEST` in a copied project, select SupportFocus, select ONE BlockReference or its individual structural members, optionally select nearby pipes, pick a registered EMPTY native Ortho seed, authorize `REV22.15 TEST`, one click to place views. Verify `STEP10_SUPPORT_PANEL_STATUS=PASS` and that the source identity, available section sizes, title alignment and leader-free single note are visually correct. Share the `*_REV22_15_RESULT.txt` and screenshot. Save/reopen and test native Update View persistence separately.
+
+**Scope:** This is a sheet-level source-data annotation, **not** native associative `PLANTORTHOANNOTATE` for each member. To label individual 3D steel elements with a leader to their precisely projected position, we would need additional per-component 3D-to-viewport projection and stable model association; this revision does not fabricate that link. The Autodesk internal GenerateOrthos invocation remains experimental. Use copied projects only.
+
+---
+
 # SPTC Support Drawings — REV22.14: Block Name + Structural Member Size Annotations
 
 **Isolated command:** `SPTC_ORTHO22_14_STRUCTURE_ANNOTATIONS_TEST`. The previously visually verified REV22.13 command and REV22.12 SupportFocus stay unchanged. Test in **COPIED** AutoCAD Plant 3D 2025 project only.
