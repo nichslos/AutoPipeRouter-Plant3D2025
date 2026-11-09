@@ -1,3 +1,36 @@
+# REV 22.18 — Improved individual structural-member leader routing and vertical TOS elevations
+
+**New isolated test command:** `SPTC_ORTHO22_18_VERTICAL_TOS_TEST` on AutoCAD Plant 3D **2025**. Use a copied, registered project and type `REV22.18 TEST`. The prior REV22.17 command is unchanged and remains available as the verified 130-leader baseline.
+
+**User request:** Refine REV22.17's long overlapping leader lines and annotate *each* individual structural member; additionally, for members oriented VERTICALLY, insert **TOS (Top of Steel) elevation on a separate line BELOW that specific member's original steel-size tag**. Horizontal or sloping-horizontal members retain their existing Size line without TOS. This is not a single summary box.
+
+**Actual source facts:** TEST5 REV22.17 has 21 selected support objects, 13 true Plant 3D `Structure Member` entities, 13 matching project database `Size` values. Examples: `Angle 75 thck 9`, `Round 80`, and `Sloping channel 100x50 web-5 fl-7.5`. REV22.18 uses exactly these per-entity PnP `Size` values, selected native ObjectId/handle, and each member's WCS 3D extents midpoint. It does not estimate steel profile sizes from bounds.
+
+**Vertical detection:** Prefer the actual native member's `StartPoint` / `EndPoint` or reflected start/end XYZ Property palette values. Require a near-vertical member axis (vertical component at least 98% and length at least 150 source-mm). If the Plant API does not expose the endpoints, fall back conservatively to strongly vertical bounding extents, where Z exceeds 1.8× both X/Y and exceeds 150 source-mm; the result log distinctly flags `STRONG_VERTICAL_BOUNDS`. All nonvertical members receive NO TOS line.
+
+**Top of Steel source:** Read `TopOfSteel` / `Top of Steel` from the actual native entity's public/PropertyDescriptor properties or the selected entity's `Piping.DataLinksManager.FindAcPpRowId` and `GetAllProperties(rowId,true)` Project Data records. If this is found, the two-line annotation shows e.g.:
+
+`[521] Sloping channel 100x50 web-5 fl-7.5`
+`TOS EL. +502.7872 mm`
+
+If an exact Top of Steel property is unavailable, the bounding upper Z elevation is used **only for a confidently vertical member** and is explicitly marked approximately `TOS~ +502.7872 mm`; the source is logged `GEOMETRIC_TOP_APPROX`. Never present a geometry-derived number as exact PnP TOS. Missing/invalid values show `TOS: N/A`, not a fabricated number. Actual units assume source 3D drawing coordinates are millimeters, as in TEST5.
+
+**Improved leader layout:** After generating the same ten native views and the same ten REV22.13 view titles, read each saved native viewport's direction, twist, view center and scale. Project the source member centroid onto that actual viewport exactly as in REV22.17. Sort source members by *projected Y* so their corresponding label order does not reverse; distribute MText labels over a larger dedicated vertical band outside the right side of the viewport, preserving other viewports, paper keepouts and view titles. Add one independently offset 3-segment, mostly orthogonal leader lane per actual member (source → horizontal lane → vertical landing → label). The old aggregated REV22.16 information panel and REV22.17 diagonal leader fan are not created by the REV22.18 command. Text height 2.1mm; individual TOS line below name uses native MText paragraph break. No forced metadata truncation, overlapping label rectangles, or fake per-member positions. If a label cannot fit, skip and explicitly log `PARTIAL`.
+
+**Tests:** Exit Plant3D, NETLOAD new DLL, open the same TEST5 source drawing in a COPIED project, run `SPTC_ORTHO22_18_VERTICAL_TOS_TEST`, select SupportFocus and the same 21 support objects, optionally select the same 3 nearby pipes, choose an EMPTY registered native Ortho seed, enter `REV22.18 TEST`, then one click. Verify output TXT:
+- `REV22_18_VERTICAL_SOURCE_MEMBER_COUNT` (native members recognized as vertical)
+- `REV22_18_TOS_EXACT_PROPERTY_COUNT`
+- `REV22_18_TOS_GEOMETRIC_APPROX_COUNT`
+- `REV22_18_MEMBER_TOS` per handle, orientation source, exact vs approximate
+- `STEP10_INDIVIDUAL_MEMBER_ANNOTATION_COUNT=130` expected if all 13 native members in all 10 views can safely receive labels
+- `STEP10_VERTICAL_TOS_LABEL_COUNT=10 × REV22_18_VERTICAL_SOURCE_MEMBER_COUNT` expected when all TOS labels fit
+- `STEP10_MEMBER_ANNOTATIONS_CHECK=PASS/PARTIAL`
+- `STEP10_ALL_TEN_NATIVE_VIEWS_REGISTERED=True`, `STEP10_VIEW_TITLE_COUNT=10`
+
+**Limits:** TOS project linkage/exact values require live Plant 3D runtime validation. A bounding-box orientation fallback can misclassify irregular steel shapes; confirm on each representative vertical member and inspect `DIRECTION_SOURCE`. Source midpoints can be hidden by other 3D members; this custom paper-space annotation is **not native PLANTORTHOANNOTATE**, does not provide occlusion-aware edges, and does not automatically update when model or native Ortho views change. The Autodesk internal `GenerateOrthos` call remains experimental, so copied project only. REV22.17 stays the functional rollback.
+
+---
+
 # REV 22.17 — Annotation leader for EVERY individual structural member in EACH Ortho view
 
 **Why this revision:** The user validated REV22.16 on TEST5: 21 separate selected support objects, of which 13 are Plant 3D native Structure Members, all **13/13** linked to PnP properties. Distinct actual `Structure Member.Size` values are `Angle 75 thck 9`, `Round 80`, `Sloping channel 100x50 web-5 fl-7.5`. But REV22.16 printed only a single summary panel beside TOP VIEW; the user's screenshot explicitly requires a separate leader **from each structural member in the view**, not a shared size legend.
