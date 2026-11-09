@@ -79,7 +79,14 @@ internal static class ActiveDwgTags
                 int inspected = 0;
                 foreach (ObjectId id in model)
                 {
-                    if (++inspected > 20000) break;
+                    if (++inspected > 20000)
+                    {
+                        Tags.Clear();
+                        LinkedEntities = 0;
+                        LastDiagnostic = "Too many model-space entities to validate safely; native list unchanged.";
+                        doc.Editor.WriteMessage("\nSPTC REV08: " + LastDiagnostic);
+                        return;
+                    }
                     if (!id.IsValid || id.IsErased) continue;
                     Entity? e;
                     try { e = tr.GetObject(id, OpenMode.ForRead, false) as Entity; }
@@ -94,6 +101,14 @@ internal static class ActiveDwgTags
                         || dxfName.StartsWith("ACPP", StringComparison.OrdinalIgnoreCase);
                     if (!plantPart) continue;
                     CheckedEntities++;
+                    if (CheckedEntities > 1500)
+                    {
+                        Tags.Clear();
+                        LinkedEntities = 0;
+                        LastDiagnostic = "More than 1500 Plant objects; automatic tag filtering disabled to keep Plant 3D responsive.";
+                        doc.Editor.WriteMessage("\nSPTC REV08: " + LastDiagnostic);
+                        return;
+                    }
 
                     try
                     {
