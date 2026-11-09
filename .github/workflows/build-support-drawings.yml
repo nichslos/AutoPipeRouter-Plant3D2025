@@ -569,6 +569,28 @@ jobs:
           if ($metadata -notmatch 'NOT AVAILABLE \(NO SECTION METADATA\)') { throw 'Unknown structural sizes must not be fabricated' }
           if ($plan -notmatch 'FrameGapMm=7.0') { throw 'Callouts must be outside native viewports' }
           if ($new -notmatch 'new MText' -or $new -notmatch 'new Line\(') { throw 'Native paper-space note and leader not created' }
+      - name: Verify REV22.15 compact standalone block and member annotations
+        shell: pwsh
+        run: |
+          $new = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoTenViewCompactSteelAnnotationsTest.cs' -Raw
+          $reader = Get-Content 'src/SPTC.SupportDrawings/SupportOrthoSourceReader15.cs' -Raw
+          $metadata = Get-Content 'src/SPTC.SupportDrawings/SupportOrthoSelection15.cs' -Raw
+          $panel = Get-Content 'src/SPTC.SupportDrawings/SupportOrthoSummaryPanel15.cs' -Raw
+          $prior = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoTenViewStructuralAnnotationsTest.cs' -Raw
+          if ($new -notmatch 'CommandMethod\("SPTC_ORTHO22_15_COMPACT_STEEL_ANNOTATIONS_TEST"') { throw 'REV22.15 test command missing' }
+          if ($prior -notmatch 'CommandMethod\("SPTC_ORTHO22_14_STRUCTURE_ANNOTATIONS_TEST"') { throw 'REV22.14 fallback removed' }
+          if ($new -notmatch 'REV22.15 TEST') { throw 'Missing copied-project authorization' }
+          foreach($token in @('SupportOrthoSourceReader15.Inspect','SupportOrthoSummaryPanel15.Build','CreateNativePaperSupportSummary','REV22_15_SUPPORT_OBJECT_COUNT','REV22_15_BLOCK_REFERENCE_COUNT','REV22_15_NATIVE_STRUCTURE_MEMBER_COUNT','STEP10_SUPPORT_PANEL_STATUS','STEP10_VIEW_TITLE_COUNT','NativeOrthoViewTitlePlan.ReserveBelow','SupportFocusedCubePlanner.BuildAutomatic','AXIAL_FRAME_ROTATION_CHECK','ISO_FRAME_COORDINATES_CHECK','STEP10_ALL_TEN_NATIVE_VIEWS_REGISTERED')) {
+            if (-not $new.Contains($token)) { throw "REV22.15 missing critical guard: $token" }
+          }
+          if ($new -match 'CreateNativePaperSupportAnnotations\(' -or $new -match 'SupportOrthoCalloutPlan.Build') { throw 'Old ten noisy annotations still used in REV22.15' }
+          if ($new -match 'PLANTORTHOUPDATE_ALL_ENTERED|Editor.Command\("_.PLANTORTHOUPDATE"') { throw 'Disallowed native auto update' }
+          foreach($token in @('BlockReference','ExtensionDictionary','XData','StructureMember','SectionSize','SectionFromAttribute')) {
+            if (-not $reader.Contains($token)) { throw "REV22.15 source metadata reader missing: $token" }
+          }
+          if($metadata -notmatch 'NOT RECORDED') { throw 'Unknown sections must not be invented' }
+          if($panel -notmatch 'columns.Length!=2' -or $panel -notmatch 'PanelMarginMm') { throw 'Single safe central note placement missing' }
+          if($new -notmatch 'new MText') { throw 'REV22.15 must write editable native paper-space MText' }
       - name: Compile SPTC Support Drawings
         run: dotnet build src/SPTC.SupportDrawings/SPTC.SupportDrawings.csproj -c Release
       - name: Verify compiled DLL
@@ -580,7 +602,7 @@ jobs:
       - name: Upload DLL artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SPTC-SupportDrawings-Plant3D2025-REV22_14
+          name: SPTC-SupportDrawings-Plant3D2025-REV22_15
           path: src/SPTC.SupportDrawings/bin/Release/net8.0-windows/SPTC.SupportDrawings.dll
           retention-days: 30
           if-no-files-found: error
