@@ -400,6 +400,24 @@ jobs:
           if ($code -notmatch 'GetViewTypeFromName') { throw 'REV22.2 native preset preflight not preserved' }
           if ($code -notmatch 'STEP10_ALL_TEN_NATIVE_VIEWS_REGISTERED') { throw 'Ten-view registration not preserved' }
           if ($math -notmatch 'IsProjectedWorldUp') { throw 'REV22.5 projection guard missing' }
+      - name: Verify REV22.6 native reference comparison is isolated and read-only
+        shell: pwsh
+        run: |
+          $code = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoIsoReferenceComparison.cs' -Raw
+          $math = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoIsoReferenceMath.cs' -Raw
+          $old = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoTenViewIsoTwistFixTest.cs' -Raw
+          foreach($cmd in @('SPTC_ORTHO22_6_CAPTURE_NATIVE_ISO','SPTC_ORTHO22_6_COMPARE_NATIVE_ISO')) {
+            if ($code -notmatch [regex]::Escape($cmd)) { throw "Missing REV22.6 native comparison command $cmd" }
+          }
+          if ($old -notmatch 'CommandMethod\("SPTC_ORTHO22_5_ISO_TWIST_TEST"') { throw 'REV22.5 generator fallback must remain unchanged' }
+          if ($code -notmatch 'OpenMode.ForRead') { throw 'REV22.6 viewport capture must use ForRead' }
+          if ($code -match 'OpenMode.ForWrite|GenerateOrthos|CreateOrthos|AddPnPDrawingFile|Ortho.dcf') {
+            throw 'REV22.6 must not mutate native Ortho drawings or project DB'
+          }
+          foreach($token in @('ParseNativeReference','VIEWPORT_CAMERA_AND_ROLL_MATCH','NativeOrthoIsoReferenceMath.Compare')) {
+            if (-not $code.Contains($token)) { throw "Missing read-only comparison requirement $token" }
+          }
+          if ($math -notmatch 'Math.IEEERemainder') { throw '0 and 360 degrees must be equivalent' }
       - name: Compile SPTC Support Drawings
         run: dotnet build src/SPTC.SupportDrawings/SPTC.SupportDrawings.csproj -c Release
       - name: Verify compiled DLL
@@ -411,7 +429,7 @@ jobs:
       - name: Upload DLL artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SPTC-SupportDrawings-Plant3D2025-REV22_5
+          name: SPTC-SupportDrawings-Plant3D2025-REV22_6
           path: src/SPTC.SupportDrawings/bin/Release/net8.0-windows/SPTC.SupportDrawings.dll
           retention-days: 30
           if-no-files-found: error
