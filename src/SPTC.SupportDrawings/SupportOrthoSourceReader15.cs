@@ -38,7 +38,12 @@ internal static class SupportOrthoSourceReader15
                     continue;
                 selectedCount++;
                 string handle=id.Handle.ToString();
-                if(entity is BlockReference)blockCount++;
+                if(entity is BlockReference block)
+                {
+                    blockCount++;
+                    InspectInsertedBlockAttributes(tr,block,handle,
+                        sizes,evidence,warnings);
+                }
                 string type=entity.GetType().Name;
                 string rx="";
                 try{rx=id.ObjectClass?.Name??"";}catch{}
@@ -64,13 +69,47 @@ internal static class SupportOrthoSourceReader15
             sizes,evidence,warnings);
     }
 
+    private static string NormalizePropertyKey(string value) =>
+        Regex.Replace((value??"").Trim(),
+            @"([a-z0-9])([A-Z])","$1_$2")
+            .Replace('-','_').Replace(' ','_').ToUpperInvariant();
+
     private static void AddTyped(string key,string? value,string location,
         List<string> sizes,List<string> evidence)
     {
-        string? actual=SupportOrthoMemberMetadata.SectionFromAttribute(key,value);
+        string canonical=NormalizePropertyKey(key);
+        // ProfileName is a recognized typed structural description.
+        if(canonical=="PROFILE_NAME")canonical="PROFILE";
+        string? actual=SupportOrthoMemberMetadata.SectionFromAttribute(canonical,value);
         if(actual==null)return;
         sizes.Add(actual);
         evidence.Add("SIZE:"+location+"/"+key+"="+actual);
+    }
+
+    // Treat SectionSize / SectionName / MemberSize in normal AutoCAD
+    // AttributeReferences and dynamic block properties as typed metadata.
+    private static void InspectInsertedBlockAttributes(
+        Transaction tr,BlockReference block,string handle,
+        List<string> sizes,List<string> evidence,List<string> warnings)
+    {
+        try
+        {
+            foreach(ObjectId id in block.AttributeCollection)
+                if(tr.GetObject(id,OpenMode.ForRead,false) is AttributeReference attr)
+                    AddTyped(attr.Tag??"",attr.TextString,
+                        "block-attribute "+handle,sizes,evidence);
+            try
+            {
+                foreach(DynamicBlockReferenceProperty prop in
+                    block.DynamicBlockReferencePropertyCollection)
+                    AddTyped(prop.PropertyName,prop.Value?.ToString(),
+                        "dynamic-block "+handle,sizes,evidence);
+            }
+            catch(System.Exception ex)
+            {warnings.Add("DYNAMIC-BLOCK:"+handle+" "+ex.GetType().Name);}
+        }
+        catch(System.Exception ex)
+        {warnings.Add("BLOCK-ATTR:"+handle+" "+ex.GetType().Name);}
     }
 
     private static void InspectXdata(Entity entity,string handle,
@@ -104,7 +143,8 @@ internal static class SupportOrthoSourceReader15
             if(tr.GetObject(dictId,OpenMode.ForRead,false) is not DBDictionary dict)return;
             foreach(DBDictionaryEntry pair in dict)
             {
-                if(!SupportOrthoMemberMetadata.IsSizeProperty(pair.Key))continue;
+                if(!SupportOrthoMemberMetadata.IsSizeProperty(
+                    NormalizePropertyKey(pair.Key)))continue;
                 if(tr.GetObject(pair.Value,OpenMode.ForRead,false) is not Xrecord rec)
                     continue;
                 using var data=rec.Data;
