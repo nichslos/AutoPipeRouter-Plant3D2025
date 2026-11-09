@@ -980,6 +980,41 @@ Assert(rev220Plan.Callouts.All(x=>
     x.LabelX+x.LabelWidth<=594*.78&&
     x.LabelTop-x.LabelHeight>=841*.12),
     "REV22.20 all three-line caption boxes preserve native paper keepout");
+// REV22.21: user-provided CAD screenshot requires the next line IMMEDIATELY,
+// not the extra empty line introduced by REV22.20. Preserve spaced TOS ~.
+var rev221Members=rev217Members.Select((m,i)=>
+    new SupportOrthoMemberCalloutPlan21.Member(
+        m.Handle,m.Size,m.X,m.Y,m.Z,
+        i<7,i<7?"+502.7872 mm":null,
+        i<4?"GEOMETRIC_TOP_APPROX":
+        i<7?"PLANT_TOP_OF_STEEL_PROPERTY":"NOT_HORIZONTAL")).ToArray();
+var rev221Plan=SupportOrthoMemberCalloutPlan21.Build(
+    rev217Cameras,reservedTitleFrames.Titles,rev221Members,594,841);
+Assert(rev221Plan.Callouts.Count==130&&rev221Plan.Skipped.Count==0,
+    "REV22.21 all 13 steel member labels retained per 10 Ortho views");
+Assert(rev221Plan.HorizontalTosLines==70&&
+    rev221Plan.ApproximateTosLines==40,
+    "REV22.21 source-dependent TOS counts unchanged");
+Assert(rev221Plan.Callouts.Where(x=>x.HasTos)
+    .All(x=>x.Text.Split('\\n').Length==2&&
+        x.Text.Contains("\\nTOS ")&&
+        !x.Text.Contains("\\n\\n")&&
+        !x.Text.Contains("TOS~")),
+    "REV22.21 precisely 2 lines and no blank paragraph for horizontal member TOS");
+var rev221Example=rev221Plan.Callouts.First(x=>
+    x.HasTos&&x.Text.Contains("TOS ~ "));
+Assert(rev221Example.Text==
+    "["+rev221Example.Handle+"] "+rev221Members.First(m=>
+        m.Handle==rev221Example.Handle).Size+"\\nTOS ~ +502.7872 mm",
+    "REV22.21 exact screenshot approximate TOS on line immediately below member label");
+Assert(rev221Plan.Callouts.Where(x=>!x.HasTos)
+    .All(x=>!x.Text.Contains("TOS")&&!x.Text.Contains("\\n")),
+    "REV22.21 no TOS for vertical, round or non-horizontal members");
+Assert(rev221Plan.Callouts.All(x=>
+    x.LabelX+x.LabelWidth<=594*.78&&
+    x.LabelTop-x.LabelHeight>=841*.12),
+    "REV22.21 exact two-line height safely reserved in Ortho paper");
+Console.WriteLine("PASS: REV22.21 screenshot-matching two lines without blank line, spaced TOS ~, preserved 130 labels.");
 Console.WriteLine("PASS: REV22.20 blank-line TOS formatting and spaced TOS ~; 130 labels, horizontal-only and native paper bounds preserved.");
 Console.WriteLine("PASS: REV22.19 TOS only on horizontal steel; vertical posts exclude it, 10-view leader layout preserved.");
 Console.WriteLine("PASS: REV22.18 improved member leader routing, true vertical identification and exact/marked TOS elevation.");
