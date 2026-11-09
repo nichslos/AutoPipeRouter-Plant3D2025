@@ -368,6 +368,21 @@ jobs:
           if ($code -notmatch 'GetViewTypeFromName') { throw 'REV22.2 native isometric mapping not preserved' }
           if ($code -notmatch 'SAVED_VIEWDEF_TYPE') { throw 'REV22.2 native metadata readback not preserved' }
           if ($code -notmatch 'STEP10_ALL_TEN_NATIVE_VIEWS_REGISTERED') { throw 'Ten-view catalog verification not preserved' }
+      - name: Verify REV22.4 read-only post-update iso audit
+        shell: pwsh
+        run: |
+          $audit = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoIsoAfterUpdateAudit.cs' -Raw
+          $prior = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoTenViewScaleLayoutFixTest.cs' -Raw
+          if ($audit -notmatch 'CommandMethod\("SPTC_ORTHO22_4_ISO_AUDIT"') { throw 'REV22.4 audit command missing' }
+          foreach($v in @('NW','NE','SW','SE')) {
+            if ($audit -notmatch ('"'+$v+'"')) { throw "REV22.4 missing $v" }
+          }
+          foreach($diagnostic in @('VIEW_DIRECTION','EXPECTED_WCS_ISO_DIRECTION','CAMERA_WCS_ISO_MATCH','VIEW_TWIST_DEG','VIEW_TARGET','PAPER_FRAME','CUSTOM_SCALE')) {
+            if (-not $audit.Contains($diagnostic)) { throw "REV22.4 missing audit diagnostic $diagnostic" }
+          }
+          if ($audit -notmatch 'OpenMode.ForRead') { throw 'Audit must read selected viewport only' }
+          if ($audit -match 'ForWrite|GenerateOrthos|CreateOrthos|AddPnPDrawingFile|CommandFlags.Session') { throw 'Audit must not mutate native ortho project' }
+          if ($prior -notmatch 'CommandMethod\("SPTC_ORTHO22_3_SCALE_LAYOUT_TEST"') { throw 'REV22.3 fallback missing' }
       - name: Compile SPTC Support Drawings
         run: dotnet build src/SPTC.SupportDrawings/SPTC.SupportDrawings.csproj -c Release
       - name: Verify compiled DLL
@@ -379,7 +394,7 @@ jobs:
       - name: Upload DLL artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SPTC-SupportDrawings-Plant3D2025-REV22_3
+          name: SPTC-SupportDrawings-Plant3D2025-REV22_4
           path: src/SPTC.SupportDrawings/bin/Release/net8.0-windows/SPTC.SupportDrawings.dll
           retention-days: 30
           if-no-files-found: error
