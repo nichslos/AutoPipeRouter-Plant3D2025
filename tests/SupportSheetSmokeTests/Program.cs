@@ -433,6 +433,49 @@ for(int i=0;i<axialNames.Length;i++)
 }
 Assert(!NativeOrthoAxialEditorPreset.IsAxial("NW"),
     "REV22.8 leave four ISO view identifiers unaffected");
+// REV22.10: generated orthographic views appeared half-turned compared
+// with the SAME views after native Edit View/Update View. Test that the
+// paper-screen rotation and ViewCenter are transformed together.
+foreach(string axial in new[]{"TOP","BOTTOM","LEFT","RIGHT","FRONT","BACK"})
+{
+    var native180=new NativeOrthoIsoFramingGuard.ViewState(347.236,-17.816,Math.PI);
+    var fixToZero=NativeOrthoAxialHalfTurnGuard.Flip(native180);
+    Assert(fixToZero.AppliedHalfTurn&&fixToZero.CenterX==-347.236&&
+        fixToZero.CenterY==17.816&&
+        NativeOrthoIsoTwistGuard.IsZeroTwist(fixToZero.TwistRadians),
+        "REV22.10 "+axial+" 180-to-0 turn with ViewCenter compensation");
+    Assert(NativeOrthoAxialHalfTurnGuard.Matches(fixToZero,
+        new NativeOrthoIsoFramingGuard.ViewState(-347.236,17.816,0)),
+        "REV22.10 "+axial+" 180-to-0 saved readback");
+    var nativeZero=new NativeOrthoIsoFramingGuard.ViewState(100,-250,2*Math.PI);
+    var fixTo180=NativeOrthoAxialHalfTurnGuard.Flip(nativeZero);
+    Assert(fixTo180.AppliedHalfTurn&&fixTo180.CenterX==-100&&
+        fixTo180.CenterY==250&&
+        NativeOrthoIsoTwistGuard.IsHalfTurn(fixTo180.TwistRadians),
+        "REV22.10 "+axial+" 0-to-180 turn with ViewCenter compensation");
+    Assert(NativeOrthoAxialHalfTurnGuard.Matches(fixTo180,
+        new NativeOrthoIsoFramingGuard.ViewState(-100,250,Math.PI)),
+        "REV22.10 "+axial+" 0-to-180 saved readback");
+}
+bool nonHalfAngleRefused=false;
+try
+{
+    NativeOrthoAxialHalfTurnGuard.Flip(
+        new NativeOrthoIsoFramingGuard.ViewState(10,20,Math.PI/2));
+}
+catch(InvalidOperationException){nonHalfAngleRefused=true;}
+Assert(nonHalfAngleRefused,
+    "REV22.10 reject unsupported 90-degree native view twist");
+bool nonfiniteAxialRefused=false;
+try
+{
+    NativeOrthoAxialHalfTurnGuard.Flip(
+        new NativeOrthoIsoFramingGuard.ViewState(double.NaN,20,0));
+}
+catch(ArgumentException){nonfiniteAxialRefused=true;}
+Assert(nonfiniteAxialRefused,"REV22.10 reject invalid axial viewport center");
+Console.WriteLine("PASS: REV22.10 six axial half-turn and center guards.");
+
 Console.WriteLine("PASS: REV22.8 six native axial Edit View presets are runtime-recognized or fail closed.");
 
 Console.WriteLine("PASS: REV22.7 four native ISO view-center sign flips with guarded twist correction.");
