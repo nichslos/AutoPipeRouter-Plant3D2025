@@ -1,3 +1,17 @@
+# SPTC Support Drawings — REV22.5: Four-Isometric Viewport Twist Test
+
+**Observed from uploaded 2026-11-09 logs:** `*_REV22_3_RESULT.txt` confirms all ten native views registered with one click and correct actual viewport frames, scale 1:5, `ACTUAL_VIEWPORT_OVERLAP_DETECTED=False`, and no title-block collision. It also confirms saved native `NW`, `NE`, `SW`, `SE` view type strings and correct WCS camera quadrants. A separate `*_REV22_4_ISO_AUDIT_*.txt` reports **`VIEW_TWIST_DEG=180` on every isometric viewport**, despite matching view directions. Since camera up vectors were explicitly chosen as the projection of WCS +Z, a half-turn in the paper viewport makes the displayed object inverted.
+
+**New isolated generation test command:** `SPTC_ORTHO22_5_ISO_TWIST_TEST`. Does not replace or modify REV22.3 generation or REV22.4 read-only audit commands. The new command uses the exact same ten-view native generation, per-view paper-frame and collision validation, and four short native isometric preset identifiers. After `GenerateOrthos` completes for NW, NE, SW, SE **only**, it logs the actual `Viewport.TwistAngle`, checks that the requested `upVector` matches projected WCS +Z, and sets `TwistAngle=0` on the **newly generated paper-space viewport**. It reads back the value, logs `TWIST_NORMALIZED_CHECK=PASS`, and preserves the existing camera, native metadata, scale and placement tests. TOP/BOTTOM/LEFT/RIGHT/FRONT/BACK are unchanged.
+
+**WARNING:** Directly changing the generated viewport twist in a fresh test Ortho DWG is an **experimental workaround**, not a supported native Ortho API. Native Update View or Edit View might recompute the twist or reapply internal sheet metadata. Do not use in production, do not directly edit `Ortho.dcf`, and do not treat the initial `PASS` as proof of post-update persistence.
+
+**Test in a copied backed-up project only:** Restart Plant 3D 2025, `NETLOAD` the new DLL, open the registered source 3D support DWG, run `SPTC_ORTHO22_5_ISO_TWIST_TEST`; select the same steel members, an empty registered Project Manager Ortho seed, accept the warning and type **`REV22.5 TEST`**. Click once on the paper space. Confirm isometric display is no longer upside-down. Save the `_ORTHO_R25TWIST_` drawing and run `SPTC_ORTHO22_4_ISO_AUDIT` before and again after two native **Edit View / Update View** operations. Upload the `*_REV22_5_RESULT.txt`, both `*_REV22_4_ISO_AUDIT_*.txt`, and before/after screenshots showing each native view preset in Edit View.
+
+**Success requires more than build:** ten model-linked views, 1-click group, zero overlap, native view types, all four `TWIST_NORMALIZED_CHECK=PASS`, correctly oriented visible projections, and 0-degree twist with stable Edit View presets **after** saving, reopening and repeated Update View. If Update View returns to 180 degrees, inspect the native view definition's stored rotation rather than rewriting the viewport repeatedly.
+
+---
+
 # SPTC Support Drawings — REV22.4: Read-Only Isometric Audit After Update
 
 **Observed REV22.3 screenshot (2026-11-09):** The four NW/NE/SW/SE frames are now compact and separate, but the user reports that their resulting projections remain incorrect. The screenshot does not show the native **Edit View** preset selection, the original Plant 3D viewport metadata, or the REV22.3 TXT log. Previous REV22.2 reports verified short native IDs and a matching camera *immediately after generation*, which does not prove that those values are retained after Edit View or Update View.
