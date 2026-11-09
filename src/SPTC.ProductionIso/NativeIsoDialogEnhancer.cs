@@ -40,7 +40,6 @@ internal static class NativeIsoDialogEnhancer
     private static bool _nativeSeen;
     private static bool _resultsSeen;
     private static DateTime _nativeClosedAt;
-    private static bool _applyDwgScopeOnce;
     private sealed record CopyReport(int Copied, int Skipped, string Destination);
 
     public static void Launch(Document doc)
@@ -62,10 +61,9 @@ internal static class NativeIsoDialogEnhancer
         _nativeSeen = false;
         _resultsSeen = false;
         _nativeClosedAt = DateTime.MinValue;
-        // REV08: read-only PnP3d model-to-line-group Tag validation.
-        // Do not use REV07 PickFirst filtering (it returned an empty list).
+        // REV09: discover active DWG line-group tags but do not filter
+        // the native list until the user explicitly clicks a top mode icon.
         ActiveDwgTags.Scan(doc);
-        _applyDwgScopeOnce = ActiveDwgTags.Count == 1;
         _watch = new System.Windows.Forms.Timer { Interval = 1500 };
         _watch.Tick += OnTick;
         _watch.Start();
@@ -138,15 +136,14 @@ internal static class NativeIsoDialogEnhancer
                 {
                     _native = native;
                     Attach(native);
-                }
-
-                // REV08: apply an exact tag in Autodesk's native text filter
-                // for a verified SINGLE route. Never remove items or alter
-                // their underlying project membership. Keep Drawing/Project buttons.
-                if (_applyDwgScopeOnce)
-                {
-                    _applyDwgScopeOnce = false;
-                    ActiveDwgTags.ApplyOneTag(native, _document);
+                    // Do not touch the line filter on dialog opening.
+                    // A click on Drawing or Project triggers an exact active-DWG
+                    // filter after Autodesk finishes updating the line list.
+                    NativeIsoToolbarClickFilter.Attach(native, () =>
+                    {
+                        if (ActiveDwgTags.Count == 1)
+                            ActiveDwgTags.ApplyOneTag(native, _document);
+                    });
                 }
 
                 // Path discovery only; never enumerate network DWGs on the UI thread.
@@ -310,6 +307,7 @@ internal static class NativeIsoDialogEnhancer
 
     private static void RemoveOverlay()
     {
+        NativeIsoToolbarClickFilter.Detach();
         NativeIsoLineSelectOverlay.Hide();
         _native = IntPtr.Zero;
         try { _overlay?.Dispose(); } catch { }
