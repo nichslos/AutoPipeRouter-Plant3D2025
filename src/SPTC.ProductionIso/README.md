@@ -1,27 +1,27 @@
-# SPTC Production Iso — REV05 (automatic custom-folder copy)
+# SPTC Production Iso REV06 (custom result hyperlink experiment)
 
-## Behavior
-`SPTC_PRODISO` opens Autodesk's original **Create Production Iso** dialog and attaches a **Custom Save Location** field immediately below Revision Number.
+## Changes relative to working REV05
 
-**REV05** begins monitoring for new ISO DWGs as soon as the native Create Production Iso dialog closes. It also recognizes when the **Isometric Creation Results** dialog first appears. **Opening or closing Results is no longer required to start the copy.** ISO generation can take additional time after the Create dialog closes, so the background worker waits for stable and unlocked DWG(s) before exporting.
+**Automatic ISO copying is preserved unchanged.** `SPTC_PRODISO` still opens Autodesk's original Production Iso dialog, inserts Custom Save Location below Revision Number, and begins a background file copy once the native dialog closes. There is no network file enumeration on the UI thread.
 
-Network directory enumeration, file inspection and copying are run entirely on a worker thread, not on AutoCAD Plant 3D's UI thread.
+After copying successfully, REV06 attempts to attach a small **SPTC Custom ISO** hyperlink *inside* Autodesk's **Isometric Creation Results** window. It displays the **actual exported DWG path**, not a guessed path. Clicking opens the copied DWG using its Windows file association. When more than one DWG was copied, the link opens the destination folder instead.
 
-**Important:** These are EXPORT COPIES. Autodesk still generates and registers the original ISO in the project-configured `ProdIsos\Drawings` folder. This plugin does not change the actual native-generation directory.
+The original Autodesk `File: L:\...\ProdIsos\Drawings\...` hyperlink and Project Manager registration are **not altered**. The native results path will still be the default project location because that's where Plant 3D actually generates its drawing.
 
-## Install / test
-1. Completely close and restart Plant 3D 2025 to unload any earlier REV02/03/04 DLL.
-2. Extract the REV05 DLL and run `NETLOAD` on `SPTC.ProductionIso.dll`.
-3. Run `SPTC_PRODISO`; select one pipe line and choose the custom folder with the injected Browse button.
-4. Click native **Create**.
-5. Once the native output DWG is stable, REV05 should copy it to the custom folder automatically. No action on the completion toast or Results dialog is required.
-6. For a status readout, run `SPTC_ISOSTATUS` after the native dialogs are dismissed. It reports the detected source path, selected destination, whether Results was observed and background copy state.
-7. `SPTC_ISOCOPY` remains available to manually start/restart a background copy if needed.
+The Results dialog may be opened by clicking the `Isometric Creation Complete` notification. **Opening it is optional** for copying; the extra hyperlink appears only if you open the results window after at least one DWG has been copied.
 
-## Copy safety / limitations
-- No modifications to Project Manager, `Project.xml`, `IsoPart.xml`, `IsoConfig.xml`, the source DWGs or ISO style settings.
-- Only recent DWGs in the native `ProdIsos\Drawings` folder are considered; this uses file modification times compared against the session start. Concurrent users generating in the same style folder may cause unrelated new DWGs to be exported.
-- Each output DWG must have a stable size and modification timestamp over multiple polls and must be unlockable.
-- Destination files are never overwritten; `_copyN` is added to the name if an output file already exists.
-- The background file watcher can poll for up to 10 minutes. If Plant 3D generates no DWG during that period, no output is copied.
-- Native UI injection into a third-party dialog is an unsupported experimental technique; monitor Plant 3D responsiveness when testing. A successful GitHub compilation does not establish runtime correctness.
+## Testing REV06
+1. Completely exit Plant 3D 2025 so an older NETLOADed DLL cannot remain in memory.
+2. Reopen Plant 3D and NETLOAD the REV06 DLL.
+3. Enter `SPTC_PRODISO`, choose your custom folder and generate one ISO.
+4. Verify the custom output DWG has been copied.
+5. Click the **Isometric Creation Complete** notification, or use Autodesk's Results window, and check for **Custom ISO (SPTC Export)** plus the clickable custom-path hyperlink.
+6. If the link does not appear, run `SPTC_ISOSTATUS` and send the output/screenshot. The underlying copy continues to work independently.
+
+## Known limitations and safety
+- This injects a managed child control into an Autodesk dialog using Win32 `SetParent`, which is not a documented Autodesk customization point. Visual placement depends on the actual Results dialog control hierarchy and Windows scaling. It may need adjustments based on a screenshot.
+- The new results hyperlink appears only after the background copy task is marked complete. For multi-file outputs, the worker allows a short quiet period after the last copy.
+- The Results window can be opened at any time within ten minutes of copy completion while the monitor remains alive.
+- Neither XML configuration nor shared project database nor original DWGs are modified.
+- Do not move the original project-registered ISO DWGs to the custom folder. Custom output is a copy.
+- Test on one ISO first; if lag or instability occurs, restart Plant 3D and return to REV05.
