@@ -383,6 +383,23 @@ jobs:
           if ($audit -notmatch 'OpenMode.ForRead') { throw 'Audit must read selected viewport only' }
           if ($audit -match 'ForWrite|GenerateOrthos|CreateOrthos|AddPnPDrawingFile|CommandFlags.Session') { throw 'Audit must not mutate native ortho project' }
           if ($prior -notmatch 'CommandMethod\("SPTC_ORTHO22_3_SCALE_LAYOUT_TEST"') { throw 'REV22.3 fallback missing' }
+      - name: Verify REV22.5 isolated four-isometric twist correction
+        shell: pwsh
+        run: |
+          $code = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoTenViewIsoTwistFixTest.cs' -Raw
+          $math = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoIsoTwistGuard.cs' -Raw
+          $prior = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoTenViewScaleLayoutFixTest.cs' -Raw
+          if ($code -notmatch 'CommandMethod\("SPTC_ORTHO22_5_ISO_TWIST_TEST"') { throw 'REV22.5 isolated test command missing' }
+          if ($prior -notmatch 'CommandMethod\("SPTC_ORTHO22_3_SCALE_LAYOUT_TEST"') { throw 'REV22.3 fallback missing' }
+          if ($code -notmatch 'REV22.5 TEST') { throw 'REV22.5 copied-project consent missing' }
+          if ($code -notmatch 'NativeOrthoIsoViewType.IsIsometric\(label\)') { throw 'REV22.5 twist is not ISO-only' }
+          if ($code -notmatch 'SetViewportTwistZero') { throw 'REV22.5 twist normalization missing' }
+          if ($code -notmatch 'TWIST_NORMALIZED_CHECK') { throw 'REV22.5 twist readback missing' }
+          if ($code -notmatch 'ReadPaperViewportFrame') { throw 'REV22.3 native dimensions not preserved' }
+          if ($code -notmatch 'SAVED_VIEWDEF_TYPE') { throw 'REV22.2 stored preset readback not preserved' }
+          if ($code -notmatch 'GetViewTypeFromName') { throw 'REV22.2 native preset preflight not preserved' }
+          if ($code -notmatch 'STEP10_ALL_TEN_NATIVE_VIEWS_REGISTERED') { throw 'Ten-view registration not preserved' }
+          if ($math -notmatch 'IsProjectedWorldUp') { throw 'REV22.5 projection guard missing' }
       - name: Compile SPTC Support Drawings
         run: dotnet build src/SPTC.SupportDrawings/SPTC.SupportDrawings.csproj -c Release
       - name: Verify compiled DLL
@@ -394,7 +411,7 @@ jobs:
       - name: Upload DLL artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SPTC-SupportDrawings-Plant3D2025-REV22_4
+          name: SPTC-SupportDrawings-Plant3D2025-REV22_5
           path: src/SPTC.SupportDrawings/bin/Release/net8.0-windows/SPTC.SupportDrawings.dll
           retention-days: 30
           if-no-files-found: error
