@@ -878,6 +878,75 @@ var rev218AllVerticalPlan=SupportOrthoMemberCalloutPlan18.Build(
 Assert(rev218AllVerticalPlan.Callouts.Count==130&&
     rev218AllVerticalPlan.VerticalTosLines==130,
     "REV22.18 two-line callouts remain collision-free even if all 13 steel pieces are vertical");
+// REV22.19 user correction: Top of Steel applies ONLY to HORIZONTAL
+// structural steel. Vertical members must keep Size with NO TOS line.
+Assert(SupportOrthoHorizontalMember19.IsHorizontalAxis(
+    0,0,502.7872,1000,0,502.7872),
+    "REV22.19 horizontal beam qualifies for TOS");
+Assert(!SupportOrthoHorizontalMember19.IsHorizontalAxis(
+    8504,3120,0,8504,3120,502.7872),
+    "REV22.19 vertical post NEVER qualifies for TOS");
+Assert(!SupportOrthoHorizontalMember19.IsHorizontalAxis(
+    0,0,0,900,0,350),
+    "REV22.19 significantly inclined member does not qualify for horizontal-only TOS");
+Assert(SupportOrthoHorizontalMember19.IsStronglyHorizontalBounds(
+    1000,75,100)&&
+    !SupportOrthoHorizontalMember19.IsStronglyHorizontalBounds(75,75,503),
+    "REV22.19 source bounds fallback distinguishes horizontal beams from columns");
+var horizExact19=SupportOrthoHorizontalMember19.Evaluate(
+    1000,75,100,(0,0,502.7872),(1000,0,502.7872),
+    "552.7872",552.7872);
+Assert(horizExact19.IsHorizontal&&
+    horizExact19.TopOfSteelSource=="PLANT_TOP_OF_STEEL_PROPERTY"&&
+    SupportOrthoHorizontalMember19.TosLabel(horizExact19)
+        =="TOS EL. +552.7872 mm",
+    "REV22.19 exact Plant Top of Steel only for horizontal member");
+var horizApprox19=SupportOrthoHorizontalMember19.Evaluate(
+    1000,75,100,null,null,null,552.7872);
+Assert(horizApprox19.IsHorizontal&&
+    SupportOrthoHorizontalMember19.TosLabel(horizApprox19)
+        =="TOS~ +552.7872 mm",
+    "REV22.19 geometric fallback must mark approximate elevation");
+var verticalNoTos19=SupportOrthoHorizontalMember19.Evaluate(
+    75,75,503,(0,0,0),(0,0,503),"99999",503);
+Assert(!verticalNoTos19.IsHorizontal&&
+    SupportOrthoHorizontalMember19.TosLabel(verticalNoTos19)=="",
+    "REV22.19 ignore even a present TOS property on vertical member");
+var rev219Members=rev217Members.Select((m,i)=>
+    new SupportOrthoMemberCalloutPlan19.Member(
+        m.Handle,m.Size,m.X,m.Y,m.Z,
+        i<4,i<4?"+552.7872 mm":null,
+        i<3?"PLANT_TOP_OF_STEEL_PROPERTY":
+        i==3?"GEOMETRIC_TOP_APPROX":"NOT_HORIZONTAL")).ToArray();
+var rev219Plan=SupportOrthoMemberCalloutPlan19.Build(
+    rev217Cameras,reservedTitleFrames.Titles,rev219Members,594,841);
+Assert(rev219Plan.Callouts.Count==130&&
+    rev219Plan.HorizontalTosLines==40&&
+    rev219Plan.ApproximateTosLines==10&&
+    rev219Plan.Skipped.Count==0,
+    "REV22.19 130 labels and 40 horizontal-only TOS second lines fit without collisions");
+Assert(rev219Plan.Callouts.Where(x=>x.HasTos)
+    .All(x=>x.Text.Contains("\nTOS"))&&
+    rev219Plan.Callouts.Where(x=>!x.HasTos)
+    .All(x=>!x.Text.Contains("TOS")),
+    "REV22.19 no vertical size tag may display TOS");
+var verticalNone219=rev219Members.Select(m=>m with{
+    IsHorizontal=false,TosText="+99999 mm",
+    TosSource="PLANT_TOP_OF_STEEL_PROPERTY"}).ToArray();
+var zeroTos19=SupportOrthoMemberCalloutPlan19.Build(
+    rev217Cameras,reservedTitleFrames.Titles,verticalNone219,594,841);
+Assert(zeroTos19.Callouts.Count==130&&zeroTos19.HorizontalTosLines==0&&
+    zeroTos19.Callouts.All(x=>!x.Text.Contains("TOS")),
+    "REV22.19 vertical-only models generate NO TOS lines anywhere");
+var allHorizontal219=rev219Members.Select(m=>m with{
+    IsHorizontal=true,TosText="+552.7872 mm",
+    TosSource="PLANT_TOP_OF_STEEL_PROPERTY"}).ToArray();
+var allHorizontalPlan19=SupportOrthoMemberCalloutPlan19.Build(
+    rev217Cameras,reservedTitleFrames.Titles,allHorizontal219,594,841);
+Assert(allHorizontalPlan19.Callouts.Count==130&&
+    allHorizontalPlan19.HorizontalTosLines==130,
+    "REV22.19 layout supports all 13 horizontal members each with TOS in ten native views");
+Console.WriteLine("PASS: REV22.19 TOS only on horizontal steel; vertical posts exclude it, 10-view leader layout preserved.");
 Console.WriteLine("PASS: REV22.18 improved member leader routing, true vertical identification and exact/marked TOS elevation.");
 Console.WriteLine("PASS: REV22.17 130 true 3D source-member leaders and native camera projection without label overlap.");
 
