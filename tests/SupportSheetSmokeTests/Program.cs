@@ -406,6 +406,35 @@ try{ NativeOrthoIsoFramingGuard.NormalizeHalfTurn(
     new NativeOrthoIsoFramingGuard.ViewState(10,20,Math.PI/3)); }
 catch(InvalidOperationException){ arbitraryTwistRejected=true; }
 Assert(arbitraryTwistRejected,"REV22.7 reject unsupported arbitrary paper twists");
+// REV22.8: six standard presets were previously saved as TopView,
+// BottomView, etc. without checking Plant 3D Edit View's actual parser.
+string[] axialNames={"TOP","BOTTOM","LEFT","RIGHT","FRONT","BACK"};
+for(int i=0;i<axialNames.Length;i++)
+{
+    string name=axialNames[i];
+    Assert(NativeOrthoAxialEditorPreset.IsAxial(name),
+        "REV22.8 "+name+" classified axial");
+    var candidateLabels=NativeOrthoAxialEditorPreset.Candidates(name,name+"View");
+    Assert(candidateLabels.Count>1&&
+        !candidateLabels.Contains("Current",StringComparer.OrdinalIgnoreCase),
+        "REV22.8 "+name+" never picks Current View");
+    string first=candidateLabels[0];
+    string resolved=NativeOrthoAxialEditorPreset.Resolve(
+        name,name+"View",i+1,c=>c==first?i+1:0);
+    Assert(resolved==first,"REV22.8 "+name+" selects actual recognized short native label");
+    string oldLabel=name+"View";
+    string fallback=NativeOrthoAxialEditorPreset.Resolve(
+        name,oldLabel,i+1,c=>c==oldLabel?i+1:0);
+    Assert(fallback==oldLabel,"REV22.8 honors parser-supported original type");
+    bool rejected=false;
+    try{NativeOrthoAxialEditorPreset.Resolve(name,oldLabel,i+1,c=>0);}
+    catch(InvalidOperationException){rejected=true;}
+    Assert(rejected,"REV22.8 "+name+" rejects unknown-to-native Edit View names");
+}
+Assert(!NativeOrthoAxialEditorPreset.IsAxial("NW"),
+    "REV22.8 leave four ISO view identifiers unaffected");
+Console.WriteLine("PASS: REV22.8 six native axial Edit View presets are runtime-recognized or fail closed.");
+
 Console.WriteLine("PASS: REV22.7 four native ISO view-center sign flips with guarded twist correction.");
 
 Console.WriteLine("PASS: REV22.6 native reference vs generated camera+twist comparison.");
