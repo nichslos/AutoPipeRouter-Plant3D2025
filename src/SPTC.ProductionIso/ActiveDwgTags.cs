@@ -279,4 +279,67 @@ internal static class ActiveDwgTags
             return false;
         }
     }
+
+    // REV10: A second click on Drawing/Project clears only the temporary
+    // native text filter. It does NOT alter or remove any Plant 3D line groups.
+    // The original native list is repopulated by Autodesk's text-change handler.
+    public static bool ClearOneTag(IntPtr dialog, Document? doc)
+    {
+        if (dialog == IntPtr.Zero || !GetWindowRect(dialog, out RECT dlg))
+            return false;
+
+        IntPtr candidate = IntPtr.Zero;
+        int score = int.MinValue;
+        EnumChildWindows(dialog, (hwnd, _) =>
+        {
+            if (!GetWindowRect(hwnd, out RECT rect) ||
+                rect.Width < 70 || rect.Height < 15 || rect.Height > 48)
+                return true;
+
+            int cx = (rect.Left + rect.Right) / 2 - dlg.Left;
+            int cy = (rect.Top + rect.Bottom) / 2 - dlg.Top;
+            if (cx < 25 || cx > dlg.Width * 0.33 || cy < 75 || cy > 175)
+                return true;
+
+            var cls = new StringBuilder(128);
+            GetClassName(hwnd, cls, cls.Capacity);
+            Control? c = Control.FromHandle(hwnd);
+            bool edit = c is TextBoxBase ||
+                        cls.ToString().Contains("EDIT", StringComparison.OrdinalIgnoreCase);
+            if (!edit) return true;
+
+            int quality = rect.Width - Math.Abs(cy - 120);
+            if (quality > score)
+            {
+                candidate = hwnd;
+                score = quality;
+            }
+            return true;
+        }, IntPtr.Zero);
+
+        if (candidate == IntPtr.Zero)
+        {
+            doc?.Editor.WriteMessage("\nSPTC REV10: Could not locate native line filter; full list was not restored.");
+            return false;
+        }
+
+        try
+        {
+            Control? control = Control.FromHandle(candidate);
+            if (control is TextBoxBase textbox)
+                textbox.Text = "";
+            else if (!SetWindowText(candidate, ""))
+                return false;
+
+            _lastAppliedDialog = IntPtr.Zero;
+            doc?.Editor.WriteMessage("\nSPTC REV10: Cleared active-DWG filter; showing the native unfiltered line list.");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            doc?.Editor.WriteMessage("\nSPTC REV10: Could not clear line filter: " + ex.Message);
+            return false;
+        }
+    }
+
 }
