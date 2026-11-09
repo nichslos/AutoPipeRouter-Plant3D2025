@@ -25,5 +25,7 @@
     <Compile Include="../../src/SPTC.SupportDrawings/NativeOrthoAxialHalfTurnGuard.cs" Link="NativeOrthoAxialHalfTurnGuard.cs" />
     <Compile Include="../../src/SPTC.SupportDrawings/SupportFocusedCubePlanner.cs" Link="SupportFocusedCubePlanner.cs" />
     <Compile Include="../../src/SPTC.SupportDrawings/NativeOrthoViewTitlePlan.cs" Link="NativeOrthoViewTitlePlan.cs" />
+    <Compile Include="../../src/SPTC.SupportDrawings/SupportOrthoMemberMetadata.cs" Link="SupportOrthoMemberMetadata.cs" />
+    <Compile Include="../../src/SPTC.SupportDrawings/SupportOrthoCalloutPlan.cs" Link="SupportOrthoCalloutPlan.cs" />
   </ItemGroup>
 </Project>
