@@ -630,7 +630,7 @@ jobs:
           if(-not $source.Contains('PNP_STRUCTURE_SIZE handle=') -or -not $source.Contains('GeometricExtents')) { throw 'True source member IDs and 3D anchor points required' }
           if($new -match 'PLANTORTHOUPDATE_ALL_ENTERED|Editor.Command\("_.PLANTORTHOUPDATE"') { throw 'Do not reuse native auto update' }
           if($new -notmatch 'new MText' -or $new -notmatch 'new Line\(') { throw 'Paper-space editable leader and text missing' }
-
+      - name: Compile SPTC Support Drawings
         run: dotnet build src/SPTC.SupportDrawings/SPTC.SupportDrawings.csproj -c Release
       - name: Verify compiled DLL
         shell: pwsh
