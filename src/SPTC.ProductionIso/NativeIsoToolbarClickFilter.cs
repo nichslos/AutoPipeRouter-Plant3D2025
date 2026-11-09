@@ -8,12 +8,12 @@ using System.Windows.Forms;
 namespace SPTC.ProductionIso;
 
 /// <summary>
-/// REV09: Listen for a user click on Autodesk's top-left Drawing/Project/
+/// REV10: Listen for a user click on Autodesk's top-left Drawing/Project/
 /// Filter toolbar AFTER the original dialog is shown. Before that click,
-/// leave all native line-number entries visible (REV08 no longer filters at
-/// dialog startup). A one-shot UI timer lets the native toolbar update its
-/// list first, then applies the verified current-DWG line tag using Autodesk's
-/// own text filter. No project records, model objects, or native buttons change.
+/// leave all native line-number entries visible on startup. Each user click
+/// alternates between the verified active-DWG tag and the unfiltered native
+/// list by setting/clearing Autodesk's existing text filter after the click.
+/// No project records, model objects, or native buttons change.
 /// </summary>
 internal sealed class NativeIsoToolbarClickFilter : IMessageFilter
 {
@@ -37,34 +37,50 @@ internal sealed class NativeIsoToolbarClickFilter : IMessageFilter
     private delegate bool EnumChildProc(IntPtr hwnd, IntPtr data);
 
     private readonly IntPtr _dialog;
-    private readonly Action _apply;
+    private readonly Func<bool, bool> _toggle;
     private readonly System.Windows.Forms.Timer _delay;
     private readonly List<(Control Control, EventHandler Handler)> _buttonHandlers = new();
     private readonly List<(ToolStripItem Item, EventHandler Handler)> _toolStripHandlers = new();
     private bool _disposed;
+    // REV10: false = native unfiltered list; true = active-DWG tag filter.
+    // Every intentional toolbar click switches state exactly once.
+    private bool _showingActive;
 
-    private NativeIsoToolbarClickFilter(IntPtr dialog, Action apply)
+    private NativeIsoToolbarClickFilter(IntPtr dialog, Func<bool, bool> toggle)
     {
         _dialog = dialog;
-        _apply = apply;
+        _toggle = toggle;
         _delay = new System.Windows.Forms.Timer { Interval = 350 };
         _delay.Tick += (_, _) =>
         {
             _delay.Stop();
             if (_disposed) return;
-            try { _apply(); }
-            catch { /* Suppress UI-extension errors; Autodesk's native list is still usable. */ }
+            try
+            {
+                bool nextShowingActive = !_showingActive;
+                // Commit only if the UI filter was successfully applied/cleared.
+                if (_toggle(nextShowingActive))
+                    _showingActive = nextShowingActive;
+            }
+            catch { /* Extension errors must never block native ISO dialog. */ }
         };
         HookManagedButtons();
         System.Windows.Forms.Application.AddMessageFilter(this);
     }
 
-    public static void Attach(IntPtr dialog, Action apply)
+    public static void Attach(IntPtr dialog, Func<bool, bool> toggle)
     {
         if (dialog == IntPtr.Zero) return;
         if (_active is { _disposed: false } active && active._dialog == dialog) return;
         Detach();
-        _active = new NativeIsoToolbarClickFilter(dialog, apply);
+        _active = new NativeIsoToolbarClickFilter(dialog, toggle);
+    }
+
+    // Keep the top-toolbar toggle aligned when user presses "DWG Only".
+    public static void MarkActiveFilterApplied(IntPtr dialog)
+    {
+        if (_active is { _disposed: false } current && current._dialog == dialog)
+            current._showingActive = true;
     }
 
     private void Schedule()
