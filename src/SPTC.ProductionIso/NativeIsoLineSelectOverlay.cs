@@ -61,6 +61,7 @@ internal static class NativeIsoLineSelectOverlay
 
     private static UserControl? _host;
     private static CheckBox? _toggle;
+    private static Button? _dwgOnly;
     private static IntPtr _dialog;
     private static bool _setting;
 
@@ -82,13 +83,35 @@ internal static class NativeIsoLineSelectOverlay
             Text = "Select All",
             AutoSize = false,
             Location = new Point(0, 2),
-            Width = 170,
+            Width = 86,
             Height = 25,
             Checked = false,
             Font = SystemFonts.MessageBoxFont
         };
         _toggle.CheckedChanged += ToggleChanged;
         _host.Controls.Add(_toggle);
+
+        // REV07: reapply the native Filter mode to the active DWG's live
+        // Plant model entities; does not remove or rewrite project line tags.
+        _dwgOnly = new Button
+        {
+            Text = "DWG Only",
+            Location = new Point(87, 2),
+            Width = 87,
+            Height = 24,
+            Font = SystemFonts.MessageBoxFont,
+            Enabled = NativeDwgRouteScope.SelectionPrepared
+        };
+        _dwgOnly.Click += (_, _) =>
+        {
+            if (!NativeDwgRouteScope.TryApplyFilter(_dialog))
+                MessageBox.Show(
+                    "Automatic Filter activation was not available in this Plant 3D dialog. " +
+                    "Click the third (Filter) icon above the line list to filter the current drawing selection. " +
+                    "The original Drawing and Project buttons remain unchanged.",
+                    "SPTC REV07", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        };
+        _host.Controls.Add(_dwgOnly);
         _ = _host.Handle;
         SetParent(_host.Handle, dialog);
         if (GetParent(_host.Handle) != dialog)
@@ -328,6 +351,7 @@ internal static class NativeIsoLineSelectOverlay
         try { _host?.Dispose(); } catch { }
         _host = null;
         _toggle = null;
+        _dwgOnly = null;
         _setting = false;
     }
 }
