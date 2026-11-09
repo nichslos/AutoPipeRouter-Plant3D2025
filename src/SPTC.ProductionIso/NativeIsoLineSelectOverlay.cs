@@ -61,7 +61,6 @@ internal static class NativeIsoLineSelectOverlay
 
     private static UserControl? _host;
     private static CheckBox? _toggle;
-    private static Button? _dwgOnly;
     private static IntPtr _dialog;
     private static bool _setting;
 
@@ -83,7 +82,7 @@ internal static class NativeIsoLineSelectOverlay
             Text = "Select All",
             AutoSize = false,
             Location = new Point(0, 2),
-            Width = 86,
+            Width = 170,
             Height = 25,
             Checked = false,
             Font = SystemFonts.MessageBoxFont
@@ -91,28 +90,6 @@ internal static class NativeIsoLineSelectOverlay
         _toggle.CheckedChanged += ToggleChanged;
         _host.Controls.Add(_toggle);
 
-        // REV08: verify an actual PnP3dLineGroup Tag from the open DWG and
-        // apply it to Autodesk's own text filter (rather than PickFirst mode).
-        _dwgOnly = new Button
-        {
-            Text = "DWG Only",
-            Location = new Point(87, 2),
-            Width = 87,
-            Height = 24,
-            Font = SystemFonts.MessageBoxFont,
-            Enabled = ActiveDwgTags.Count == 1
-        };
-        _dwgOnly.Click += (_, _) =>
-        {
-            if (ActiveDwgTags.ApplyOneTag(_dialog, null))
-                NativeIsoToolbarClickFilter.MarkActiveFilterApplied(_dialog);
-            else
-                MessageBox.Show(
-                    "Could not apply the current DWG's verified line tag to the native filter.\n" +
-                    "Check SPTC_DWGTAGS in the AutoCAD command line. No project records were changed.",
-                    "SPTC REV08", MessageBoxButtons.OK, MessageBoxIcon.Information);
-        };
-        _host.Controls.Add(_dwgOnly);
         _ = _host.Handle;
         SetParent(_host.Handle, dialog);
         if (GetParent(_host.Handle) != dialog)
@@ -352,7 +329,6 @@ internal static class NativeIsoLineSelectOverlay
         try { _host?.Dispose(); } catch { }
         _host = null;
         _toggle = null;
-        _dwgOnly = null;
         _setting = false;
     }
 }
