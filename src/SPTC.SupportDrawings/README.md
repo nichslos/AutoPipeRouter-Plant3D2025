@@ -1,3 +1,27 @@
+# REV22.20 — Format horizontal-member TOS annotation with a blank line and a spaced tilde
+
+**New isolated Plant 3D 2025 command:** `SPTC_ORTHO22_20_TOS_SPACING_TEST`. The working REV22.19 command `SPTC_ORTHO22_19_HORIZONTAL_TOS_TEST` and all earlier versions remain unchanged.
+
+**Only revision requested:** On **horizontal structural members**, add one blank line after the member's real PnP structural size and before its TOS elevation. Display approximate elevation as `TOS ~ +1117.5745 mm` (space on either side of the tilde) instead of `TOS~ +1117.5745 mm`. Do not change the source model, native Size value, TOS value/units, horizontal eligibility, exact/approximate semantics, projected member leader anchor, ten view titles/cameras, SupportFocus cube, native view definitions, or other components.
+
+**Example with a real selected TEST5 member handle:**
+
+```text
+[539] Sloping channel 100x50 web-5 fl-7.5
+
+TOS ~ +1117.5745 mm
+```
+
+**Exact-data case:** `TOS EL. +... mm` stays unchanged except for the added blank line above it. Vertical and non-horizontal members still receive their member-size annotation and leader with **NO TOS**. `SupportOrthoMemberCalloutPlan20` is a separate copy of REV22.19's planner with only three presentation adjustments: `"TOS~ "` → `"TOS ~ "`; `label+"\\n"+tos` → `label+"\\n\\n"+tos`; and reserved label height for a horizontal TOS caption is increased from two text rows to three. The paper-space MText writer already converts each line break to a native MText paragraph break (`\\P`), so two breaks leave a visible empty paragraph. Internal approximate-TOS detection uses the new spaced string.
+
+**Smoke tests:** verify 130 per-member labels still fit on ten native views with example input, horizontal-only TOS rule, 40 approximate-TOS labels, exact elevation retained, blank line and spaced tilde, and title-block collision-safe boxes. No modifications to REV22.19's source reader or previous generator.
+
+**Testing:** Fully restart AutoCAD Plant 3D 2025, NETLOAD the new DLL, run `SPTC_ORTHO22_20_TOS_SPACING_TEST` in a COPIED project, choose SupportFocus, select structural members (the previous test had 21 support objects, 13 native Structure Members), optionally select 3 nearby pipes, choose an EMPTY registered native Ortho seed, authorize `REV22.20 TEST`, and click once. Verify the new label spacing in FRONT and NW ISOMETRIC, `STEP10_INDIVIDUAL_MEMBER_ANNOTATION_COUNT` (target 130 for TEST5), `STEP10_HORIZONTAL_TOS_LABEL_COUNT`, `STEP10_MEMBER_ANNOTATIONS_CHECK`, and all ten native view titles. Send the `*_REV22_20_RESULT.txt` and screenshot.
+
+**Caution:** This is an experimental Autodesk-internal native Ortho generator with custom paper-space, nonassociative MText and leaders. The blank line changes space consumption; if a sheet cannot fit every annotation, the command logs PARTIAL rather than overlapping. Source geometric Z values are still marked approximate (`TOS ~`) and must be verified with the model's actual Top of Steel properties. REV22.19 remains the fallback.
+
+---
+
 # REV 22.19 — CORRECTION: TOS elevation for HORIZONTAL structural steel ONLY
 
 **New isolated command:** `SPTC_ORTHO22_19_HORIZONTAL_TOS_TEST` in AutoCAD Plant 3D 2025. Keep REV22.18 and REV22.17 commands unchanged as fallbacks. Test only in a COPIED registered Plant 3D project; authorize with `REV22.19 TEST`.
