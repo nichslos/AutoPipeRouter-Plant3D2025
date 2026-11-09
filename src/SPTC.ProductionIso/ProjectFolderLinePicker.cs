@@ -280,9 +280,9 @@ internal static class ProjectFolderLinePicker
             {
                 foreach (var choice in ProjectFolderLineCatalog.Folders)
                 {
-                    _choiceList.Items.Add(new FolderMenuChoice(
-                        choice.Key.Replace("\\", " > ") +
-                        $"  ({choice.DrawingCount} DWG)", choice.Key));
+                    // REV15: show exactly the immediate Project Manager
+                    // folder name; no nested paths and no extra DWG count suffix.
+                    _choiceList.Items.Add(new FolderMenuChoice(choice.Caption, choice.Key));
                 }
                 if (ProjectFolderLineCatalog.Folders.Count == 0)
                     _choiceList.Items.Add(new FolderMenuChoice("(No registered folders found)", null));
