@@ -630,6 +630,32 @@ jobs:
           if(-not $source.Contains('PNP_STRUCTURE_SIZE handle=') -or -not $source.Contains('GeometricExtents')) { throw 'True source member IDs and 3D anchor points required' }
           if($new -match 'PLANTORTHOUPDATE_ALL_ENTERED|Editor.Command\("_.PLANTORTHOUPDATE"') { throw 'Do not reuse native auto update' }
           if($new -notmatch 'new MText' -or $new -notmatch 'new Line\(') { throw 'Paper-space editable leader and text missing' }
+      - name: Verify REV22.18 vertical structural Top of Steel second-line labels
+        shell: pwsh
+        run: |
+          $new = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoTenViewVerticalTosTest.cs' -Raw
+          $vertical = Get-Content 'src/SPTC.SupportDrawings/SupportOrthoVerticalSource18.cs' -Raw
+          $verticalRule = Get-Content 'src/SPTC.SupportDrawings/SupportOrthoVerticalMember18.cs' -Raw
+          $leader = Get-Content 'src/SPTC.SupportDrawings/SupportOrthoMemberCalloutPlan18.cs' -Raw
+          $prior = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoTenViewMemberLeadersTest.cs' -Raw
+          if($new -notmatch 'CommandMethod\("SPTC_ORTHO22_18_VERTICAL_TOS_TEST"') { throw 'REV22.18 isolated command missing' }
+          if($prior -notmatch 'CommandMethod\("SPTC_ORTHO22_17_MEMBER_LEADERS_TEST"') { throw 'REV22.17 fallback removed' }
+          if($new -notmatch 'REV22.18 TEST') { throw 'Copied-project authorization missing' }
+          foreach($token in @('SupportOrthoVerticalSource18.Read','SupportOrthoMemberCalloutPlan18.Build','CreateNativePaperMemberLeaders18','STEP10_VERTICAL_TOS_LABEL_COUNT','STEP10_VERTICAL_TOS_EXPECTED','REV22_18_TOS_EXACT_PROPERTY_COUNT','REV22_18_VERTICAL_SOURCE_MEMBER_COUNT','STEP10_MEMBER_ANNOTATIONS_CHECK','STEP10_ALL_TEN_NATIVE_VIEWS_REGISTERED','STEP10_VIEW_TITLE_COUNT','AXIAL_FRAME_ROTATION_CHECK','ISO_FRAME_COORDINATES_CHECK')) {
+            if(-not $new.Contains($token)) { throw "REV22.18 safeguard missing: $token" }
+          }
+          foreach($token in @('TopOfSteel','Top of Steel','StartPoint','EndPoint','GetAllProperties','GeometricExtents','DirectionSource','PropertyDescriptor')) {
+            if(-not $vertical.Contains($token)) { throw "REV22.18 source field missing: $token" }
+          }
+          foreach($token in @('IsVerticalAxis','IsStronglyVerticalBounds','TopOfSteelText','PLANT_TOP_OF_STEEL_PROPERTY','GEOMETRIC_TOP_APPROX','FormatElevation')) {
+            if(-not $verticalRule.Contains($token)) { throw "REV22.18 directional or elevation guard missing: $token" }
+          }
+          foreach($token in @('RowSpacingMm','LaneStepMm','TextLineHeightMm','IsVertical','TOS EL.','TOS~','LabelTop','Project','TextBox')) {
+            if(-not $leader.Contains($token)) { throw "REV22.18 paper annotation routing missing: $token" }
+          }
+          if($new -match 'SupportOrthoSummaryPanel15.Build\(') { throw 'REV22.18 may not create old single combined summary' }
+          if($new -match 'PLANTORTHOUPDATE_ALL_ENTERED|Editor.Command\("_.PLANTORTHOUPDATE"') { throw 'Autodesk native auto updater not tested' }
+          if($new -notmatch 'new MText' -or $new -notmatch 'new Line\(') { throw 'Missing editable paper-space MText and leaders' }
       - name: Compile SPTC Support Drawings
         run: dotnet build src/SPTC.SupportDrawings/SPTC.SupportDrawings.csproj -c Release
       - name: Verify compiled DLL
@@ -641,7 +667,7 @@ jobs:
       - name: Upload DLL artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SPTC-SupportDrawings-Plant3D2025-REV22_17
+          name: SPTC-SupportDrawings-Plant3D2025-REV22_18
           path: src/SPTC.SupportDrawings/bin/Release/net8.0-windows/SPTC.SupportDrawings.dll
           retention-days: 30
           if-no-files-found: error
