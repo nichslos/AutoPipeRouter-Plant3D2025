@@ -259,9 +259,8 @@ internal static class ActiveDwgTags
             return false;
         }
 
-        if (_lastAppliedDialog == dialog)
-            return true;
-
+        // REV09: every native Drawing/Project click can clear the text field.
+        // Reapply the verified tag even when the dialog HWND is unchanged.
         try
         {
             Control? control = Control.FromHandle(candidate);
@@ -271,7 +270,7 @@ internal static class ActiveDwgTags
                 return false;
 
             _lastAppliedDialog = dialog;
-            doc?.Editor.WriteMessage("\nSPTC REV08: Native line filter set to current DWG tag: " + tag);
+            doc?.Editor.WriteMessage("\nSPTC REV09: Showing active DWG line tag: " + tag);
             return true;
         }
         catch (Exception ex)
