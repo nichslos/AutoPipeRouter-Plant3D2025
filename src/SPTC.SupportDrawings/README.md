@@ -1,3 +1,19 @@
+# REV22.23 — Fix Structural Member Annotation Wrapping and Text Overlap
+
+**New isolated command:** `SPTC_ORTHO22_23_NO_OVERLAP_TEXT_TEST` (AutoCAD Plant 3D 2025, COPY of a registered project only; authorization `REV22.23 TEST`). The REV22.22 working member Size / horizontal-only TOS value retrieval, ten native Ortho views, individual leader anchors, and Ortho title generation are unchanged. The previous REV22.22 command remains available.
+
+**Observed problem:** The actual Plant 3D screenshot shows annotations such as `[539] Sloping channel 100x50 web-5` wrapped onto a third display line `fl-7.5`, with `TOS ~ ...` colliding with adjacent member annotations. The pure REV22.22 planner previously estimated string width using `characters × 0.7 × TextHeight`, which did not match the active AutoCAD text style, and it reserved only the intended one-/two-line heights before AutoCAD performed automatic MText word wrapping.
+
+**REV22.23 fix:** Each individual native structure member label is now real editable AutoCAD **DBText**: one single-line DBText for the `[handle] actual Size`, and—**for horizontal steel only**—one distinct single-line DBText for `TOS ~ +... mm` immediately BELOW its corresponding member label. Since DBText has no soft wrapping, the long steel Size can never spill into an unreserved third line. After appending each DBText in the actual drawing transaction, the writer measures AutoCAD's real `GeometricExtents` using the drawing's actual text style. It progressively scales down the **same font height for Size and TOS** until BOTH are inside the available label width, the vertical slot and neighboring view/title keepouts, with a conservative 1.05mm minimum. If it cannot measure or safely fit, it removes the text/leader and logs `REV22_23_NATIVE_TEXT_SKIP=VIEW/HANDLE:REASON`, then reports `PARTIAL`; it does not produce overlapping labels.
+
+**Layout:** Initial font height 1.75mm; reserved per-line vertical pitch 2.7mm; row spacing 1.8mm; preserve REV22.18's individually routed orthogonal leader lanes. Each member has its own allocated paper rectangle, conservatively checked against other notes, viewports, and view titles. The actual font is measured at runtime. Individual tags remain `[539] Sloping channel 100x50 web-5 fl-7.5` then `TOS ~ +1117.5745 mm` as two different DBText entities; no number, steel size, or unit is altered. Non-horizontal (including vertical) steel tags never show TOS. The paper-space annotation layer remains `SPTC_MEMBER_CALLOUTS`. These are non-associative custom annotations, not `PLANTORTHOANNOTATE`.
+
+**Test:** Fully exit Plant 3D, NETLOAD the REV22.23 DLL, run the new command in a COPIED registered project, choose SupportFocus, select the same 21 support objects including 13 Plant 3D Structure Members, optionally select the nearby three pipes, pick an EMPTY Project Manager-registered native Ortho seed, type `REV22.23 TEST` and click once. Check all ten views/titles; zoom into all stacked member labels. The size must never wrap after `web-5`, all horizontal TOS values must appear separately underneath the correct source member, and annotations must not overlap. Review `REV22_23_NATIVE_TEXT_SKIPPED_COUNT` and `STEP10_MEMBER_ANNOTATIONS_CHECK`. Send `*_REV22_23_RESULT.txt` and FRONT/NW closeups to assess actual font/leader routing and any skipped annotations.
+
+**Safety:** The new native font measurement cannot be simulated without a live AutoCAD database; CI validates source, compiled DLL and pure paper-layout geometry. REV22.22 is unchanged for rollback. This remains an experimental Autodesk internal `GenerateOrthos` operation: use only a COPIED project.
+
+---
+
 # REV22.22 — FIX: Structural Member Size and TOS were concatenated in actual AutoCAD MText
 
 **New command:** `SPTC_ORTHO22_22_MTEXT_SEPARATOR_TEST` in AutoCAD Plant 3D 2025. Test only in a COPIED registered project. Previous REV22.21 and earlier versions remain untouched.
