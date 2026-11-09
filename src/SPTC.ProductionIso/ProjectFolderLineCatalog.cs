@@ -117,6 +117,10 @@ internal static class ProjectFolderLineCatalog
                 if (!path.EndsWith(".dwg", StringComparison.OrdinalIgnoreCase))
                 {
                     string name = ReadCell(row, "DwgName");
+                    if (string.IsNullOrEmpty(name)) name = ReadCell(row, "Dwg Name");
+                    if (string.IsNullOrEmpty(name)) name = ReadCell(row, "PnPDwgName");
+                    if (string.IsNullOrEmpty(name)) name = ReadCell(row, "DrawingName");
+                    if (string.IsNullOrEmpty(name)) name = ReadCell(row, "FileName");
                     if (string.IsNullOrEmpty(name)) name = ReadCell(row, "PnPName");
                     if (string.IsNullOrEmpty(name)) name = ReadCell(row, "Name");
                     if (name.EndsWith(".dwg", StringComparison.OrdinalIgnoreCase))
