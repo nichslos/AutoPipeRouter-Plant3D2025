@@ -293,11 +293,11 @@ internal static class NativeIsoDialogEnhancer
             SetParent(_overlay.Handle, dialog);
             PositionOverlay(dialog);
             _overlay.Show();
-            // Optional Select All checkbox at bottom-left; REV05 save/export untouched.
-            NativeIsoLineSelectOverlay.Attach(dialog);
-            // REV13: small folder dropdown over the existing line Filter icon.
-            // No PnP reads occur until the user opens the dropdown.
+            // REV14: folder catalog is attached read-only, while its
+            // Folders button is hosted beside Select All at the bottom-left.
+            // The original native Filter funnel is no longer covered.
             ProjectFolderLinePicker.Attach(dialog, _document);
+            NativeIsoLineSelectOverlay.Attach(dialog);
             _document?.Editor.WriteMessage("\nSPTC: Original Production Iso dialog located; custom folder field attached.");
         }
         catch (Exception ex)
