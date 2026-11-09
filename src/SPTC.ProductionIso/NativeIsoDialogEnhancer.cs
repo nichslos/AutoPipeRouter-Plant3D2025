@@ -141,6 +141,13 @@ internal static class NativeIsoDialogEnhancer
                     // filter after Autodesk finishes updating the line list.
                     NativeIsoToolbarClickFilter.Attach(native, showActive =>
                     {
+                        // REV13: a Drawing/Project button click exits the
+                        // selected folder view before native list modes change.
+                        if (ProjectFolderLinePicker.FolderActive)
+                        {
+                            ProjectFolderLinePicker.ClearFolder();
+                            return false;
+                        }
                         if (ActiveDwgTags.Count != 1) return false;
                         // REV10: first click shows this DWG's actual route,
                         // next click clears the filter and restores native lines.
@@ -288,6 +295,9 @@ internal static class NativeIsoDialogEnhancer
             _overlay.Show();
             // Optional Select All checkbox at bottom-left; REV05 save/export untouched.
             NativeIsoLineSelectOverlay.Attach(dialog);
+            // REV13: small folder dropdown over the existing line Filter icon.
+            // No PnP reads occur until the user opens the dropdown.
+            ProjectFolderLinePicker.Attach(dialog, _document);
             _document?.Editor.WriteMessage("\nSPTC: Original Production Iso dialog located; custom folder field attached.");
         }
         catch (Exception ex)
@@ -309,10 +319,12 @@ internal static class NativeIsoDialogEnhancer
         int w = Math.Max(300, bounds.Width - x - 15);
         SetWindowPos(_overlay.Handle, IntPtr.Zero, x, y, w, 34, 0x0004 | 0x0040);
         NativeIsoLineSelectOverlay.Position(dialog);
+        ProjectFolderLinePicker.Position(dialog);
     }
 
     private static void RemoveOverlay()
     {
+        ProjectFolderLinePicker.Hide();
         NativeIsoToolbarClickFilter.Detach();
         NativeIsoLineSelectOverlay.Hide();
         _native = IntPtr.Zero;
