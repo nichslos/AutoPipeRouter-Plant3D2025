@@ -61,7 +61,6 @@ internal static class NativeIsoLineSelectOverlay
 
     private static UserControl? _host;
     private static CheckBox? _toggle;
-    private static Button? _folderButton;
     private static IntPtr _dialog;
     private static bool _setting;
 
@@ -83,31 +82,13 @@ internal static class NativeIsoLineSelectOverlay
             Text = "Select All",
             AutoSize = false,
             Location = new Point(0, 2),
-            Width = 85,
+            Width = 170,
             Height = 25,
             Checked = false,
             Font = SystemFonts.MessageBoxFont
         };
         _toggle.CheckedChanged += ToggleChanged;
         _host.Controls.Add(_toggle);
-
-        // REV14: a separate Folders button, inside the already-working
-        // Select All host. Do not overlap the native filter funnel (REV13).
-        _folderButton = new Button
-        {
-            Text = "Folders ▾",
-            Location = new Point(87, 2),
-            Width = 87,
-            Height = 24,
-            Font = SystemFonts.MessageBoxFont,
-            TabStop = false
-        };
-        _folderButton.Click += (_, _) =>
-        {
-            if (_folderButton is not null)
-                ProjectFolderLinePicker.ToggleFolderMenu(_folderButton);
-        };
-        _host.Controls.Add(_folderButton);
 
         _ = _host.Handle;
         SetParent(_host.Handle, dialog);
@@ -357,7 +338,6 @@ internal static class NativeIsoLineSelectOverlay
         try { _host?.Dispose(); } catch { }
         _host = null;
         _toggle = null;
-        _folderButton = null;
         _setting = false;
     }
 }
