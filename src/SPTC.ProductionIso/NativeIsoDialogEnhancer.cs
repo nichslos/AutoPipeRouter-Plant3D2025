@@ -158,7 +158,8 @@ internal static class NativeIsoDialogEnhancer
             if (results != IntPtr.Zero)
             {
                 _resultsSeen = true;
-                if (_copyTask is null && _document is not null && !string.IsNullOrWhiteSpace(_destination))
+                if (_copyTask is null && _document is not null &&
+                    !string.IsNullOrWhiteSpace(_destination) && !string.IsNullOrWhiteSpace(_source))
                     CopyCompleted(_document);
             }
 
@@ -166,6 +167,14 @@ internal static class NativeIsoDialogEnhancer
             // closes; copying itself waits for a stable, unlocked output DWG.
             if (_nativeClosedAt != DateTime.MinValue && _copyTask is null)
             {
+                if (!string.IsNullOrWhiteSpace(_destination) && string.IsNullOrWhiteSpace(_source))
+                {
+                    Detach();
+                    _copyState = "Error: Native source folder was not detected";
+                    _document?.Editor.WriteMessage("\nSPTC ISO: " + _copyState +
+                        ". Run SPTC_ISOSTATUS for details.");
+                    return;
+                }
                 if (!string.IsNullOrWhiteSpace(_destination) && _document is not null)
                 {
                     CopyCompleted(_document);
