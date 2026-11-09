@@ -1,42 +1,31 @@
-# SPTC Production Iso REV13 — Plant 3D Drawings folder line filter (test build)
+# SPTC Production Iso REV14 — Folder picker no longer closes the native dialog
 
-## Based on
-User-confirmed working **REV12**. No earlier revisions are modified. REV05 custom-location automatic output copy, REV06 Select All, REV09–11 active/full top-button toggle, and REV12 field alignment are all retained.
+Based on REV13; all prior revisions remain unchanged.
 
-## New UI
-- A small dropdown arrow is attached over the native **Line Numbers filter funnel**.
-- Clicking it shows **All Project (no folder filter)** followed by registered project folders under **Plant 3D Drawings**.
-- Parent folders include their child folders' drawings.
-- Selecting a folder shows only the verified live line numbers from its registered DWGs.
-- Returning to **All Project** removes the folder-specific list, restoring the actual Autodesk line list.
+## Fix
+In REV13, the extra dropdown was placed directly over Autodesk's existing filter funnel and used a separate WinForms `ContextMenuStrip` popup. In the user's Plant 3D 2025 runtime, clicking it caused **Create Production Iso** to close instead of showing the folder choices.
 
-## How the selection works
-The plugin does NOT delete/replace items in Autodesk's native line-list collection. Instead, a transient checked-list overlay renders the folder lines and forwards every check/uncheck to the corresponding **original native line number checkbox**. The native Production Iso generator continues to use its original selection objects.
+REV14 removes that overlapping control and the popup. It adds a distinct **Folders ▾** button beside **Select All** at the bottom of the left panel. Clicking Folders opens a scrollable **child panel inside the existing Autodesk dialog**, not a separate popup/window. Clicking Folders again or the × button closes only this child panel. The Autodesk native filter funnel remains visible and usable.
 
-REV13 looks up:
-1. Project-registered DWGs from **Piping.GetPnPDrawingFiles** and the **PnPDrawings** records.
-2. Drawing-to-line-group relationships via **P3dDrawingLineGroupRelationship**.
-3. Live component memberships through **PnPDataLinks** and **P3dLineGroupPartRelationship**, ignoring old line-group rows with no actual components in the selected DWG.
+Folder sources and selection logic are still experimental REV13 behavior:
+- All Project (no folder filter) clears the custom folder view.
+- Registered Plant 3D Drawings folders are listed with DWG counts.
+- Selecting a folder tries to show its verified live line groups in the native-backed checked list.
+- If project APIs or the original native checked list cannot be resolved, REV14 reports diagnostics rather than altering the project.
 
-If drawing ID matching, native list detection, or the PnP API differs from expectations, filtering does **not** start. The folder menu shows a diagnostic or a warning. Network file enumeration, XML edits, drawing modifications, and SQL writes are not used.
+## Test safely
+1. Completely restart Plant 3D 2025 to unload the old NETLOADed DLL.
+2. `NETLOAD` the REV14 `SPTC.ProductionIso.dll`.
+3. Run `SPTC_PRODISO`.
+4. Check that **Select All** and **Folders ▾** appear together at the lower left.
+5. Click **Folders ▾** and confirm **Create Production Iso stays open** and a folder list appears inside it.
+6. If folders appear, select one known folder, inspect its line numbers, then choose **All Project**.
+7. Generate only one known-good ISO after native checked-state behavior has been verified.
 
-## Test
-1. Exit Plant 3D 2025 completely and restart. NETLOAD REV13 `SPTC.ProductionIso.dll`.
-2. Run `SPTC_PRODISO`, and confirm the original unfiltered project line list appears.
-3. Click the small dropdown at the **right of Line Numbers Filter** (existing funnel position), and inspect the folders.
-4. Choose a folder that contains known registered 3D piping drawings.
-5. Check the shown line numbers. Select All should affect only visible folder lines.
-6. Reopen the dropdown and choose **All Project**. The normal native line list should reappear.
-7. Only after verifying correct checkbox selection, try generating **one test ISO**. Existing auto-copy remains unchanged.
+For troubleshooting use `SPTC_FOLDERDIAG`, then F2 to copy the line-by-line diagnostic.
 
-If the menu reports missing relationships or the displayed lines are wrong, close the dialog and send the AutoCAD command-line diagnostic. Do not run bulk ISO generation from an unverified filter.
+## Preserved
+REV05 background export/copy to custom save location; REV06 Select All; native Drawing/Project Active/All toggle; REV12 aligned Custom Save Location row. No edits to Project Manager, model geometry, PnP database or `IsoConfig.xml`.
 
-## Scope / limitations
-- Folder names are taken from registered **file paths**. If Project Manager displays a custom folder alias different from the actual storage folder name, the dropdown may display the physical name in this experimental version.
-- Empty Project Manager folders without registered DWGs are not listed.
-- The folder filter requires that the native underlying list contain the project-wide routes. If it is in Drawing-only or other filtered mode, choose the native **Project** icon first.
-- The custom folder list appears only if Autodesk's underlying Line Numbers control can be identified as a WinForms checked list/list view; otherwise the UI refuses to modify it.
-- Folder queries are bounded (120 DWGs, 10,000 relationships) to avoid blocking the CAD interface on shared network projects.
-- Does not modify Project Manager, Project.xml, IsoPart.xml, IsoConfig.xml, native Isometric output locations, drawings, or PnP data.
-
-**Experimental.** Cloud compilation confirms build validity, not runtime correctness in Plant 3D 2025.
+## Limitations
+Cloud build success alone does not verify Plant 3D's proprietary dialog implementation. REV14 is a test build until verified in the user's 2025 environment. The project folder catalog may return a diagnostic if the installed Piping DataLinks API does not match the expected signatures. No additional executable is required.
