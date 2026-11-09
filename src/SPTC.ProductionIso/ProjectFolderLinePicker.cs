@@ -42,9 +42,13 @@ internal static class ProjectFolderLinePicker
     private sealed record NativeEntry(int Index, string Tag);
     private static IntPtr _dialog;
     private static Document? _document;
-    private static UserControl? _menuHost;
-    private static Button? _folderButton;
-    private static ToolTip? _toolTip;
+    // REV14: the folder control lives inside the proven Select All footer.
+    // Menu choices are rendered as a CHILD of the Autodesk native dialog,
+    // never as a top-level ContextMenuStrip popup. This avoids stealing focus
+    // and never sits on top of Autodesk's existing filter funnel control.
+    private static UserControl? _choicesHost;
+    private static Control? _folderAnchor;
+    private static ListBox? _choiceList;
     private static UserControl? _lineHost;
     private static CheckedListBox? _folderLineList;
     private static CheckedListBox? _nativeChecked;
@@ -53,154 +57,168 @@ internal static class ProjectFolderLinePicker
     private static bool _updating;
     private static string _folder = "";
 
+    private sealed record FolderMenuChoice(string Label, string? Key)
+    {
+        public override string ToString() => Label;
+    }
+
     public static bool FolderActive => !string.IsNullOrWhiteSpace(_folder);
 
     public static void Attach(IntPtr dialog, Document? document)
     {
         if (dialog == IntPtr.Zero) return;
-        if (_dialog == dialog && _menuHost is { IsDisposed: false }) return;
+        if (_dialog == dialog) { _document = document; return; }
         Hide();
         _dialog = dialog;
         _document = document;
-        _menuHost = new UserControl { BackColor = SystemColors.Control, Size = new Size(29, 26) };
-        _folderButton = new Button
-        {
-            Text = "▾",
-            FlatStyle = FlatStyle.Standard,
-            Font = new Font(SystemFonts.MessageBoxFont.FontFamily, 10, FontStyle.Bold),
-            Location = Point.Empty,
-            Size = new Size(27, 25),
-            TabStop = false,
-            AccessibleName = "Plant 3D Drawings folder filter"
-        };
-        _folderButton.Click += (_, _) => OpenFolderMenu();
-        _menuHost.Controls.Add(_folderButton);
-        _ = _menuHost.Handle;
-        SetParent(_menuHost.Handle, dialog);
-        if (GetParent(_menuHost.Handle) != dialog)
-        {
-            Hide();
-            return;
-        }
-        _toolTip = new ToolTip();
-        _toolTip.SetToolTip(_folderButton, "Filter line numbers by Plant 3D Drawings project folder");
-        Position(dialog);
-        _menuHost.Show();
     }
 
     public static void Position(IntPtr dialog)
     {
-        if (_dialog != dialog || _menuHost is null || _menuHost.IsDisposed)
-            return;
-
-        // Locate the native line filter textbox; position precisely over its
-        // existing funnel/dropdown icon, not the Drawing/Project buttons.
-        int x = 175, y = 88;
-        if (TryFindNativeFilterEdit(dialog, out RECT edit))
-        {
-            x = edit.Right - 27;
-            y = edit.Top;
-        }
-        if (GetClientRect(dialog, out RECT bounds))
-        {
-            x = Math.Clamp(x, 20, bounds.Width - 40);
-            y = Math.Clamp(y, 32, Math.Min(175, bounds.Height - 40));
-        }
-
-        SetWindowPos(_menuHost.Handle, IntPtr.Zero, x, y, 28, 26,
-            SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        if (_dialog == dialog && _choicesHost is { IsDisposed: false })
+            PositionMenu();
         if (FolderActive && _lineHost is { IsDisposed: false })
             PositionList(dialog);
     }
 
-    private static bool TryFindNativeFilterEdit(IntPtr dialog, out RECT client)
+    // Called only from the new "Folders" button beside Select All, not from
+    // the native filter icon. Opening the embedded menu does not dismiss the
+    // modal Create Production Iso dialog.
+    public static void ToggleFolderMenu(Control anchor)
     {
-        client = default;
-        if (!GetWindowRect(dialog, out RECT dlg)) return false;
-        var matches = new List<(IntPtr Handle, RECT Rect, int Score)>();
-        EnumChildWindows(dialog, (hwnd, _) =>
+        if (_dialog == IntPtr.Zero || _document is null) return;
+        if (_choicesHost is { IsDisposed: false })
         {
-            if (!GetWindowRect(hwnd, out RECT r) || r.Width < 110 || r.Height < 16 || r.Height > 45)
-                return true;
-            double x = (r.Left + r.Right) * 0.5 - dlg.Left;
-            double y = (r.Top + r.Bottom) * 0.5 - dlg.Top;
-            if (x < 30 || x > Math.Min(300, dlg.Width * 0.40) || y < 65 || y > 160)
-                return true;
+            HideFolderMenu();
+            return;
+        }
+        _folderAnchor = anchor;
 
-            Control? c = Control.FromHandle(hwnd);
-            var cls = new StringBuilder(128);
-            GetClassName(hwnd, cls, cls.Capacity);
-            if (c is not TextBoxBase &&
-                !cls.ToString().Contains("EDIT", StringComparison.OrdinalIgnoreCase))
-                return true;
-            int score = r.Width - Math.Abs((int)y - 105);
-            matches.Add((hwnd, r, score));
-            return true;
-        }, IntPtr.Zero);
+        // Show a real child control inside the existing native window.
+        _choicesHost = new UserControl
+        {
+            BorderStyle = BorderStyle.FixedSingle,
+            BackColor = SystemColors.Control,
+            Size = new Size(248, 239)
+        };
+        var header = new Label
+        {
+            Text = "Plant 3D Drawings folders",
+            Location = new Point(8, 5),
+            Size = new Size(205, 23),
+            Font = new Font(SystemFonts.MessageBoxFont, FontStyle.Bold)
+        };
+        var close = new Button
+        {
+            Text = "×",
+            Size = new Size(25, 23),
+            Location = new Point(216, 3),
+            TabStop = false
+        };
+        close.Click += (_, _) => HideFolderMenu();
+        _choiceList = new ListBox
+        {
+            Location = new Point(7, 32),
+            Size = new Size(233, 198),
+            IntegralHeight = false,
+            HorizontalScrollbar = true,
+            Font = SystemFonts.MessageBoxFont
+        };
+        _choicesHost.Controls.Add(header);
+        _choicesHost.Controls.Add(close);
+        _choicesHost.Controls.Add(_choiceList);
 
-        if (matches.Count == 0) return false;
-        RECT rect = matches.OrderByDescending(m => m.Score).First().Rect;
-        POINT a = new() { X = rect.Left, Y = rect.Top };
-        POINT b = new() { X = rect.Right, Y = rect.Bottom };
-        if (!ScreenToClient(dialog, ref a) || !ScreenToClient(dialog, ref b))
-            return false;
-        client = new RECT { Left = a.X, Top = a.Y, Right = b.X, Bottom = b.Y };
-        return true;
-    }
+        _ = _choicesHost.Handle;
+        SetParent(_choicesHost.Handle, _dialog);
+        if (GetParent(_choicesHost.Handle) != _dialog)
+        {
+            HideFolderMenu();
+            _document.Editor.WriteMessage("\nSPTC REV14: Could not attach folder choices to the native dialog.");
+            return;
+        }
 
-    private static void OpenFolderMenu()
-    {
-        if (_folderButton == null || _document == null) return;
+        _choiceList.Items.Add(new FolderMenuChoice("All Project (no folder filter)", ""));
+        _choiceList.SelectedIndexChanged += (_, _) =>
+        {
+            if (_choiceList?.SelectedItem is not FolderMenuChoice choice || choice.Key is null) return;
+            // Remove the child menu before changing the native line view.
+            HideFolderMenu();
+            if (choice.Key.Length == 0)
+                ClearFolder();
+            else
+                ApplyFolder(choice.Key);
+        };
+        PositionMenu();
+        _choicesHost.Show();
+        _choicesHost.BringToFront();
+
         Cursor.Current = Cursors.WaitCursor;
         try
         {
             if (!ProjectFolderLineCatalog.Ready)
                 ProjectFolderLineCatalog.Initialize(_document);
 
-            var menu = new ContextMenuStrip { ShowImageMargin = false };
-            var all = new ToolStripMenuItem("All Project (no folder filter)")
-            {
-                Checked = !FolderActive,
-                Font = new Font(SystemFonts.MessageBoxFont, FontStyle.Bold)
-            };
-            all.Click += (_, _) => ClearFolder();
-            menu.Items.Add(all);
-            menu.Items.Add(new ToolStripSeparator());
-
+            if (_choiceList is null || _choiceList.IsDisposed) return;
             if (!ProjectFolderLineCatalog.Ready)
             {
-                var diagnostic = new ToolStripMenuItem(ProjectFolderLineCatalog.Diagnostic)
-                { Enabled = false };
-                menu.Items.Add(diagnostic);
+                _choiceList.Items.Add(new FolderMenuChoice(
+                    "Folder data unavailable — run SPTC_FOLDERDIAG", null));
+                _document.Editor.WriteMessage(
+                    "\nSPTC REV14 folder lookup: " + ProjectFolderLineCatalog.Diagnostic);
             }
             else
             {
                 foreach (var choice in ProjectFolderLineCatalog.Folders)
                 {
-                    // Display full relative folder paths to distinguish
-                    // identically named subfolders under different parents.
-                    string label = choice.Key.Replace("\\", " > ") +
-                                   $"  ({choice.DrawingCount} DWG)";
-                    var item = new ToolStripMenuItem(label)
-                    {
-                        Tag = choice.Key,
-                        Checked = _folder.Equals(choice.Key, StringComparison.OrdinalIgnoreCase)
-                    };
-                    item.Click += (_, _) => ApplyFolder((string)item.Tag!);
-                    menu.Items.Add(item);
+                    _choiceList.Items.Add(new FolderMenuChoice(
+                        choice.Key.Replace("\\", " > ") +
+                        $"  ({choice.DrawingCount} DWG)", choice.Key));
                 }
                 if (ProjectFolderLineCatalog.Folders.Count == 0)
-                    menu.Items.Add(new ToolStripMenuItem("(No registered subfolders)") { Enabled = false });
+                    _choiceList.Items.Add(new FolderMenuChoice("(No registered folders found)", null));
             }
-            // Context menu is a genuine Windows popup; dialog UI need not resize.
-            menu.Closed += (_, _) => menu.Dispose();
-            menu.Show(_folderButton, new Point(0, _folderButton.Height));
+            _choiceList.ClearSelected();
         }
         catch (Exception ex)
         {
-            _document.Editor.WriteMessage("\nSPTC REV13 folder menu: " + ex.Message);
+            _document.Editor.WriteMessage("\nSPTC REV14 folder menu: " + ex.GetBaseException().Message);
+            if (_choiceList is { IsDisposed: false })
+                _choiceList.Items.Add(new FolderMenuChoice("Unable to read folders — SPTC_FOLDERDIAG", null));
         }
         finally { Cursor.Current = Cursors.Default; }
+    }
+
+    private static void PositionMenu()
+    {
+        if (_dialog == IntPtr.Zero || _choicesHost is null ||
+            _choicesHost.IsDisposed || _folderAnchor is null ||
+            _folderAnchor.IsDisposed ||
+            !GetWindowRect(_folderAnchor.Handle, out RECT screen) ||
+            !GetClientRect(_dialog, out RECT dialogBounds))
+            return;
+
+        POINT corner = new POINT { X = screen.Left, Y = screen.Top };
+        if (!ScreenToClient(_dialog, ref corner)) return;
+
+        int width = _choicesHost.Width;
+        int height = _choicesHost.Height;
+        int x = Math.Max(5, Math.Min(corner.X - 90, dialogBounds.Width - width - 5));
+        int y = Math.Max(140, corner.Y - height - 5);
+        y = Math.Min(y, Math.Max(8, dialogBounds.Height - height - 32));
+
+        // HWND_TOP without NOZORDER ensures the temporary dropdown stays above
+        // the native checked list while open.
+        SetWindowPos(_choicesHost.Handle, IntPtr.Zero, x, y, width, height,
+            SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    }
+
+    private static void HideFolderMenu()
+    {
+        UserControl? old = _choicesHost;
+        _choicesHost = null;
+        _choiceList = null;
+        _folderAnchor = null;
+        try { old?.Dispose(); } catch { }
     }
 
     private static void ApplyFolder(string folder)
@@ -466,13 +484,9 @@ internal static class ProjectFolderLinePicker
 
     public static void Hide()
     {
+        HideFolderMenu();
         _folder = "";
         DestroyProjection();
-        try { _menuHost?.Dispose(); } catch { }
-        try { _toolTip?.Dispose(); } catch { }
-        _menuHost = null;
-        _folderButton = null;
-        _toolTip = null;
         _dialog = IntPtr.Zero;
         _document = null;
         ProjectFolderLineCatalog.Reset();
