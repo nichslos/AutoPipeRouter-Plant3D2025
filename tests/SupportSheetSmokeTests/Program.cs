@@ -665,6 +665,60 @@ try
 catch(InvalidOperationException){profileCollisionRejected=true;}
 Assert(profileCollisionRejected,
     "REV22.14 fail closed when source view width leaves no note area");
+// REV22.15: distinguish actual BlockReference from independent selected
+// steel/solid objects, without pretending the latter is a block.
+var individualSupport=SupportOrthoSelection15.Build(
+    21,0,0,Array.Empty<string>(),Array.Empty<string>());
+Assert(individualSupport.Identity=="21 OBJECTS"&&
+    individualSupport.IdentityKind=="ASSEMBLY"&&
+    individualSupport.SizeText=="NOT RECORDED"&&
+    !individualSupport.HasSizes,
+    "REV22.15 21 selected solids become one assembly note, never a fake block name");
+var actualSteelBlock=SupportOrthoSelection15.Build(
+    1,1,0,new[]{"R-TYPE-A01"},new[]{"C100x50x5","L75x75x6"});
+Assert(actualSteelBlock.Identity=="R-TYPE-A01"&&
+    actualSteelBlock.IdentityKind=="BLOCK"&&
+    actualSteelBlock.HasSizes&&actualSteelBlock.MemberSizes.Count==2,
+    "REV22.15 native block identity and explicit section list kept");
+var individualNamedMembers=SupportOrthoSelection15.Build(
+    4,0,4,Array.Empty<string>(),new[]{"C100x50x5","L75x75x6"});
+Assert(individualNamedMembers.IdentityKind=="ASSEMBLY"&&
+    individualNamedMembers.MemberSizes.Count==2,
+    "REV22.15 individually selected structural members support real section sizes");
+var newSheetFrames=reservedTitleFrames.Frames;
+var newSheetTitles=reservedTitleFrames.Titles;
+var sheetPanel=SupportOrthoSummaryPanel15.Build(
+    newSheetFrames,newSheetTitles,individualSupport,594,841);
+Assert(sheetPanel.IdentityLine=="ASSEMBLY: 21 OBJECTS"&&
+    sheetPanel.SizeLine=="MEMBER: SIZE NOT RECORDED",
+    "REV22.15 no ten long missing-data callouts; one clean panel only");
+Assert(sheetPanel.X>0&&sheetPanel.X+sheetPanel.Width<594*.78&&
+    sheetPanel.Top-sheetPanel.Height>841*.12,
+    "REV22.15 summary safely inside paper keepout");
+var steelPanel=SupportOrthoSummaryPanel15.Build(
+    newSheetFrames,newSheetTitles,actualSteelBlock,594,841);
+Assert(steelPanel.IdentityLine=="BLOCK: R-TYPE-A01"&&
+    steelPanel.SizeLine.Contains("C100x50x5")&&
+    steelPanel.SizeLine.Contains("L75x75x6"),
+    "REV22.15 exact block name and material section sizes on one sheet note");
+bool noGapRejected=false;
+try
+{
+    var crowded=newSheetFrames.Select(f=>f with{
+        W=f.W+160
+    }).ToArray();
+    SupportOrthoSummaryPanel15.Build(
+        crowded,newSheetTitles,individualSupport,594,841);
+}
+catch(InvalidOperationException){noGapRejected=true;}
+Assert(noGapRejected,
+    "REV22.15 fail closed for no annotation gap; native views must be preserved");
+bool sourceCountRejected=false;
+try{SupportOrthoSelection15.Build(0,0,0,Array.Empty<string>(),Array.Empty<string>());}
+catch(ArgumentOutOfRangeException){sourceCountRejected=true;}
+Assert(sourceCountRejected,"REV22.15 reject empty support annotations");
+Console.WriteLine("PASS: REV22.15 one non-redundant, safe structural support summary for block and separately selected members.");
+
 Console.WriteLine("PASS: REV22.14 metadata-evidenced block/steel labels with all 10 safe paper-space callouts.");
 
 Console.WriteLine("PASS: REV22.13 ten native preset view titles, whole-group caption clearance and no overlaps.");
