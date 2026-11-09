@@ -196,6 +196,9 @@ public sealed class NativeOrthoTenViewAutoNativeUpdateTest
 
         bool cloned = false, registrationAttempted = false;
         bool allTenReadyForNativeUpdate = false;
+        var generatedViewNames = new List<string>();
+        var originalPaperHandles = new HashSet<string>(
+            StringComparer.OrdinalIgnoreCase);
         Document? targetDoc = null;
         try
         {
@@ -815,6 +818,8 @@ public sealed class NativeOrthoTenViewAutoNativeUpdateTest
             if(newFrames.Count!=10 || overlaps || possibleTitleBlock)
                 throw new InvalidOperationException(
                     "REV22.9: initial group is not proven safe; skip native Update All.");
+            generatedViewNames.AddRange(completed);
+            originalPaperHandles.UnionWith(priorHandles);
             allTenReadyForNativeUpdate=true;
             Log("STEP10_READY_FOR_NATIVE_UPDATE_ALL=True");
             SafeWriteToActiveEditor(
@@ -888,7 +893,7 @@ public sealed class NativeOrthoTenViewAutoNativeUpdateTest
                             "REV22.9 native update requires target Ortho document command context.");
                     string before=ViewCatalog(part.OrthoPart,dest);
                     Log("STEP11_REGISTERED_CATALOG_BEFORE="+before);
-                    if(!CatalogMatches(before,completed) || completed.Count!=10)
+                    if(!CatalogMatches(before,generatedViewNames) || generatedViewNames.Count!=10)
                         throw new InvalidOperationException(
                             "REV22.9 native update refused: ten registered views not confirmed.");
                     // Save project-registered native definitions before
@@ -912,10 +917,10 @@ public sealed class NativeOrthoTenViewAutoNativeUpdateTest
                     Log("STEP11_POSTUPDATE_QSAVE_RETURNED");
                     string after=ViewCatalog(part.OrthoPart,dest);
                     Log("STEP11_REGISTERED_CATALOG_AFTER="+after);
-                    bool catalogSafe=CatalogMatches(after,completed);
+                    bool catalogSafe=CatalogMatches(after,generatedViewNames);
                     Log("STEP11_ALL_TEN_NATIVE_VIEWS_STILL_REGISTERED="+catalogSafe);
                     var finalFrames=PaperViewports(targetDoc.Database,paperLayout)
-                        .Where(v=>!priorHandles.Contains(v.Handle)).ToList();
+                        .Where(v=>!originalPaperHandles.Contains(v.Handle)).ToList();
                     Log("STEP11_POSTUPDATE_NEW_VIEWPORT_COUNT="+finalFrames.Count);
                     bool collision=false;
                     foreach(var frame in finalFrames)
