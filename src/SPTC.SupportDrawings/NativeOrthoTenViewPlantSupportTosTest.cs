@@ -156,7 +156,8 @@ public sealed class NativeOrthoTenViewPlantSupportTosTest
             .Concat(plantSupports.Members.Select(s=>
                 new SupportOrthoMemberCalloutPlan25.Member(
                     s.Handle,s.Description,s.X,s.Y,s.Z,true,
-                    s.TosText,s.TosSource)))
+                    string.IsNullOrWhiteSpace(s.TosText)?null:s.TosText,
+                    s.TosSource)))
             .ToArray();
         if(sourceAnnotations.Select(m=>m.Handle).Distinct(
             StringComparer.OrdinalIgnoreCase).Count()!=sourceAnnotations.Length)
