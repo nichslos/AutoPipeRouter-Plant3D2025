@@ -1,3 +1,25 @@
+# REV22.24 — Support both Plant 3D Structure Members AND Pipe Supports
+
+**New isolated test command:** `SPTC_ORTHO22_24_SUPPORT_COMPAT_TEST` for AutoCAD Plant 3D 2025. REV22.23 and all earlier commands are unchanged. Use a COPIED registered Plant 3D project only and type `REV22.24 TEST`.
+
+**User screenshots show a native Plant 3D object of Class `Support`** on layer `_Supports`, with `Spec=PipeSupportsSpec`, `Size=400`, `Short Description=Clamped Stanchion`, `Long Description (Size)=Clamped Stanchion 16"`. Its pipe connection properties include `COP Elevation (Port 1)=4103.1543`, `Top of Pipe=4306.3543` and `Bottom of Pipe=3899.9543`. These pipe-elevation properties are NOT Top of Steel and must never be automatically mislabeled TOS.
+
+**REV22.24 support source reader:** `SupportOrthoPlantSupport24.Read` checks separately selected Piping Support objects (native `Support`/`AcPpSupport`, Plant `Class=Support`, `PartSubType=Support`, or `Spec=PipeSupportsSpec` from PnP project data). It uses the active project's `Piping.DataLinksManager.FindAcPpRowId(id)` and `GetAllProperties(rowId,true)`, looks up `LongDescriptionSize`/`Long Description (Size)` first, then `ShortDescription`, and only falls back to a literal `Support (Size 400)` when no description exists. It never converts nominal Support Size to a structural steel section. The actual 3D support object's geometric midpoint is projected through the saved native Ortho viewport camera, for the leader endpoint only.
+
+**Annotation example:**
+```text
+[HANDLE] Clamped Stanchion 16"
+```
+This is one editable non-wrapping DBText next to every native Ortho viewport where the support anchor projects inside. Every **Structure Member** continues to receive its real Plant 3D `Size`, and the previously validated horizontal-only TOS second line, when eligible. **Pipe Supports never receive steel TOS**; `Top of Pipe`, `Bottom of Pipe`, and `COP Elevation` remain source data, not inferred steel elevations.
+
+**Mixed support model:** 13 structural members plus one native Plant Support would produce up to 140 individual per-view labels across the same ten native views; no duplicate ObjectId handles are allowed. REV22.23's no-wrap native DBText writer, actual AutoCAD font `GeometricExtents` measurement, nonoverlapping label rectangles, fail-closed skips, separate paper-space leader lanes, SupportFocus automatic cube, long-pipe XY clipping, ten native Ortho cameras, view titles, and one-click placement are preserved. If the support label lacks a true PnP row/description, the log explains why it was skipped; **the program does not invent Support names or sizes**.
+
+**Run:** Restart Plant3D 2025, NETLOAD the new DLL, open a registered source model in a copied project, run `SPTC_ORTHO22_24_SUPPORT_COMPAT_TEST`, select SupportFocus and the actual **Plant 3D Support** objects plus optional **Structure Members**, exclude long pipes from the structural selection, optionally select nearby pipes separately, choose an EMPTY registered native Ortho seed, confirm with `REV22.24 TEST`, and click once. Inspect the generated support-size labels beside all ten native views; verify `REV22_24_PNP_SUPPORT_CANDIDATES`, `REV22_24_PNP_SUPPORT_LINKED_ROWS`, `REV22_24_PNP_SUPPORT_ACCEPTED`, `REV22_24_SUPPORT_ANNOTATION_SOURCE`, `REV22_24_COMBINED_ANNOTATION_SOURCE_COUNT`, `STEP10_PIPING_SUPPORT_COUNT`, `STEP10_STRUCTURE_MEMBER_COUNT`, `STEP10_INDIVIDUAL_MEMBER_ANNOTATION_COUNT`, and `STEP10_MEMBER_ANNOTATIONS_CHECK`. Send `*_REV22_24_RESULT.txt` and FRONT/NW closeup screenshots.
+
+**Limitations:** Project PnP field exposure and native Support class detection require a live Plant 3D 2025 test. The annotation is custom nonassociative paper-space DBText and leader lines, not native `PLANTORTHOANNOTATE`; it does not automatically update after editing the source model or regenerating an Ortho view. All drawing generation still calls an Autodesk internal unsupported interface, so copied projects only.
+
+---
+
 # REV22.23 — Fix Structural Member Annotation Wrapping and Text Overlap
 
 **New isolated command:** `SPTC_ORTHO22_23_NO_OVERLAP_TEXT_TEST` (AutoCAD Plant 3D 2025, COPY of a registered project only; authorization `REV22.23 TEST`). The REV22.22 working member Size / horizontal-only TOS value retrieval, ten native Ortho views, individual leader anchors, and Ortho title generation are unchanged. The previous REV22.22 command remains available.
