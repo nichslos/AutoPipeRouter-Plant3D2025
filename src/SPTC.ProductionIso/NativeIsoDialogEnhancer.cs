@@ -325,7 +325,12 @@ internal static class NativeIsoDialogEnhancer
 
             ProjectFolderLinePicker.Attach(dialog, _document);
             NativeIsoLineSelectOverlay.Attach(dialog);
-            ProjectFolderLinePicker.BeginAutomaticPrecache();
+            // REV20: avoid REV18's eager scan. Folder metadata/line numbers
+            // are queried only AFTER the user chooses a folder.
+            // Widen native Display lines through a draggable splitter when
+            // Autodesk exposes compatible WinForms sibling group controls.
+            NativeIsoLinePaneResizer.Attach(dialog, () => PositionOverlay(dialog));
+            PositionOverlay(dialog);
 
             // Win32 SetParent does not guarantee that the child receives
             // Autodesk's parent-resize messages. Watch only CLIENT DIMENSIONS,
@@ -343,6 +348,7 @@ internal static class NativeIsoDialogEnhancer
                     if (_lastDialogClientSize != size)
                     {
                         _lastDialogClientSize = size;
+                        NativeIsoLinePaneResizer.Refresh();
                         PositionOverlay(dialog);
                     }
                 }
@@ -498,6 +504,7 @@ internal static class NativeIsoDialogEnhancer
         _fallbackRowLeft = -1;
         _fallbackTextboxLeft = -1;
         _fallbackRowTop = -1;
+        NativeIsoLinePaneResizer.Hide();
         ProjectFolderLinePicker.Hide();
         NativeIsoToolbarClickFilter.Detach();
         NativeIsoLineSelectOverlay.Hide();
