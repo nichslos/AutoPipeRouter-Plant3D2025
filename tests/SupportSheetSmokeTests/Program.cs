@@ -1175,7 +1175,7 @@ Assert(plan25.Callouts.Count==140&&plan25.Skipped.Count==0,
     "REV22.25 mixed model 13 structure + one support receives 140 source-linked labels");
 Assert(plan25.Callouts.Count(x=>x.Handle=="7FA"&&x.HasTos)==10&&
     plan25.Callouts.Where(x=>x.Handle=="7FA")
-        .All(x=>x.Text=="[7FA] Clamped Stanchion 16\"\\nTOS ~ +4012.125 mm"),
+        .All(x=>x.Text=="[7FA] Clamped Stanchion 16\"\nTOS ~ +4012.125 mm"),
     "REV22.25 every support label gets its own second-line approximate TOS");
 Assert(plan25.TosLines==rev223Plan.HorizontalTosLines+10&&
     plan25.Callouts.Where(x=>x.Handle!="7FA").Count(x=>x.HasTos)==
@@ -1186,7 +1186,7 @@ var exactModel25=mixedRev25.Select(x=>x.Handle=="7FA"?
 var exactPlan25=SupportOrthoMemberCalloutPlan25.Build(
     rev217Cameras,reservedTitleFrames.Titles,exactModel25,594,841);
 Assert(exactPlan25.Callouts.Count(x=>x.Handle=="7FA"&&
-    x.Text.Contains("\\nTOS EL. +4172.5 mm"))==10,
+    x.Text.Contains("\nTOS EL. +4172.5 mm"))==10,
     "REV22.25 exact Support TopOfSteel displays without tilde, beneath its description");
 Console.WriteLine("PASS: REV22.25 Support TOS explicit vs approximate vs unavailable, no pipe elevation confusion, 140 annotations.");
 Console.WriteLine("PASS: REV22.24 Plant Piping Support PnP description and 14-object mixed ten-view annotation.");
