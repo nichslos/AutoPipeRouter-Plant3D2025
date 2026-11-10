@@ -1,33 +1,32 @@
-# SPTC Production Iso REV19 — Responsive Custom Save Location + Label Alignment
+# SPTC Production Iso REV20 — Manual Folder Scan and Resizable Line Numbers
 
-**Baseline:** REV18. Existing releases remain unchanged.
+**Baseline:** REV19. All previous revision branches and DLLs remain unchanged.
 
-## What changed
-- The **Custom Save Location:** label is left-aligned with the Autodesk-native **Revision number:** label; both use consistent label font and baseline.
-- The Custom Save Location textbox starts at the same horizontal coordinate as the native Revision number textbox.
-- The textbox **grows and shrinks with the original Create Production Iso dialog**, and the **Browse (...) button moves with its right edge**. Its right edge aligns with the right edge of Autodesk's Revision textbox.
-- Prefer actual native Revision label and textbox coordinates (Win32 read-only geometry). A stable REV12-style fallback remains available when Autodesk doesn't expose native child windows.
-- A lightweight 180 ms UI timer checks only whether the dialog's client **size changed**. It recalculates geometry only if necessary; no PnP/SQL/file enumeration is done by the timer.
-- Explicitly resizes the custom WinForms controls instead of relying on Autodesk/Win32 `SetParent` to relay a `Resize` event.
-- Label position and text remain aligned even when the dialog is stretched vertically, as well as horizontally.
+## Requested changes
+**1. No startup folder scanning.** REV18's automatic folder precache is **not launched** when Create Production Iso opens. The native dialog should become available without extra project-wide background PnP scans. The dropdown still uses the existing REV16 on-demand incremental scan with progress and Cancel when a folder is actually selected. A completed folder is cached only within the current dialog, so selecting it again does not rescan.
+
+**2. Wider, draggable left panel.** REV20 adds a narrow vertical resize grip on the boundary between the native **Display lines** and **Output settings** group boxes. Drag the grip right to widen the Line Numbers list and show long pipeline names without relying on horizontal scrolling; drag left to reduce it. When the dialog is very wide, the left pane starts wider automatically.
+
+The grip is enabled only if the running AutoCAD Plant 3D 2025 dialog exposes the two original **Display lines** and **Output settings** sections as sibling WinForms GroupBoxes. Both are required. If Autodesk uses a different native UI layout, the plugin leaves the original controls alone rather than guessing, and the drag grip will be unavailable. This is a safe fallback; please report the screen behavior in that case.
+
+The implementation keeps the native original line checklist (not a copy). It tries both regular WinForms parent layout and the fixed-left-column TableLayoutPanel case, preserving space for Output settings. Any nested line-list container grows with the left border. The Custom Save Location field is repositioned in sync with the native Revision number row during resizing, retaining REV19 alignment.
 
 ## Preserved
-- REV05 custom destination automatic copying of completed ISOs.
-- REV06 Select All; REV17 **Select All (N)** counter.
-- REV09–11 Drawing / Project active-versus-all toggle.
-- REV15 top-level Project Manager folder dropdown at the Line Numbers filter spot.
-- REV16 cooperative folder scan with Cancel.
-- REV18 automatic folder cache prewarming after the native command.
+- REV05 automatic copying of completed ISOs to Custom Save Location.
+- REV06 Select All and REV17 **Select All (N)** counter.
+- REV09–11 Active DWG / All line-number toolbar toggle.
+- REV15 first-level drawing-folder dropdown in the Line Numbers filter row.
+- REV16 folder scan with progress/Cancel on **user selection only**.
+- REV19 responsive Custom Save Location label, textbox and Browse.
+- Original project data, default ISO settings, PnP tables and model DWGs unchanged.
 
 ## Test
-1. Completely close AutoCAD Plant 3D 2025; restart and NETLOAD the REV19 DLL.
-2. Run `SPTC_PRODISO`, then stretch the **right edge** of Create Production Iso.
-3. Confirm that the Custom Save Location box expands to the right, leaving the Browse button aligned to the right end of Revision number's textbox.
-4. Confirm both labels are aligned at their left edge and both textboxes start at the same X coordinate.
-5. Stretch the dialog smaller and taller; the row should maintain alignment and not overlap the native controls.
-6. Check that Browse still selects a folder and test creating one known-good ISO before batch creation.
+1. Close Plant 3D completely, restart and NETLOAD REV20 `SPTC.ProductionIso.dll`.
+2. Open a drawing and run `SPTC_PRODISO`. Verify the normal list appears without an automatic folder scan.
+3. Look at the border between **Display lines** and **Output settings**. On supported native UI versions, a thin resize grip should appear; drag right to widen the Line Numbers list.
+4. Confirm long line names become visible without horizontal scrolling and the Output settings controls (Iso Style, Revision, Custom Save Location, Browse) remain usable.
+5. Stretch the entire dialog width and adjust the divider again. Verify the Custom Save Location textbox remains aligned with Revision and resizes.
+6. Choose a folder from the dropdown; scanning should begin **only then**. Check that Select All (N) continues to count the displayed items.
+7. Generate one known-good ISO to verify the selected native line checkbox and custom export location. Avoid generating all project ISOs until the line selection is confirmed.
 
-## Limits
-- This is an experimental overlay on an Autodesk-native dialog. Windows display scaling or a different Plant 3D build may use different native control classes; the fallback keeps the prior layout when necessary.
-- Compilation is not a substitute for in-Plant 3D runtime testing.
-- No modifications to project data, Autodesk ISO XML, model DWGs, or default ISO destination.
+**Runtime limitation:** GitHub compilation is not a Plant 3D GUI runtime test. Native dialog control structures differ among Autodesk builds. If the divider fails to appear or is unstable, send a screenshot and AutoCAD F2 output; the original REV19 build remains available.
