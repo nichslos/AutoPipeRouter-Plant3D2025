@@ -51,6 +51,7 @@ internal static class NativeIsoLineSelectOverlay
     [DllImport("user32.dll")] private static extern IntPtr SendMessage(IntPtr hwnd, uint message, IntPtr wParam, IntPtr lParam);
 
     private const uint LVM_GETITEMCOUNT = 0x1004;
+    private const uint LB_GETCOUNT = 0x018B;
     private const uint LVM_SETITEMSTATE = 0x102B;
     private const uint LVM_GETEXTENDEDLISTVIEWSTYLE = 0x1037;
     private const long LVS_EX_CHECKBOXES = 0x00000004;
@@ -63,6 +64,9 @@ internal static class NativeIsoLineSelectOverlay
     private static CheckBox? _toggle;
     private static IntPtr _dialog;
     private static bool _setting;
+    // REV17: lightweight UI-only count refresh. No PnP/SQL queries and no
+    // changes to native checked states, even when the filter changes.
+    private static System.Windows.Forms.Timer? _countTimer;
 
     public static void Attach(IntPtr dialog)
     {
@@ -99,6 +103,11 @@ internal static class NativeIsoLineSelectOverlay
         }
         Position(dialog);
         _host.Show();
+
+        UpdateDisplayedCount();
+        _countTimer = new System.Windows.Forms.Timer { Interval = 850 };
+        _countTimer.Tick += (_, _) => UpdateDisplayedCount();
+        _countTimer.Start();
     }
 
     public static void Position(IntPtr dialog)
@@ -119,6 +128,57 @@ internal static class NativeIsoLineSelectOverlay
 
         SetWindowPos(_host.Handle, IntPtr.Zero, left, top, 174, 29,
             SWP_NOACTIVATE | SWP_NOZORDER | SWP_SHOWWINDOW);
+    }
+
+    // REV17: "Select All (N)" counts the lines currently displayed, not
+    // how many are checked. When a folder is active the projected native-backed
+    // line list is authoritative; otherwise read the current Autodesk list.
+    public static void UpdateDisplayedCount()
+    {
+        if (_dialog == IntPtr.Zero || _toggle is null ||
+            _toggle.IsDisposed || _host is null || _host.IsDisposed)
+            return;
+
+        int? count = ProjectFolderLinePicker.VisibleLineCount ??
+                     ReadNativeLineCount(_dialog);
+        string caption = count.HasValue
+            ? $"Select All ({count.Value})"
+            : "Select All";
+        if (!string.Equals(_toggle.Text, caption, StringComparison.Ordinal))
+            _toggle.Text = caption;
+    }
+
+    private static int? ReadNativeLineCount(IntPtr dialog)
+    {
+        int best = -1;
+        EnumChildWindows(dialog, (hwnd, _) =>
+        {
+            if (!IsLeftLineList(dialog, hwnd)) return true;
+
+            Control? control = Control.FromHandle(hwnd);
+            int count = -1;
+            if (control is CheckedListBox checkedBox)
+                count = checkedBox.Items.Count;
+            else if (control is ListBox listBox)
+                count = listBox.Items.Count;
+            else if (control is ListView listView && listView.CheckBoxes)
+                count = listView.Items.Count;
+            else
+            {
+                var cls = new StringBuilder(128);
+                GetClassName(hwnd, cls, cls.Capacity);
+                string className = cls.ToString();
+                if (className.Equals("SysListView32", StringComparison.OrdinalIgnoreCase))
+                    count = SendMessage(hwnd, LVM_GETITEMCOUNT, IntPtr.Zero, IntPtr.Zero).ToInt32();
+                else if (className.Equals("ListBox", StringComparison.OrdinalIgnoreCase))
+                    count = SendMessage(hwnd, LB_GETCOUNT, IntPtr.Zero, IntPtr.Zero).ToInt32();
+            }
+
+            if (count > best)
+                best = count;
+            return true;
+        }, IntPtr.Zero);
+        return best >= 0 ? best : null;
     }
 
     private static void ToggleChanged(object? sender, EventArgs e)
@@ -335,6 +395,9 @@ internal static class NativeIsoLineSelectOverlay
     public static void Hide()
     {
         _dialog = IntPtr.Zero;
+        try { _countTimer?.Stop(); } catch { }
+        try { _countTimer?.Dispose(); } catch { }
+        _countTimer = null;
         try { _host?.Dispose(); } catch { }
         _host = null;
         _toggle = null;
