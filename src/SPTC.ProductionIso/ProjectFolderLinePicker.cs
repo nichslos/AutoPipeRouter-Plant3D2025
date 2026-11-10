@@ -430,6 +430,8 @@ internal static class ProjectFolderLinePicker
             _folder = folder;
             BuildProjection(visible);
             PositionList(_dialog);
+            // REV17: reflect the just-completed folder's visible line count.
+            NativeIsoLineSelectOverlay.UpdateDisplayedCount();
             _document.Editor.WriteMessage(
                 $"\nSPTC REV16 folder selected: {folder}; {visible.Count} lines shown. " +
                 "Underlying project data unchanged.");
@@ -710,6 +712,7 @@ internal static class ProjectFolderLinePicker
             ActiveDwgTags.ClearOneTag(_dialog, null);
         _folder = "";
         DestroyProjection();
+        NativeIsoLineSelectOverlay.UpdateDisplayedCount();
         _document?.Editor.WriteMessage("\nSPTC REV13: All Project lines restored.");
     }
 
