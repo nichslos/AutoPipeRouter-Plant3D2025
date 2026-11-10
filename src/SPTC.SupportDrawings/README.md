@@ -1,3 +1,28 @@
+# REV22.25 — Include Top of Steel (TOS) beneath Plant 3D Support annotations
+
+**New isolated Plant 3D 2025 test command:** `SPTC_ORTHO22_25_SUPPORT_TOS_TEST`. Existing REV22.24 and earlier commands remain untouched. Use a COPIED registered Plant 3D project only; authorize with `REV22.25 TEST`.
+
+**User requirement:** REV22.24 already labels native Plant 3D *Support* objects by real PnP `Long Description (Size)` (e.g. `Clamped Stanchion 16"`). Add a second **TOS elevation line** beneath each Support label. Keep all per-Structure Member labels and the **horizontal-only structural-steel TOS** rule from previous revisions unchanged. Support objects are not automatically treated as horizontal steel; their own TOS eligibility and source are independent.
+
+**Support label example:**
+```text
+[SUPPORT_HANDLE] Clamped Stanchion 16"
+TOS ~ +4012.125 mm
+```
+(The number is illustrative, not inferred from the screenshot.)
+
+**Actual source priority:** For an accepted Plant 3D Support object, `SupportOrthoPlantSupport25.Read` uses `Piping.DataLinksManager.FindAcPpRowId` and `GetAllProperties` to resolve that Support's source PnP record and description. `SupportOrthoSupportTos25.Evaluate` reads explicit `TopOfSteel`, `Top of Steel`, `TopOfSteelElevation`, or `TOSElevation` if supplied by PnP data, displaying `TOS EL. +... mm`. The user's screenshot does **not** expose an exact Top of Steel property, but does show `Top of Pipe`, `Bottom of Pipe` and `COP Elevation (Port 1)`. These are pipe/port elevations and are NEVER interpreted as steel TOS.
+
+If no explicit `TopOfSteel` is available, REV22.25 uses the **Support entity's upper 3D bounding elevation** `GeometricExtents.MaxPoint.Z` as a clearly flagged *approximate top*, displaying `TOS ~ +... mm` and `TOS_SOURCE=SUPPORT_GEOMETRIC_TOP_APPROX`. **Caution:** For complex clamped stanchions, this may be the highest clamp or fastener—not the engineering Top of Steel datum. Verify it with a true support steel datum/section or explicitly populate a trusted TopOfSteel attribute before treating the elevation as construction-ready. If no exact value or valid geometry exists, show `TOS: N/A`. The plugin does not claim an inferred value is exact.
+
+**No wrap, no overlap:** Both the Support description and its TOS are distinct native single-line DBText entries, with the same REV22.23 real-font geometric measurement and automatic fit/skip guards; per-object leaders point to projected actual Support midpoints. A combined selection of 13 native Structure Members and one PnP Support can produce up to **140** individual annotations across the ten native Ortho views, assuming room exists. Native Ortho view cameras, title text, SupportFocus cube, local-pipe clipping, 1-click placement, model geometry and Ortho metadata are unchanged.
+
+**Logs and acceptance:** The new `*_REV22_25_RESULT.txt` records `REV22_25_PNP_SUPPORT_ACCEPTED`, `REV22_25_SUPPORT_TOS_EXPLICIT_COUNT`, `REV22_25_SUPPORT_TOS_APPROX_COUNT`, `REV22_25_SUPPORT_TOS_UNAVAILABLE_COUNT`, each `REV22_25_SUPPORT_ANNOTATION_SOURCE` with `TOS_SOURCE`, `STEP10_SUPPORT_TOS_LABEL_COUNT`, `STEP10_SUPPORT_TOS_EXPECTED`, `STEP10_HORIZONTAL_TOS_LABEL_COUNT`, `STEP10_INDIVIDUAL_MEMBER_ANNOTATION_COUNT` and `STEP10_MEMBER_ANNOTATIONS_CHECK=PASS/PARTIAL`. A full PASS means counts match and labels fit, **not** that an approximate engineering TOS is correct.
+
+**Test:** Fully exit Plant 3D 2025; extract DLL and `NETLOAD`, run `SPTC_ORTHO22_25_SUPPORT_TOS_TEST` in a copied project. Select SupportFocus; select your PnP Support object (and optionally Structure Members), optionally select nearby pipes separately, choose an EMPTY registered Ortho seed, type `REV22.25 TEST`, then click once. Check an Ortho FRONT and NW view: Support description on first line, exact or approximate TOS on next, without crossing adjacent labels. Send the test log and screenshots. The operation invokes an Autodesk unsupported internal `GenerateOrthos` interface; never trial in production.
+
+---
+
 # REV22.24 — Support both Plant 3D Structure Members AND Pipe Supports
 
 **New isolated test command:** `SPTC_ORTHO22_24_SUPPORT_COMPAT_TEST` for AutoCAD Plant 3D 2025. REV22.23 and all earlier commands are unchanged. Use a COPIED registered Plant 3D project only and type `REV22.24 TEST`.
