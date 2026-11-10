@@ -298,6 +298,10 @@ internal static class NativeIsoDialogEnhancer
             // The original native Filter funnel is no longer covered.
             ProjectFolderLinePicker.Attach(dialog, _document);
             NativeIsoLineSelectOverlay.Attach(dialog);
+            // REV18: begin a one-time incremental cache of registered
+            // drawing-folder line tags after the native dialog has painted.
+            // Selection from a completed folder will then be immediate.
+            ProjectFolderLinePicker.BeginAutomaticPrecache();
             _document?.Editor.WriteMessage("\nSPTC: Original Production Iso dialog located; custom folder field attached.");
         }
         catch (Exception ex)
