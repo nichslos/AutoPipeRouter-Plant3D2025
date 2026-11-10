@@ -469,10 +469,6 @@ internal static class NativeIsoLinePaneResizer
             newWidth, height, SWP_NOZORDER | SWP_NOACTIVATE);
     }
 
-    private delegate bool EnumChildProc(IntPtr hwnd, IntPtr data);
-    [DllImport("user32.dll")] private static extern bool EnumChildWindows(
-        IntPtr parent, EnumChildProc cb, IntPtr data);
-
     private static int DepthFromLeft(Control control)
     {
         int depth = 0;
