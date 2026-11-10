@@ -1009,16 +1009,18 @@ internal static class ProjectFolderLinePicker
 
     private static void ScheduleNativeSelectionCommit()
     {
-        try { _nativeCommitTimer?.Stop(); _nativeCommitTimer?.Dispose(); }
-        catch { }
-        _nativeCommitTimer = new System.Windows.Forms.Timer { Interval = 220 };
-        _nativeCommitTimer.Tick += (_, _) =>
+        // Single reusable debounce timer; Select All may affect hundreds of
+        // lines and must not allocate one timer per checked checkbox.
+        if (_nativeCommitTimer is null)
         {
-            try { _nativeCommitTimer?.Stop(); _nativeCommitTimer?.Dispose(); }
-            catch { }
-            _nativeCommitTimer = null;
-            VerifyNativeCreateState();
-        };
+            _nativeCommitTimer = new System.Windows.Forms.Timer { Interval = 220 };
+            _nativeCommitTimer.Tick += (_, _) =>
+            {
+                _nativeCommitTimer?.Stop();
+                VerifyNativeCreateState();
+            };
+        }
+        _nativeCommitTimer.Stop();
         _nativeCommitTimer.Start();
     }
 
@@ -1151,6 +1153,10 @@ internal static class ProjectFolderLinePicker
             return;
         }
         _lineHost.Show();
+        // An already-checked underlying line can have missing native Create
+        // eligibility state after overlay creation. Revalidate it once.
+        if (entries.Any(GetNativeChecked))
+            ScheduleNativeSelectionCommit();
     }
 
     private static void PositionList(IntPtr dialog)
@@ -1177,10 +1183,16 @@ internal static class ProjectFolderLinePicker
         {
             for (int i = 0; i < VisibleEntries.Count; i++)
             {
-                bool success = SetNativeChecked(VisibleEntries[i], value, userAction: true);
+                // Bulk updates keep the native programmatic ItemCheck event.
+                // The final row also receives the full native mouse-click
+                // sequence to refresh Autodesk's Create availability.
+                bool clickNative = i == VisibleEntries.Count - 1;
+                bool success = SetNativeChecked(VisibleEntries[i], value,
+                    userAction: clickNative);
                 if (!success) return false;
                 _folderLineList.SetItemChecked(i, value);
             }
+            if (VisibleEntries.Count > 0) ScheduleNativeSelectionCommit();
             return true;
         }
         finally { _updating = false; }
