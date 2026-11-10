@@ -1064,11 +1064,24 @@ internal static class ProjectFolderLinePicker
             // We MUST NOT force Create.Enabled=true. Autodesk may reject
             // generation for reasons beyond the checkmarks (style, scope,
             // pipeline validation). Make the discrepancy diagnosable.
+            if (!create.Enabled && _nativeChecked is { IsDisposed: false } list)
+            {
+                // Final one-shot repair: an already-checked row might have
+                // been selected before our overlay was attached. Replaying a
+                // real native checkbox OFF then ON gives Autodesk's handlers
+                // the full mouse/ItemCheck/selection event sequence while
+                // preserving the intended final checked state.
+                NativeEntry first = VisibleEntries.First(GetNativeChecked);
+                if (ClickNativeCheckedRow(list, first.Index, false))
+                    ClickNativeCheckedRow(list, first.Index, true);
+            }
+
             if (!create.Enabled)
                 _document?.Editor.WriteMessage(
                     "\nSPTC REV24: Native Create is still disabled despite " +
                     selected + " checked native ISO line(s). " +
-                    "No forced Create override; verify the native list source and selected route.");
+                    "No forced Create override; verify Autodesk's original line " +
+                    "source and other Production Iso eligibility conditions.");
         }
         finally { _committingNative = false; }
     }
