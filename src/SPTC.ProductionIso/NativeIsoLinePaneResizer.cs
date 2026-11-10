@@ -4,6 +4,7 @@ using System.Linq;
 using System.Windows.Forms;
 using System.Runtime.InteropServices;
 using System.Collections.Generic;
+using System.Text;
 
 namespace SPTC.ProductionIso;
 
@@ -23,6 +24,8 @@ internal static class NativeIsoLinePaneResizer
         IntPtr hwnd, out RECT bounds);
     [DllImport("user32.dll")] private static extern bool ScreenToClient(
         IntPtr hwnd, ref POINT p);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetClassName(
+        IntPtr hwnd, StringBuilder text, int capacity);
     [StructLayout(LayoutKind.Sequential)]
     private struct RECT { public int Left, Top, Right, Bottom; }
     [StructLayout(LayoutKind.Sequential)]
@@ -53,6 +56,10 @@ internal static class NativeIsoLinePaneResizer
     private static int _columnPadding;
     private static readonly Dictionary<Control, int> OriginalListRightMargins = new();
     private static readonly Dictionary<Control, int> OriginalContainerMargins = new();
+    private sealed record FilterChild(IntPtr Handle, int OriginalRightGap, bool IsEdit);
+    private static FilterChild? _nativeFilterInput;
+    private static FilterChild? _nativeFilterFunnel;
+    private static readonly List<FilterChild> _nativeFilterParents = new();
 
     public static bool IsAvailable => _handle is { IsDisposed: false };
 
@@ -123,6 +130,10 @@ internal static class NativeIsoLinePaneResizer
         OriginalListRightMargins.Clear();
         OriginalContainerMargins.Clear();
         RegisterLineLists(_left);
+        // REV21: capture the original native search field and funnel before
+        // widening the left group. Filter controls have their own anchoring and
+        // were left behind in REV20 even when the list itself grew.
+        CaptureFilterRow();
 
         _handle = new Panel
         {
@@ -292,6 +303,7 @@ internal static class NativeIsoLinePaneResizer
                 }
             }
             AdjustLineListWidths();
+            StretchFilterRow();
 
             _targetWidth = target;
             _lastParentWidth = available;
@@ -327,6 +339,139 @@ internal static class NativeIsoLinePaneResizer
                 list.Width = newWidth;
         }
     }
+
+    // Search only the narrow horizontal filter band (below the 3 toolbar
+    // icons, above the "Line Numbers:" label). Do not mutate filter text.
+    private static void CaptureFilterRow()
+    {
+        _nativeFilterInput = null;
+        _nativeFilterFunnel = null;
+        _nativeFilterParents.Clear();
+        if (_left == null || !GetWindowRect(_left.Handle, out RECT group))
+            return;
+
+        IntPtr foundInput = IntPtr.Zero;
+        IntPtr foundFunnel = IntPtr.Zero;
+        int inputScore = int.MinValue;
+        int funnelScore = int.MinValue;
+
+        EnumChildWindows(_left.Handle, (hwnd, _) =>
+        {
+            if (!GetWindowRect(hwnd, out RECT r)) return true;
+            int width = r.Right - r.Left, height = r.Bottom - r.Top;
+            int relativeY = (r.Top + r.Bottom) / 2 - group.Top;
+            int relativeX = (r.Left + r.Right) / 2 - group.Left;
+            if (relativeY < 37 || relativeY > 90 ||
+                relativeX < 5 || relativeX > group.Right - group.Left)
+                return true;
+
+            var name = new StringBuilder(100);
+            GetClassName(hwnd, name, name.Capacity);
+            string cls = name.ToString();
+            Control? control = Control.FromHandle(hwnd);
+            bool edit = control is TextBoxBase ||
+                cls.Contains("EDIT", StringComparison.OrdinalIgnoreCase);
+            if (edit && width >= 80 && height >= 15 && height <= 42)
+            {
+                // Prefer the broad, left-aligned native Filter input, not
+                // any unrelated short edit or controls inside Output settings.
+                int score = width - Math.Abs(r.Left - group.Left - 8) * 2;
+                if (score > inputScore) { inputScore = score; foundInput = hwnd; }
+            }
+
+            bool smallButton = control is ButtonBase ||
+                control is PictureBox ||
+                cls.Contains("BUTTON", StringComparison.OrdinalIgnoreCase);
+            if (smallButton && width >= 15 && width <= 43 &&
+                height >= 15 && height <= 39)
+            {
+                int gap = group.Right - r.Right;
+                if (gap >= 0 && gap <= 63)
+                {
+                    int score = 90 - gap;
+                    if (score > funnelScore) { funnelScore = score; foundFunnel = hwnd; }
+                }
+            }
+            return true;
+        }, IntPtr.Zero);
+
+        if (foundInput != IntPtr.Zero &&
+            GetWindowRect(foundInput, out RECT inputBounds))
+        {
+            _nativeFilterInput = new FilterChild(
+                foundInput, Math.Max(6, group.Right - inputBounds.Right), true);
+
+            // The search input might be nested in a fixed-width row Panel.
+            // Preserve each ancestor's original margin from Display lines,
+            // expanding ancestors BEFORE moving the textbox itself.
+            var ancestors = new List<FilterChild>();
+            IntPtr current = GetParent(foundInput);
+            while (current != IntPtr.Zero && current != _left.Handle)
+            {
+                if (!GetWindowRect(current, out RECT parentRect)) break;
+                if (parentRect.Left >= group.Left &&
+                    parentRect.Right <= group.Right + 4 &&
+                    parentRect.Bottom >= group.Top &&
+                    parentRect.Top <= group.Bottom)
+                {
+                    ancestors.Add(new FilterChild(current,
+                        Math.Max(6, group.Right - parentRect.Right), false));
+                }
+                current = GetParent(current);
+                if (ancestors.Count >= 8) break;
+            }
+            ancestors.Reverse();
+            _nativeFilterParents.AddRange(ancestors);
+        }
+
+        if (foundFunnel != IntPtr.Zero &&
+            GetWindowRect(foundFunnel, out RECT funnel))
+            _nativeFilterFunnel = new FilterChild(
+                foundFunnel, Math.Max(6, group.Right - funnel.Right), false);
+    }
+
+    private static void StretchFilterRow()
+    {
+        if (_left == null || !GetWindowRect(_left.Handle, out RECT group))
+            return;
+
+        foreach (var parent in _nativeFilterParents)
+            UpdateRightEdge(parent.Handle, group.Right - parent.OriginalRightGap,
+                resize: true);
+        if (_nativeFilterInput is { } edit)
+            UpdateRightEdge(edit.Handle, group.Right - edit.OriginalRightGap,
+                resize: true);
+        // Move the ORIGINAL Autodesk funnel, not our custom folder arrow.
+        if (_nativeFilterFunnel is { } funnel)
+            UpdateRightEdge(funnel.Handle, group.Right - funnel.OriginalRightGap,
+                resize: false);
+    }
+
+    private static void UpdateRightEdge(IntPtr hwnd, int desiredScreenRight, bool resize)
+    {
+        if (hwnd == IntPtr.Zero || !GetWindowRect(hwnd, out RECT bounds))
+            return;
+
+        int width = bounds.Right - bounds.Left;
+        int height = bounds.Bottom - bounds.Top;
+        IntPtr parent = GetParent(hwnd);
+        if (parent == IntPtr.Zero) return;
+
+        int leftScreen = resize ? bounds.Left
+                                : desiredScreenRight - width;
+        int newWidth = resize ? desiredScreenRight - leftScreen : width;
+        if (newWidth < (resize ? 60 : 12)) return;
+        POINT local = new() { X = leftScreen, Y = bounds.Top };
+        if (!ScreenToClient(parent, ref local)) return;
+        if (bounds.Right == desiredScreenRight) return;
+
+        SetWindowPos(hwnd, IntPtr.Zero, local.X, local.Y,
+            newWidth, height, SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+
+    private delegate bool EnumChildProc(IntPtr hwnd, IntPtr data);
+    [DllImport("user32.dll")] private static extern bool EnumChildWindows(
+        IntPtr parent, EnumChildProc cb, IntPtr data);
 
     private static int DepthFromLeft(Control control)
     {
@@ -379,5 +524,8 @@ internal static class NativeIsoLinePaneResizer
         _onDragRelayout = null;
         OriginalContainerMargins.Clear();
         OriginalListRightMargins.Clear();
+        _nativeFilterInput = null;
+        _nativeFilterFunnel = null;
+        _nativeFilterParents.Clear();
     }
 }
