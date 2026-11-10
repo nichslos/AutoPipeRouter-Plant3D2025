@@ -1083,6 +1083,58 @@ var longPlan223=SupportOrthoMemberCalloutPlan23.Build(
     rev217Cameras,reservedTitleFrames.Titles,veryLong223,594,841);
 Assert(longPlan223.Callouts.Count==130,
     "REV22.23 planner does not speculate glyph widths; live native DBText measures before writing");
+// REV22.24: the user showed a real Plant 3D Support with
+// Class=Support, Spec=PipeSupportsSpec,
+// Long Description (Size)=Clamped Stanchion 16", Size=400.
+var plantSupportSample=new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase)
+{
+    ["Class"]="Support",
+    ["Spec"]="PipeSupportsSpec",
+    ["Long Description (Size)"]="Clamped Stanchion 16\"",
+    ["Short Description"]="Clamped Stanchion",
+    ["Size"]="400",
+    ["COP Elevation (Port 1)"]="4103.1543",
+    ["Top of Pipe"]="4306.3543",
+    ["Bottom of Pipe"]="3899.9543"
+};
+Assert(SupportOrthoSupportLabel24.IsSupportClass("Support")&&
+    SupportOrthoSupportLabel24.IsSupportClass("AcPpSupport")&&
+    SupportOrthoSupportLabel24.IsSupportClass("PipingSupport")&&
+    !SupportOrthoSupportLabel24.IsSupportClass("StructureMember")&&
+    !SupportOrthoSupportLabel24.IsSupportClass("Pipe"),
+    "REV22.24 identify native Support class separately from steel and pipe");
+Assert(SupportOrthoSupportLabel24.ChooseDescription(plantSupportSample)
+    =="Clamped Stanchion 16\"",
+    "REV22.24 source Long Description (Size) wins over bare numeric Size 400");
+var supportFallback=new Dictionary<string,string> {["Size"]="400"};
+Assert(SupportOrthoSupportLabel24.ChooseDescription(supportFallback)
+    =="Support (Size 400)",
+    "REV22.24 bare Support Size is labeled without assuming member section DN units");
+var nativeNameSupport=new Dictionary<string,string>
+{
+    ["LongDescriptionSize"]="Clamped Stanchion 16\"",
+    ["Size"]="400"
+};
+Assert(SupportOrthoSupportLabel24.ChooseDescription(nativeNameSupport)
+    =="Clamped Stanchion 16\"",
+    "REV22.24 exact Plant PnP field name LongDescriptionSize accepted");
+var combinedRev24=rev223Members.Concat(new[]{
+    new SupportOrthoMemberCalloutPlan23.Member(
+        "7FA","Clamped Stanchion 16\"",
+        7956.295,3484.858,612.937,
+        false,null,"PIPE_SUPPORT_NOT_STRUCTURE_MEMBER")
+}).ToArray();
+var combinedPlan24=SupportOrthoMemberCalloutPlan23.Build(
+    rev217Cameras,reservedTitleFrames.Titles,combinedRev24,594,841);
+Assert(combinedPlan24.Callouts.Count==140&&
+    combinedPlan24.Callouts.Count(x=>x.Handle=="7FA")==10 &&
+    combinedPlan24.Callouts.Where(x=>x.Handle=="7FA")
+        .All(x=>!x.HasTos&&x.Text=="[7FA] Clamped Stanchion 16\"" &&
+            !x.Text.Contains("TOS")),
+    "REV22.24 support gets one exact description label per each 10 native views, never steel TOS");
+Assert(combinedPlan24.HorizontalTosLines==rev223Plan.HorizontalTosLines,
+    "REV22.24 13 structure members retain their existing horizontal-only TOS unchanged");
+Console.WriteLine("PASS: REV22.24 Plant Piping Support PnP description and 14-object mixed ten-view annotation.");
 Console.WriteLine("PASS: REV22.23 nonwrapping DBText two-line member labels and 130-collision-safe paper rectangles.");
 Console.WriteLine("PASS: REV22.22 exact native MText paragraph conversion, no fl-7.5TOS concatenation, no source model changes.");
 Console.WriteLine("PASS: REV22.21 screenshot-matching two lines without blank line, spaced TOS ~, preserved 130 labels.");
