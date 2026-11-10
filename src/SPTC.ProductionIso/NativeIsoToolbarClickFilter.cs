@@ -2,23 +2,37 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Runtime.InteropServices;
-using System.Text;
 using System.Windows.Forms;
 
 namespace SPTC.ProductionIso;
 
 /// <summary>
-/// REV10: Listen for a user click on Autodesk's top-left Drawing/Project/
-/// Filter toolbar AFTER the original dialog is shown. Before that click,
-/// leave all native line-number entries visible on startup. Each user click
-/// alternates between the verified active-DWG tag and the unfiltered native
-/// list by setting/clearing Autodesk's existing text filter after the click.
-/// No project records, model objects, or native buttons change.
+/// REV23: One deterministic Active/All toggle for the three upper-left
+/// toolbar icons inside the augmented Production Iso dialog.
+///
+/// REV22 allowed BOTH the native Autodesk toolbar Click and our delayed
+/// projection callback to change the same list. Native scope changes could
+/// rebuild the list underneath the projection, yielding zero rows or old
+/// entries that reappeared later.
+///
+/// For recognized upper toolbar button mouse clicks, intercept BOTH the
+/// mouse-down and mouse-up messages and execute the SPTC Active/All toggle
+/// once; do not also tell Autodesk to rebuild its list. This is a deliberate
+/// plugin-only override of those original mode buttons. Outside the toolbar,
+/// all native Production Iso input/messages are untouched.
 /// </summary>
 internal sealed class NativeIsoToolbarClickFilter : IMessageFilter
 {
+    private const int WM_LBUTTONDOWN = 0x0201;
     private const int WM_LBUTTONUP = 0x0202;
-    private static NativeIsoToolbarClickFilter? _active;
+    private const int WM_LBUTTONDBLCLK = 0x0203;
+    private const int WM_CANCELMODE = 0x001F;
+    private delegate bool EnumChildProc(IntPtr hwnd, IntPtr data);
+
+    [DllImport("user32.dll")]
+    private static extern bool EnumChildWindows(IntPtr parent, EnumChildProc callback, IntPtr data);
+    [DllImport("user32.dll")]
+    private static extern bool GetWindowRect(IntPtr hwnd, out RECT rect);
 
     [StructLayout(LayoutKind.Sequential)]
     private struct RECT
@@ -28,162 +42,147 @@ internal sealed class NativeIsoToolbarClickFilter : IMessageFilter
         public int Height => Bottom - Top;
     }
 
-    [DllImport("user32.dll")]
-    private static extern bool GetWindowRect(IntPtr hwnd, out RECT rect);
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    private static extern int GetClassName(IntPtr hwnd, StringBuilder text, int size);
-    [DllImport("user32.dll")]
-    private static extern bool EnumChildWindows(IntPtr hwnd, EnumChildProc proc, IntPtr data);
-    private delegate bool EnumChildProc(IntPtr hwnd, IntPtr data);
-
     private readonly IntPtr _dialog;
     private readonly Func<bool, bool> _toggle;
-    private readonly System.Windows.Forms.Timer _delay;
-    private readonly List<(Control Control, EventHandler Handler)> _buttonHandlers = new();
-    private readonly List<(ToolStripItem Item, EventHandler Handler)> _toolStripHandlers = new();
-    private bool _disposed;
-    // REV10: false = native unfiltered list; true = active-DWG tag filter.
-    // Every intentional toolbar click switches state exactly once.
     private bool _showingActive;
+    private bool _pressed;
+    private bool _disposed;
+    private bool _busy;
+    private static NativeIsoToolbarClickFilter? _active;
 
     private NativeIsoToolbarClickFilter(IntPtr dialog, Func<bool, bool> toggle)
     {
         _dialog = dialog;
         _toggle = toggle;
-        _delay = new System.Windows.Forms.Timer { Interval = 300 };
-        _delay.Tick += (_, _) =>
-        {
-            _delay.Stop();
-            if (_disposed) return;
-            try
-            {
-                bool nextShowingActive = !_showingActive;
-                // Commit only if the UI filter was successfully applied/cleared.
-                if (_toggle(nextShowingActive))
-                    _showingActive = nextShowingActive;
-            }
-            catch { /* Extension errors must never block native ISO dialog. */ }
-        };
-        HookManagedButtons();
         System.Windows.Forms.Application.AddMessageFilter(this);
     }
 
     public static void Attach(IntPtr dialog, Func<bool, bool> toggle)
     {
         if (dialog == IntPtr.Zero) return;
-        if (_active is { _disposed: false } active && active._dialog == dialog) return;
+        if (_active is { _disposed: false } previous && previous._dialog == dialog)
+            return;
         Detach();
         _active = new NativeIsoToolbarClickFilter(dialog, toggle);
     }
 
-    // REV21: If applying the active tag returns an empty native line list,
-    // the dialog enhancer clears that filter. Keep the next native toolbar
-    // click synchronized with the restored All view.
     public static void MarkAllLinesRestored(IntPtr dialog)
     {
-        if (_active is { _disposed: false } current &&
-            current._dialog == dialog)
+        if (_active is { _disposed: false } current && current._dialog == dialog)
             current._showingActive = false;
     }
 
-    private void Schedule()
+    public bool PreFilterMessage(ref Message message)
     {
-        if (_disposed) return;
-        // REV22: dismiss the old native-backed projection IMMEDIATELY when
-        // Autodesk switches Drawing/Project modes. The original line-list
-        // items may be reloaded; retaining indices until the delayed callback
-        // caused a transient blank list/overlay during loading.
-        ProjectFolderLinePicker.PrepareForNativeModeChange();
-        // REV11: restoring ALL only clears an existing text filter and can be
-        // requested sooner. The native Drawing/Project button may still need
-        // its own time to refresh a large or network-backed project list.
-        // Keep the slightly longer debounce for applying the active tag
-        // after Autodesk's mode switch has had a chance to run.
-        _delay.Stop();
-        _delay.Interval = _showingActive ? 100 : 300;
-        _delay.Start();
+        if (_disposed) return false;
+        int msg = message.Msg;
+        if (msg == WM_CANCELMODE)
+        {
+            _pressed = false;
+            return false;
+        }
+        if (msg != WM_LBUTTONDOWN && msg != WM_LBUTTONUP &&
+            msg != WM_LBUTTONDBLCLK)
+            return false;
+
+        Point pos = Control.MousePosition;
+        bool overToolbar = IsOriginalToolbarButton(pos.X, pos.Y);
+
+        if (msg == WM_LBUTTONDOWN || msg == WM_LBUTTONDBLCLK)
+        {
+            if (!overToolbar) return false;
+            // Swallow native down: the corresponding up must not trigger
+            // Autodesk's own Drawing/Project list regeneration.
+            _pressed = true;
+            return true;
+        }
+
+        if (!_pressed) return false;
+        _pressed = false;
+        if (!overToolbar) return true; // canceled drag outside the button
+
+        if (_busy) return true;
+        _busy = true;
+        try
+        {
+            bool nextShowingActive = !_showingActive;
+            // The user gets one change per full click; no 300/900ms timers,
+            // no second WinForms Click handler, and no overlapping native
+            // requery that could replace our filtered line list.
+            if (_toggle(nextShowingActive))
+                _showingActive = nextShowingActive;
+        }
+        catch (Exception)
+        {
+            // Do not crash the native dialog. A failed active projection
+            // leaves its original native line list available.
+        }
+        finally { _busy = false; }
+        return true;
     }
 
-    /// <summary>WinForms hooks for the small native mode buttons.</summary>
-    private void HookManagedButtons()
+    private bool IsOriginalToolbarButton(int screenX, int screenY)
     {
-        if (!GetWindowRect(_dialog, out RECT dialog)) return;
+        if (!GetWindowRect(_dialog, out RECT dialog) ||
+            screenX < dialog.Left || screenX > dialog.Right ||
+            screenY < dialog.Top || screenY > dialog.Bottom)
+            return false;
+
+        // NativeIsoLinePaneResizer tracks the actual 3 icon HWNDs after drag.
+        if (NativeIsoLinePaneResizer.IsTopToolbarPoint(screenX, screenY))
+            return true;
+
+        // Fall back to live WinForms child controls within the Display lines
+        // GroupBox. Do not use a percentage of the whole dialog width:
+        // that was wrong when REV20 widened the left panel.
+        IntPtr group = IntPtr.Zero;
         EnumChildWindows(_dialog, (hwnd, _) =>
         {
-            Control? control = Control.FromHandle(hwnd);
-            if (control == null) return true;
-
-            if (control is ToolStrip strip && GetWindowRect(hwnd, out RECT stripRect) &&
-                IsTopModeButton(dialog,
-                    stripRect.Left + stripRect.Width / 2,
-                    stripRect.Top + stripRect.Height / 2))
+            if (Control.FromHandle(hwnd) is GroupBox g &&
+                g.Text.Trim().Equals("Display lines",
+                    StringComparison.OrdinalIgnoreCase))
             {
-                foreach (ToolStripItem item in strip.Items)
-                {
-                    if (!item.Enabled) continue;
-                    EventHandler handler = (_, _) => Schedule();
-                    item.Click += handler;
-                    _toolStripHandlers.Add((item, handler));
-                }
-            }
-            else if (control is ButtonBase && GetWindowRect(hwnd, out RECT r) &&
-                IsTopModeButton(dialog, r.Left + r.Width / 2, r.Top + r.Height / 2))
-            {
-                EventHandler handler = (_, _) => Schedule();
-                control.Click += handler;
-                _buttonHandlers.Add((control, handler));
+                group = hwnd;
+                return false;
             }
             return true;
         }, IntPtr.Zero);
-    }
 
-    // Primary fallback for Win32/WPF-driven toolbar clicks that do not surface
-    // as managed Button.Click/ToolStripItem.Click events. No mouse messages are
-    // consumed or redirected; Autodesk receives and handles the original click.
-    public bool PreFilterMessage(ref Message message)
-    {
-        if (_disposed || message.Msg != WM_LBUTTONUP) return false;
-        if (!GetWindowRect(_dialog, out RECT dialog)) return false;
-        Point cursor = Control.MousePosition;
-        if (IsTopModeButton(dialog, cursor.X, cursor.Y))
-            Schedule();
-        return false;
-    }
+        if (group == IntPtr.Zero || !GetWindowRect(group, out RECT box))
+            return false;
+        if (screenX < box.Left + 55 || screenX > box.Right - 5 ||
+            screenY < box.Top + 9 || screenY > box.Top + 62)
+            return false;
 
-    private static bool IsTopModeButton(RECT dialog, int sx, int sy)
-    {
-        if (dialog.Width < 300 || dialog.Height < 240) return false;
-        // REV22: toolbar is anchored to the live resizable left panel,
-        // not a percentage of the original full-dialog width.
-        if (NativeIsoLinePaneResizer.IsTopToolbarPoint(sx, sy))
+        bool found = false;
+        EnumChildWindows(group, (hwnd, _) =>
+        {
+            if (!GetWindowRect(hwnd, out RECT r) ||
+                screenX < r.Left || screenX > r.Right ||
+                screenY < r.Top || screenY > r.Bottom)
+                return true;
+            int width = r.Width, height = r.Height;
+            if (height < 15 || height > 48 || width < 15 || width > 180)
+                return true;
+
+            Control? c = Control.FromHandle(hwnd);
+            if (c is ButtonBase || c is ToolStrip)
+            {
+                found = true;
+                return false;
+            }
             return true;
-        double x = (sx - dialog.Left) / (double)dialog.Width;
-        double y = (sy - dialog.Top) / (double)dialog.Height;
-
-        // Fits three small toolbar icons above the Filter field and to the
-        // right of "Display lines"; excludes the text field and main buttons.
-        return x >= 0.125 && x <= 0.285 && y >= 0.055 && y <= 0.125;
+        }, IntPtr.Zero);
+        return found;
     }
 
     public static void Detach()
     {
-        NativeIsoToolbarClickFilter? old = _active;
+        NativeIsoToolbarClickFilter? previous = _active;
         _active = null;
-        if (old is null) return;
-        old._disposed = true;
-        System.Windows.Forms.Application.RemoveMessageFilter(old);
-        old._delay.Stop();
-        old._delay.Dispose();
-
-        foreach (var (control, handler) in old._buttonHandlers)
-        {
-            try { control.Click -= handler; } catch { }
-        }
-        foreach (var (item, handler) in old._toolStripHandlers)
-        {
-            try { item.Click -= handler; } catch { }
-        }
-        old._buttonHandlers.Clear();
-        old._toolStripHandlers.Clear();
+        if (previous == null) return;
+        previous._disposed = true;
+        previous._pressed = false;
+        System.Windows.Forms.Application.RemoveMessageFilter(previous);
     }
 }
