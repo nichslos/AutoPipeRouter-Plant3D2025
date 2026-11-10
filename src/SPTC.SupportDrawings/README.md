@@ -1,3 +1,17 @@
+# REV22.26 — AUTO-PLACE ALL TEN NATIVE ORTHO VIEWS (ZERO PLACEMENT CLICKS)
+
+**New isolated Plant 3D 2025 test command:** `SPTC_ORTHO22_26_AUTO_PLACE_TEN_TEST`. Do not use in production: original native internal Autodesk `GenerateOrthos` remains unsupported. Test only in COPIED registered Plant 3D project; type `REV22.26 TEST` when prompted. REV22.25 and earlier commands remain available and untouched.
+
+**What changes:** The user no longer needs to click once to place the ten viewports. `NativeOrthoTenViewAutoPlacement26.Build` derives the TOP paper-space anchor automatically from the existing A1/A3 native ten-view plan at `candidate.Views[0].CenterX/CenterY`—20% sheet width, 86% height for the default TOP. It uses the existing `NativeOrthoTenViewPlan.BuildAdjusted` to clamp the WHOLE 2-column × 5-row group within the sheet boundaries and `NativeOrthoViewTitlePlan.ReserveBelow` to reserve each of the ten captions. Validates the ten final frames and ten captions before any unsupported native generation call. It never invokes `Editor.GetPoint` or `PromptPointOptions`; the user is NOT asked to pick an insertion point. If any frame/title would collide with the paper keepout, it fails before generating native views rather than inventing an unsafe location.
+
+**Unchanged:** Ten true native Ortho camera views (TOP, BOTTOM, LEFT, RIGHT, FRONT, BACK, NW, NE, SW, SE); the same scale and complete group spacing; automatic SupportFocus OrthoCube, nearby pipe Z clipping and XY containment; saved native Edit View types; per-source individual Support and Structure Member labels, no-wrapping DBText annotation, horizontal-only steel member TOS and support TopOfSteel vs approximate TOS. Ortho seed registration and backup safety are unchanged. All prior revisions remain compiled as separate commands.
+
+**New log fields:** `STEP5_AUTO_PLACEMENT_ENABLED=True`, `STEP5_PAPER_POINT_CLICKS_REQUIRED=0`, `STEP5_AUTO_TOP_SUGGESTED`, `STEP5_AUTO_TOP_EFFECTIVE`, `STEP5_AUTO_TOP_FINAL`, `STEP5_AUTO_TITLE_SHIFT_Y_MM`, `STEP5_AUTO_GROUP_SHIFTED`, and `STEP10_REV22_TEN_GROUP_PLACED_AUTOMATICALLY=True`. The ten actual viewport/Ortho type/caption and Support TOS count checks remain.
+
+**Test steps:** Completely exit Plant 3D 2025, extract the DLL, restart and `NETLOAD` it; open a COPIED registered 3D source model. Run `SPTC_ORTHO22_26_AUTO_PLACE_TEN_TEST`. Choose SupportFocus and select Support and/or Structure Members (do not include long pipes at this step); optional nearby pipe selection stays available. Choose an EMPTY project-registered native Ortho seed and authorize `REV22.26 TEST`. The command should immediately generate all ten Ortho views and their titles **without an insertion-point click**. Review `*_REV22_26_RESULT.txt` for zero paper clicks, ten native views and titles, and Support TOS labels, then inspect FRONT/NW view labels. Save/reopen and test Update View separately; custom paper-space leaders and labels are not native associative `PLANTORTHOANNOTATE`.
+
+---
+
 # REV22.25 — Include Top of Steel (TOS) beneath Plant 3D Support annotations
 
 **New isolated Plant 3D 2025 test command:** `SPTC_ORTHO22_25_SUPPORT_TOS_TEST`. Existing REV22.24 and earlier commands remain untouched. Use a COPIED registered Plant 3D project only; authorize with `REV22.25 TEST`.
