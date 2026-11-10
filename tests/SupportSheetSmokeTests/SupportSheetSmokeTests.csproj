@@ -41,6 +41,8 @@
     <Compile Include="../../src/SPTC.SupportDrawings/SupportOrthoSupportLabel24.cs" Link="SupportOrthoSupportLabel24.cs" />
     <Compile Include="../../src/SPTC.SupportDrawings/SupportOrthoSupportTos25.cs" Link="SupportOrthoSupportTos25.cs" />
     <Compile Include="../../src/SPTC.SupportDrawings/SupportOrthoMemberCalloutPlan25.cs" Link="SupportOrthoMemberCalloutPlan25.cs" />
+    <Compile Include="../../src/SPTC.SupportDrawings/SupportOrthoPipeLabel27.cs" Link="SupportOrthoPipeLabel27.cs" />
+    <Compile Include="../../src/SPTC.SupportDrawings/SupportOrthoMemberCalloutPlan27.cs" Link="SupportOrthoMemberCalloutPlan27.cs" />
     <Compile Include="../../src/SPTC.SupportDrawings/SupportOrthoMemberMText22.cs" Link="SupportOrthoMemberMText22.cs" />
   </ItemGroup>
 </Project>
