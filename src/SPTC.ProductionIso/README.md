@@ -1,38 +1,38 @@
-# SPTC Production Iso REV23 — Stable Active / All Line Toggle
+# SPTC Production Iso REV24 — Reliable native Create eligibility from checked line numbers
 
-**Baseline:** REV22. All previous revision builds and branches remain untouched.
+**Baseline:** REV23. All previous revision branches/files remain unchanged.
 
-## Why REV22 failed
-The old upper-left toolbar click was handled by **two competing mechanisms**: Autodesk's original Drawing/Project mode event and an SPTC delayed projection of the active line list. Autodesk could asynchronously reload or clear the underlying native line list after SPTC had overlaid exact active tags. This produced the reported symptoms:
-- The first click showed the correct one active line; the next click showed **zero**.
-- Old lines remained for an extended interval, reappeared, or never disappeared.
-- Select All from active mode sometimes touched hidden project lines instead of only the visible active ones.
+## Bug observed in Plant 3D 2025
+In REV23, an exact active line sometimes appeared checked (including `Select All (1)`) while the original Autodesk **Create** button remained disabled. At other times Create became enabled. This was intermittent.
 
-## REV23 change
-- The three original upper-left line-list mode buttons become an **SPTC Active/All toggle while the plugin is loaded in Create Production Iso**. Their mouse click down/up messages are intercepted *once* within the dialog, without also triggering Autodesk's original list mode event. No Autodesk model, project or ISO data are edited. Other UI controls and native Production Iso Create remain untouched.
-- **First click:** show only the current open DWG's exact line tags from live physical piping objects, using a temporary checked-list view whose check/uncheck actions are forwarded to the real native ISO line list. No substring search and no text inserted in Autodesk's Filter textbox.
-- **Second click:** remove only the temporary list view. Autodesk's underlying full project list was never switched or emptied, so it should reappear immediately. Further clicks alternate.
-- Duplicate managed WinForms Click handlers and delayed 100/300/900ms filter timers no longer run for the top-button toggle. The original PnP data/read-only model scan is deferred until the **first active-mode click** and cached for this dialog; no automatic startup scanning.
-- Select All (N) now uses **HasVisibleProjection** for both folder and exact active-DWG modes, so it cannot check old hidden native lines while active-only is visible.
+The active/folder projection is a temporary visual list placed over Autodesk's actual checklist. REV23 forwarded checks using `CheckedListBox.SetItemChecked`, which updates the native checkmark but does **not necessarily dispatch the same mouse/selection event sequence** that Autodesk uses to update the Create-button state.
 
-## Important behavior change
-In REV23, while SPTC has enhanced the Production Iso dialog, clicking one of the three original upper-left icons performs **Active / All toggle** rather than Autodesk's original toolbar list-source action. This avoids the double reload race. If the native Drawing/Project source selection needs to be used exactly as Autodesk designed it, open the unmodified Production Iso dialog outside the SPTC command.
+## REV24 change
+- For user-initiated line check/uncheck, REV24 validates the exact native row text and index and delivers checked-list mouse down/up messages **to the original Autodesk checked-list control**. Native ItemCheck and selection events can now run as they would for a real click, rather than relying solely on `SetItemChecked`.
+- The resulting *native* checked state is read back and compared against the requested state. If the original control doesn't respond to the native click, the safe programmatic setter remains a fallback.
+- After a short, reusable 220 ms UI debounce, the plugin checks whether the original Create button is still disabled while one or more genuine native lines are checked.
+- A checked native row that already existed when the projection was shown is also revalidated.
+- If Autodesk's Create button remains disabled, the plugin makes one controlled **uncheck/check** event replay on one exact selected native route. It keeps the final checked state and logs an F2 diagnostic if Create remains disabled.
+- **No forced `Create.Enabled=true`**. Other Autodesk project/style validations may also disable Create. The original Autodesk button and production ISO creation mechanism are used.
+- Select All updates remain efficient: native check-state changes are applied across visible entries, with a full original mouse-event sequence on the final item instead of a separate synthetic mouse dispatch for every line.
+- All active/folder projection selection operations are verified against the native list. No project record, model file, route name or ISO configuration is modified.
 
-## Safety rules
-- No deletion of ghost/stale line records. Model-verified line tags only, displayed as exact matches.
-- If physical components in the open DWG genuinely have multiple distinct line tags, the plugin shows all of them, not an arbitrary single value.
-- If none of the model tags is available in the currently loaded native line list, the active projection is **not** applied. The native list remains visible and a warning is written to the AutoCAD F2 command log.
-- Folder list still shows first-level Plant 3D Drawings folders. Folder scans are user-initiated with progress/Cancel, not automatic on opening.
-- REV05 completed ISO DWG copying to Custom Save Location, REV17 Select All (N), REV19 dynamic location row and REV21 resizing/filter-row behavior remain unchanged.
+## Preserved
+- REV23 deterministic Active / All line-number toggle.
+- Exact current drawing tags, rather than substring/prefix matching.
+- REV20+ resizable Line Numbers panel and aligned filter row.
+- REV17 Select All (N) and on-demand folder list (no automatic startup scan).
+- REV19 Custom Save Location alignment/resizing.
+- REV05 automatic copying of completed Production Iso DWGs to custom path.
 
-## Test steps
-1. Exit Plant 3D 2025 completely and reopen it. NETLOAD **REV23** `SPTC.ProductionIso.dll`.
-2. In your single-route drawing, check the actual Line Number Tag on a current pipe using Plant 3D Properties.
-3. Run `SPTC_PRODISO`. The native full list should be visible at first, without a database precache.
-4. Click one upper-left toolbar icon **once**: only the exact current-DWG line tag(s) should appear; Select All (N) should match.
-5. Click the same icon again: the full native list should reappear, without becoming blank.
-6. Repeat at least 4 clicks to check alternation. The filter textbox must remain blank.
-7. In active-only mode, check Select All: only displayed active routes should be selected; verify hidden old project routes are not checked.
-8. If the list is still empty or stale, close the dialog and collect F2 command log plus a screenshot. Keep REV22 available as fallback, and don't batch export before checking exact native selections.
+## Test
+1. Completely exit Plant 3D 2025; restart and `NETLOAD` the REV24 DLL.
+2. Run `SPTC_PRODISO`. Select the exact active route with the top icon.
+3. Check one line number in the visible list (or use Select All).
+4. Verify **Create** becomes clickable while the original checked selection is present. Test at least 4 rounds of uncheck/check and Active / All toggling because the original problem was intermittent.
+5. Confirm `Select All (N)` matches the visible list and Create returns disabled when no routes are checked.
+6. Generate **one** known-good test Production ISO. Confirm the expected DWG appears in the custom location if it was specified.
+7. If Create remains disabled despite a checked line, close the dialog, press **F2** and send the lines starting with `SPTC REV24:` plus a screenshot. REV23 remains available.
 
-**Status:** Experimental until Plant 3D 2025 runtime validation. GitHub compilation alone cannot prove Autodesk modal-dialog mouse message interception is available in this installation. No changes to `IsoConfig.xml`, Project Manager, PnP tables or original DWGs.
+## Caveat
+This is experimental interoperability with an Autodesk native WinForms dialog. GitHub compilation proves the C# builds, not that Autodesk's internal eligibility logic has been fully exercised. Only a Plant 3D runtime test confirms the intermittent Create-state fix.
