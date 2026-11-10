@@ -761,6 +761,26 @@ jobs:
           if(-not $planner.Contains('bool addTos=member.IsHorizontal;') -or -not $planner.Contains('"TOS ~ ":"TOS EL. "')) { throw 'Horizontal-only TOS semantics missing' }
           if(-not $planner.Contains('TextHeightMm=1.75') -or -not $planner.Contains('RowSpacingMm=1.8')) { throw 'Smaller text / wider row gaps not applied' }
           if($new -notmatch 'LabelTop-item.LabelHeight') { throw 'Native glyph extents must fit reserved label box' }
+      - name: Verify REV22.24 Plant piping Support compatibility
+        shell: pwsh
+        run: |
+          $new = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoTenViewPlantSupportTest.cs' -Raw
+          $reader = Get-Content 'src/SPTC.SupportDrawings/SupportOrthoPlantSupport24.cs' -Raw
+          $support = Get-Content 'src/SPTC.SupportDrawings/SupportOrthoSupportLabel24.cs' -Raw
+          $old = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoTenViewNoOverlapTextTest.cs' -Raw
+          if($new -notmatch 'CommandMethod\("SPTC_ORTHO22_24_SUPPORT_COMPAT_TEST"') { throw 'REV22.24 isolated command missing' }
+          if($old -notmatch 'CommandMethod\("SPTC_ORTHO22_23_NO_OVERLAP_TEXT_TEST"') { throw 'Working REV22.23 fallback removed' }
+          if($new -notmatch 'REV22.24 TEST') { throw 'Copied-project authorization missing' }
+          foreach($token in @('SupportOrthoPlantSupport24.Read','plantSupports.Members','sourceAnnotations','REV22_24_PNP_SUPPORT_ACCEPTED','REV22_24_COMBINED_ANNOTATION_SOURCE_COUNT','STEP10_PIPING_SUPPORT_COUNT','STEP10_STRUCTURE_MEMBER_COUNT','STEP10_ALL_TEN_NATIVE_VIEWS_REGISTERED','STEP10_VIEW_TITLE_COUNT','SupportOrthoMemberCalloutPlan23.Build','CreateNativePaperMemberLeaders24','STEP10_MEMBER_ANNOTATIONS_CHECK')) {
+            if(-not $new.Contains($token)) { throw "REV22.24 missing functionality: $token" }
+          }
+          foreach($token in @('DataLinksManager','FindAcPpRowId','GetAllProperties','LongDescriptionSize','PipeSupportsSpec','Size','Support','GeometricExtents','StructureMember','PIPING_SUPPORT')) {
+            if(-not (($reader+$support+$new).Contains($token))) { throw "REV22.24 actual Support read path missing: $token" }
+          }
+          if(-not $support.Contains('LongDescriptionSize') -or -not $support.Contains('ShortDescription')) { throw 'Use real Plant support description before bare Size' }
+          if(-not $new.Contains('s.Handle,s.Description,s.X,s.Y,s.Z,false,null,')) { throw 'A Piping Support must NEVER be assigned structural Top of Steel' }
+          if($new -notmatch 'new DBText') { throw 'Preserve native nonwrapping individual member labels' }
+          if($new -match 'PLANTORTHOUPDATE_ALL_ENTERED|Editor.Command\("_.PLANTORTHOUPDATE"') { throw 'Do not reuse unsupported native automatic updates' }
       - name: Compile SPTC Support Drawings
         run: dotnet build src/SPTC.SupportDrawings/SPTC.SupportDrawings.csproj -c Release
       - name: Verify compiled DLL
@@ -772,7 +792,7 @@ jobs:
       - name: Upload DLL artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SPTC-SupportDrawings-Plant3D2025-REV22_23
+          name: SPTC-SupportDrawings-Plant3D2025-REV22_24
           path: src/SPTC.SupportDrawings/bin/Release/net8.0-windows/SPTC.SupportDrawings.dll
           retention-days: 30
           if-no-files-found: error
