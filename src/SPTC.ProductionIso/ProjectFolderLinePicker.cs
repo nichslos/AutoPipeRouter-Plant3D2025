@@ -59,6 +59,8 @@ internal static class ProjectFolderLinePicker
     private static readonly List<NativeEntry> VisibleEntries = new();
     private static bool _updating;
     private static string _folder = "";
+    private static bool _activeDwgView;
+    public static bool ActiveDwgView => _activeDwgView;
     // REV16: cancel is cooperative and executed between PnP database calls.
     private static CancellationTokenSource? _scanCancellation;
     private static long _scanSerial;
@@ -81,11 +83,12 @@ internal static class ProjectFolderLinePicker
     }
 
     public static bool FolderActive => !string.IsNullOrWhiteSpace(_folder);
+    public static bool HasVisibleProjection => FolderActive || ActiveDwgView;
 
     // REV17: number actually shown in the folder-specific checked list.
     // Do not count all registered DWGs, hidden project routes, or selections.
     public static int? VisibleLineCount =>
-        FolderActive && _folderLineList is { IsDisposed: false }
+        HasVisibleProjection && _folderLineList is { IsDisposed: false }
             ? _folderLineList.Items.Count
             : null;
 
@@ -147,7 +150,7 @@ internal static class ProjectFolderLinePicker
             PositionFilterButton(dialog);
         if (_choicesHost is { IsDisposed: false })
             PositionMenu();
-        if (FolderActive && _lineHost is { IsDisposed: false })
+        if (HasVisibleProjection && _lineHost is { IsDisposed: false })
             PositionList(dialog);
         if (_scanPanel is { IsDisposed: false })
             PositionScanPanel();
@@ -368,6 +371,11 @@ internal static class ProjectFolderLinePicker
 
     private static void ResumePrecacheAfterSelection()
     {
+        // REV22: REV20 explicitly disabled automatic project-wide precaching.
+        // Do NOT restart the REV18 warmup after a manual folder selection;
+        // that caused unexpected extra scans/lag during ISO list loading.
+        return;
+        /*
         if (_dialog == IntPtr.Zero) return;
         _resumePrecache = true;
         if (_precacheTask is null || _precacheTask.IsCompleted)
@@ -376,6 +384,7 @@ internal static class ProjectFolderLinePicker
             SchedulePrecache(400);
         }
         // Otherwise the canceled warm-up's finally block restarts it.
+        */
     }
 
     private static void StopPrecache()
@@ -728,26 +737,40 @@ internal static class ProjectFolderLinePicker
         CheckedListBox? cb = null;
         ListView? lv = null;
         int bestCount = -1;
-        if (!GetWindowRect(dialog, out RECT window)) return false;
 
+        // REV22: look ONLY inside Autodesk's actual Display lines GroupBox.
+        // The old "leftmost 34% of entire dialog" detection failed when
+        // the user widened that panel with REV20's draggable splitter.
+        IntPtr groupHandle = IntPtr.Zero;
         EnumChildWindows(dialog, (hwnd, _) =>
         {
-            if (!GetWindowRect(hwnd, out RECT r) || r.Width < 90 || r.Height < 150)
-                return true;
-            int centerX = (r.Left + r.Right) / 2 - window.Left;
-            int centerY = (r.Top + r.Bottom) / 2 - window.Top;
-            if (centerX < 10 || centerX > window.Width * 0.34 ||
-                centerY < 130 || centerY > window.Height - 70)
-                return true;
-
-            Control? c = Control.FromHandle(hwnd);
-            if (c is CheckedListBox list && list.Items.Count > bestCount)
+            if (Control.FromHandle(hwnd) is GroupBox box &&
+                box.Text.Trim().Equals("Display lines",
+                    StringComparison.OrdinalIgnoreCase))
             {
-                cb = list; lv = null; bestCount = list.Items.Count;
+                groupHandle = hwnd;
+                return false;
             }
-            else if (c is ListView view && view.CheckBoxes && view.Items.Count > bestCount)
+            return true;
+        }, IntPtr.Zero);
+        if (groupHandle == IntPtr.Zero) return false;
+
+        EnumChildWindows(groupHandle, (hwnd, _) =>
+        {
+            Control? c = Control.FromHandle(hwnd);
+            if (c is CheckedListBox list && list.Height > 100 &&
+                list.Items.Count > bestCount)
             {
-                cb = null; lv = view; bestCount = view.Items.Count;
+                cb = list;
+                lv = null;
+                bestCount = list.Items.Count;
+            }
+            else if (c is ListView view && view.CheckBoxes &&
+                     view.Height > 100 && view.Items.Count > bestCount)
+            {
+                cb = null;
+                lv = view;
+                bestCount = view.Items.Count;
             }
             return true;
         }, IntPtr.Zero);
@@ -767,6 +790,77 @@ internal static class ProjectFolderLinePicker
             return true;
         }
         return false;
+    }
+
+    /// <summary>
+    /// REV22: exact-match current-DWG view. Never search by substring:
+    /// line tags such as ...-6 and ...-66666 must not match each other.
+    /// A temporary checked-list projection forwards each choice to the
+    /// original native ISO line item, leaving Autodesk's records untouched.
+    /// </summary>
+    public static bool ShowExactActiveDwgTags(
+        IReadOnlyList<string> actualTags, Document? doc)
+    {
+        if (_dialog == IntPtr.Zero || actualTags.Count == 0)
+            return false;
+
+        ClearVisibleProjection();
+        if (!TryBindNativeList(_dialog, out List<NativeEntry> nativeRows))
+        {
+            doc?.Editor.WriteMessage(
+                "\nSPTC REV22: Could not bind the native line list; no active filter applied.");
+            return false;
+        }
+
+        var allowed = new HashSet<string>(actualTags, StringComparer.OrdinalIgnoreCase);
+        var matches = nativeRows.Where(x => allowed.Contains(x.Tag)).ToList();
+        // Do not apply a partial or misleading list. The Project scope might
+        // not have finished loading, or the tag might not be registered.
+        if (matches.Count == 0 ||
+            allowed.Any(t => !matches.Any(x =>
+                x.Tag.Equals(t, StringComparison.OrdinalIgnoreCase))))
+        {
+            doc?.Editor.WriteMessage(
+                "\nSPTC REV22: Current physical line tag(s) not fully available " +
+                "in the native ISO line list. Use Project mode and try again: " +
+                string.Join(", ", allowed));
+            return false;
+        }
+
+        // Important: don't generate ISOs for old lines hidden by this overlay.
+        foreach (NativeEntry row in nativeRows)
+        {
+            if (!allowed.Contains(row.Tag) && GetNativeChecked(row))
+                SetNativeChecked(row, false);
+        }
+
+        VisibleEntries.AddRange(matches);
+        _activeDwgView = true;
+        BuildProjection(matches);
+        if (_lineHost is null)
+        {
+            _activeDwgView = false;
+            return false;
+        }
+        PositionList(_dialog);
+        NativeIsoLineSelectOverlay.UpdateDisplayedCount();
+        doc?.Editor.WriteMessage(
+            "\nSPTC REV22: Showing exact current DWG line tags (" +
+            matches.Count + "): " + string.Join(", ", actualTags));
+        return true;
+    }
+
+    /// <summary>
+    /// Safely remove a temporary native-backed projection before Autodesk
+    /// rebuilds the line list on Drawing/Project mode changes. Avoid stale
+    /// item indices and transient blank overlays while the list loads.
+    /// </summary>
+    public static void ClearVisibleProjection()
+    {
+        _activeDwgView = false;
+        _folder = "";
+        DestroyProjection();
+        NativeIsoLineSelectOverlay.UpdateDisplayedCount();
     }
 
     private static bool SetNativeChecked(NativeEntry entry, bool check)
@@ -875,7 +969,7 @@ internal static class ProjectFolderLinePicker
 
     public static bool TrySelectAllVisible(bool value)
     {
-        if (!FolderActive || _folderLineList is null || _folderLineList.IsDisposed)
+        if (!HasVisibleProjection || _folderLineList is null || _folderLineList.IsDisposed)
             return false;
 
         _updating = true;
@@ -897,10 +991,8 @@ internal static class ProjectFolderLinePicker
         CancelPendingScan();
         if (_dialog != IntPtr.Zero)
             ActiveDwgTags.ClearOneTag(_dialog, null);
-        _folder = "";
-        DestroyProjection();
-        NativeIsoLineSelectOverlay.UpdateDisplayedCount();
-        _document?.Editor.WriteMessage("\nSPTC REV13: All Project lines restored.");
+        ClearVisibleProjection();
+        _document?.Editor.WriteMessage("\nSPTC REV22: Original native line list restored.");
     }
 
     private static void DestroyProjection()
@@ -920,6 +1012,7 @@ internal static class ProjectFolderLinePicker
         CancelPendingScan();
         HideFolderMenu();
         _folder = "";
+        _activeDwgView = false;
         DestroyProjection();
         try { _filterHost?.Dispose(); } catch { }
         _filterHost = null;
