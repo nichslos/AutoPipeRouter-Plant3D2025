@@ -161,22 +161,25 @@ internal static class NativeIsoDialogEnhancer
                     // filter after Autodesk finishes updating the line list.
                     NativeIsoToolbarClickFilter.Attach(native, showActive =>
                     {
-                        // REV22: native toolbar clicks are handed to Autodesk
-                        // unchanged. Our supplemental exact-match list is
-                        // removed immediately before Autodesk refreshes it.
-                        // No substring search is written into the filter field.
+                        // REV23: two native list queries were competing with
+                        // SPTC's exact-match projection. The REV23 toolbar
+                        // handler owns the Active/All toggle and suppresses
+                        // the underlying native mode-button mouse click.
                         if (!showActive)
-                            return true; // Native Drawing/Project full list
+                        {
+                            ProjectFolderLinePicker.ClearVisibleProjection();
+                            return true;
+                        }
 
-                        if (_document is null)
-                            return false;
+                        if (_document is null) return false;
                         if (!ActiveDwgTags.HasScanned)
                             ActiveDwgTags.Scan(_document);
-
-                        // Count may legitimately be >1 if two routes have
-                        // components in this DWG. Never guess which is newer.
                         if (ActiveDwgTags.Count == 0)
+                        {
+                            _document.Editor.WriteMessage(
+                                "\nSPTC REV23: No current physical piping tags; native line list left visible.");
                             return false;
+                        }
 
                         return ProjectFolderLinePicker.ShowExactActiveDwgTags(
                             ActiveDwgTags.CurrentTags, _document);
