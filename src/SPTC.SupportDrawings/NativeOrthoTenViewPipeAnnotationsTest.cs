@@ -201,6 +201,12 @@ public sealed class NativeOrthoTenViewPipeAnnotationsTest
                         {
                             if(tr.GetObject(pipeId,OpenMode.ForRead,false) is not Entity pipeEntity)
                             { invalidPipes++;continue; }
+                            string nativePipeType=pipeEntity.GetType().Name;
+                            string rxPipeType="";
+                            try {rxPipeType=pipeId.ObjectClass?.Name??"";} catch{}
+                            if(!SupportOrthoPipeLabel27.IsNativePipeType(nativePipeType)&&
+                               !SupportOrthoPipeLabel27.IsNativePipeType(rxPipeType))
+                            { invalidPipes++;continue; }
                             Extents3d pb=pipeEntity.GeometricExtents;
                             localPipeBounds.Add(new BoundingBox3(
                                 pb.MinPoint.X,pb.MinPoint.Y,pb.MinPoint.Z,
