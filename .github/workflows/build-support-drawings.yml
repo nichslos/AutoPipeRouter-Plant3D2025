@@ -781,6 +781,30 @@ jobs:
           if(-not $new.Contains('s.Handle,s.Description,s.X,s.Y,s.Z,false,null,')) { throw 'A Piping Support must NEVER be assigned structural Top of Steel' }
           if($new -notmatch 'new DBText') { throw 'Preserve native nonwrapping individual member labels' }
           if($new -match 'PLANTORTHOUPDATE_ALL_ENTERED|Editor.Command\("_.PLANTORTHOUPDATE"') { throw 'Do not reuse unsupported native automatic updates' }
+      - name: Verify REV22.25 Support TOS property and geometric approximation
+        shell: pwsh
+        run: |
+          $new = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoTenViewPlantSupportTosTest.cs' -Raw
+          $prior = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoTenViewPlantSupportTest.cs' -Raw
+          $reader = Get-Content 'src/SPTC.SupportDrawings/SupportOrthoPlantSupport25.cs' -Raw
+          $elev = Get-Content 'src/SPTC.SupportDrawings/SupportOrthoSupportTos25.cs' -Raw
+          $planner = Get-Content 'src/SPTC.SupportDrawings/SupportOrthoMemberCalloutPlan25.cs' -Raw
+          if($new -notmatch 'CommandMethod\("SPTC_ORTHO22_25_SUPPORT_TOS_TEST"') { throw 'REV22.25 command missing' }
+          if($prior -notmatch 'CommandMethod\("SPTC_ORTHO22_24_SUPPORT_COMPAT_TEST"') { throw 'REV22.24 fallback missing' }
+          if($new -notmatch 'REV22.25 TEST') { throw 'Copied project guard missing' }
+          foreach($term in @('SupportOrthoPlantSupport25.Read','STEP10_SUPPORT_TOS_LABEL_COUNT','STEP10_SUPPORT_TOS_EXPECTED','STEP10_HORIZONTAL_TOS_LABEL_COUNT','SupportOrthoMemberCalloutPlan25.Build','CreateNativePaperMemberLeaders25','STEP10_ALL_TEN_NATIVE_VIEWS_REGISTERED','STEP10_VIEW_TITLE_COUNT','STEP10_MEMBER_ANNOTATIONS_CHECK','SupportFocusedCubePlanner.BuildAutomatic')) {
+            if(-not $new.Contains($term)) { throw "Missing REV22.25 key function: $term" }
+          }
+          foreach($term in @('TopOfSteel','TOSElevation','SUPPORT_GEOMETRIC_TOP_APPROX','SUPPORT_EXPLICIT_TOP_OF_STEEL','SupportOrthoVerticalMember18.FormatElevation')) {
+            if(-not $elev.Contains($term)) { throw "Missing safe support TOS property: $term" }
+          }
+          foreach($term in @('SupportOrthoSupportTos25.Evaluate','b.MaxPoint.Z','TosText','TosSource','LongDescriptionSize','DataLinksManager')) {
+            if(-not (($reader+$new).Contains($term))) { throw "Support source TOS or PnP missing: $term" }
+          }
+          if(-not $planner.Contains('bool addTos=member.HasTos;')) { throw 'REV22.25 support and steel TOS must use explicit per-object eligibility' }
+          if(-not $planner.Contains('SUPPORT_GEOMETRIC_TOP_APPROX')) { throw 'Support geometric elevation must display as TOS ~, never exact' }
+          if(-not $planner.Contains('"TOS ~ ":"TOS EL. "')) { throw 'Maintain correct per-line TOS formatting' }
+          if(-not $new.Contains('new DBText') -or -not $new.Contains('GeometricExtents')) { throw 'Preserve no-wrap member and Support labels' }
       - name: Compile SPTC Support Drawings
         run: dotnet build src/SPTC.SupportDrawings/SPTC.SupportDrawings.csproj -c Release
       - name: Verify compiled DLL
@@ -792,7 +816,7 @@ jobs:
       - name: Upload DLL artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SPTC-SupportDrawings-Plant3D2025-REV22_24
+          name: SPTC-SupportDrawings-Plant3D2025-REV22_25
           path: src/SPTC.SupportDrawings/bin/Release/net8.0-windows/SPTC.SupportDrawings.dll
           retention-days: 30
           if-no-files-found: error
