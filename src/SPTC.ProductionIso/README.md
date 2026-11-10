@@ -1,37 +1,38 @@
-# SPTC Production Iso REV22 — Responsive Native Toolbar and Exact Active Lines
+# SPTC Production Iso REV23 — Stable Active / All Line Toggle
 
-**Baseline:** REV21; prior revision branches and test builds remain untouched.
+**Baseline:** REV22. All previous revision builds and branches remain untouched.
 
-## User issues addressed
-1. **Top toolbar icons do not follow Display lines resizing.** REV20–21 repositioned the line-number checklist and filter row but left Autodesk's three Drawing/Project/Filter toolbar icons at their original positions. REV22 detects the three actual icon controls (or their shared ToolStrip/panel), records their original offset from the Display lines right edge, and repositions them whenever the user drags the splitter or resizes the native window. Click events remain Autodesk's original events.
-2. **Temporary blank/overlapping UI while line numbers load.** The active/folder list projection is discarded immediately when the native toolbar switches scope, before Autodesk rebuilds its native list. Stale checkbox indices are never used during that refresh. The former REV18 full-project folder precache is still disabled; importantly, REV22 also prevents a subsequent manual folder scan from restarting that background precache inadvertently.
-3. **Old registered line numbers still appear in active drawing view.** The old text-filter implementation matched prefixes/substrings. For example, typing `CAP_BLIND+SOURCE_MODEL_XY45DEGROT_S-011-6` could also match `...-66666`. REV22 no longer writes any auto-detected line tag into the native search textbox. Instead it creates a temporary **EXACT-match** view over Autodesk's original checklist, forwarding user check/uncheck operations to the real native items. Hidden outdated rows are deselected to avoid exporting unrequested ISOs.
+## Why REV22 failed
+The old upper-left toolbar click was handled by **two competing mechanisms**: Autodesk's original Drawing/Project mode event and an SPTC delayed projection of the active line list. Autodesk could asynchronously reload or clear the underlying native line list after SPTC had overlaid exact active tags. This produced the reported symptoms:
+- The first click showed the correct one active line; the next click showed **zero**.
+- Old lines remained for an extended interval, reappeared, or never disappeared.
+- Select All from active mode sometimes touched hidden project lines instead of only the visible active ones.
 
-## Which route is considered active?
-- At the first user request for the active-DWG view, REV22 scans only **physical Plant 3D components in Model Space** of the current DWG. It no longer performs this model scan during the initial `SPTC_PRODISO` command, improving startup responsiveness.
-- REV22 preferentially reads each physical component's **LineNumberTag** property (the same attribute exposed in Plant 3D Properties), instead of relying on old `P3dLineGroupPartRelationship` group tags. For components that do not expose the property, the relationship is a fallback only.
-- Only the **exact** verified tag(s) from the current DWG are shown. If the model truly contains multiple distinct current line numbers, both are shown rather than guessing which to hide. No pipe tags or PnP rows are deleted/renamed.
-- If native line items have not yet loaded or a model tag is not in the current native list, the plugin keeps the original native list rather than showing a misleading partial subset.
+## REV23 change
+- The three original upper-left line-list mode buttons become an **SPTC Active/All toggle while the plugin is loaded in Create Production Iso**. Their mouse click down/up messages are intercepted *once* within the dialog, without also triggering Autodesk's original list mode event. No Autodesk model, project or ISO data are edited. Other UI controls and native Production Iso Create remain untouched.
+- **First click:** show only the current open DWG's exact line tags from live physical piping objects, using a temporary checked-list view whose check/uncheck actions are forwarded to the real native ISO line list. No substring search and no text inserted in Autodesk's Filter textbox.
+- **Second click:** remove only the temporary list view. Autodesk's underlying full project list was never switched or emptied, so it should reappear immediately. Further clicks alternate.
+- Duplicate managed WinForms Click handlers and delayed 100/300/900ms filter timers no longer run for the top-button toggle. The original PnP data/read-only model scan is deferred until the **first active-mode click** and cached for this dialog; no automatic startup scanning.
+- Select All (N) now uses **HasVisibleProjection** for both folder and exact active-DWG modes, so it cannot check old hidden native lines while active-only is visible.
 
-## Other unchanged features
-- REV05 automatic copying of completed ISO DWGs to Custom Save Location.
-- REV06 Select All and REV17 `Select All (N)` counter.
-- REV12/19 aligned, stretching Custom Save Location and Browse field.
-- REV15 first-level Plant 3D Drawings folder dropdown on the filter row.
-- REV16 on-demand folder scan with progress and Cancel, **no automatic startup cache scanning** (REV20).
-- Native Production Iso generation and original Autodesk source/output locations; `IsoConfig.xml`, Project Manager and piping databases are not changed.
+## Important behavior change
+In REV23, while SPTC has enhanced the Production Iso dialog, clicking one of the three original upper-left icons performs **Active / All toggle** rather than Autodesk's original toolbar list-source action. This avoids the double reload race. If the native Drawing/Project source selection needs to be used exactly as Autodesk designed it, open the unmodified Production Iso dialog outside the SPTC command.
 
-## Test REV22
-1. Fully close and restart AutoCAD Plant 3D 2025, then `NETLOAD` REV22's `SPTC.ProductionIso.dll`.
-2. Open the DWG whose current piping parts have the correct new `Line Number Tag` in **Properties**.
-3. Run `SPTC_PRODISO`, confirm original unfiltered list appears quickly.
-4. Drag the border between Display lines and Output settings to the right. Confirm the three top icons move to the right with the widened panel, and the filter dropdown/funnel stay aligned.
-5. Click a top Drawing/Project icon once; confirm **only exact active line tags** appear inside the actual Line Numbers area and the search field stays blank.
-6. Click again; the full list returns. Repeat, checking the toggle remains functional.
-7. If old names still appear, run `SPTC_DWGTAGS` in a blank command line (outside the dialog) and press F2. This reports the actual physical-part tags and separate direct-versus-relationship counts. A physically present old tag must be corrected in the model separately, rather than hidden by a guess.
-8. Optionally choose a folder and test on-demand scan and `Select All (N)`. Generate only **one** known-good ISO until the checkbox behavior is verified.
+## Safety rules
+- No deletion of ghost/stale line records. Model-verified line tags only, displayed as exact matches.
+- If physical components in the open DWG genuinely have multiple distinct line tags, the plugin shows all of them, not an arbitrary single value.
+- If none of the model tags is available in the currently loaded native line list, the active projection is **not** applied. The native list remains visible and a warning is written to the AutoCAD F2 command log.
+- Folder list still shows first-level Plant 3D Drawings folders. Folder scans are user-initiated with progress/Cancel, not automatic on opening.
+- REV05 completed ISO DWG copying to Custom Save Location, REV17 Select All (N), REV19 dynamic location row and REV21 resizing/filter-row behavior remain unchanged.
 
-## Caveats
-Native Autodesk dialog overlays, toolbar layouts and Plant 3D component properties are undocumented for this extension. Successful GitHub compilation verifies the DLL builds, **not** that this UI/runtime behavior is correct on every Autodesk installation. If the toolbar buttons do not move or the list remains incorrect, please send a screenshot and `SPTC_DWGTAGS` output. REV21 remains available.
+## Test steps
+1. Exit Plant 3D 2025 completely and reopen it. NETLOAD **REV23** `SPTC.ProductionIso.dll`.
+2. In your single-route drawing, check the actual Line Number Tag on a current pipe using Plant 3D Properties.
+3. Run `SPTC_PRODISO`. The native full list should be visible at first, without a database precache.
+4. Click one upper-left toolbar icon **once**: only the exact current-DWG line tag(s) should appear; Select All (N) should match.
+5. Click the same icon again: the full native list should reappear, without becoming blank.
+6. Repeat at least 4 clicks to check alternation. The filter textbox must remain blank.
+7. In active-only mode, check Select All: only displayed active routes should be selected; verify hidden old project routes are not checked.
+8. If the list is still empty or stale, close the dialog and collect F2 command log plus a screenshot. Keep REV22 available as fallback, and don't batch export before checking exact native selections.
 
-No changes are made to the actual model geometry, PnP records, XML, project structure, or native ISO settings.
+**Status:** Experimental until Plant 3D 2025 runtime validation. GitHub compilation alone cannot prove Autodesk modal-dialog mouse message interception is available in this installation. No changes to `IsoConfig.xml`, Project Manager, PnP tables or original DWGs.
