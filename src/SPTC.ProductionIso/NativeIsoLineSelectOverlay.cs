@@ -148,6 +148,11 @@ internal static class NativeIsoLineSelectOverlay
             _toggle.Text = caption;
     }
 
+    // REV21: read only the actual Autodesk line list to validate an active
+    // tag filter. Never infer a route from the search textbox contents.
+    public static int? NativeDisplayedCount(IntPtr dialog) =>
+        ReadNativeLineCount(dialog);
+
     private static int? ReadNativeLineCount(IntPtr dialog)
     {
         int best = -1;
