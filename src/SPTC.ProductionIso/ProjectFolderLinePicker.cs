@@ -73,6 +73,13 @@ internal static class ProjectFolderLinePicker
 
     public static bool FolderActive => !string.IsNullOrWhiteSpace(_folder);
 
+    // REV17: number actually shown in the folder-specific checked list.
+    // Do not count all registered DWGs, hidden project routes, or selections.
+    public static int? VisibleLineCount =>
+        FolderActive && _folderLineList is { IsDisposed: false }
+            ? _folderLineList.Items.Count
+            : null;
+
     public static void Attach(IntPtr dialog, Document? document)
     {
         if (dialog == IntPtr.Zero) return;
