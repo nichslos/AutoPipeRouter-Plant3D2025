@@ -101,7 +101,8 @@ public static class SupportOrthoMemberCalloutPlan25
                 if(addTos)
                 {
                     tos=member.TosText==null?"TOS: N/A":
-                        (member.TosSource=="GEOMETRIC_TOP_APPROX"?
+                        ((member.TosSource=="GEOMETRIC_TOP_APPROX"||
+                          member.TosSource=="SUPPORT_GEOMETRIC_TOP_APPROX")?
                             "TOS ~ ":"TOS EL. ")+member.TosText;
                 }
                 // REV22.25 no speculative character-width heuristic.
