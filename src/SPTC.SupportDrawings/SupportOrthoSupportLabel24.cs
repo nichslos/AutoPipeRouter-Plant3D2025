@@ -18,8 +18,8 @@ public static class SupportOrthoSupportLabel24
     {
         string normalized=Normalize(value);
         return normalized=="SUPPORT"||normalized=="PIPESUPPORT"||
-            normalized=="PIPINGSUPPORT"||
-            normalized=="ACPP SUPPORT".Replace(" ","");
+            normalized=="PIPINGSUPPORT"||normalized=="ACPPSUPPORT"||
+            normalized=="ACPPSUPP";
     }
 
     public static string? Get(IReadOnlyDictionary<string,string> properties,
