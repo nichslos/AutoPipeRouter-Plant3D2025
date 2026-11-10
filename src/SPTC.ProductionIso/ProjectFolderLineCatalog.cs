@@ -19,6 +19,9 @@ internal static class ProjectFolderLineCatalog
     public sealed record ScanProgress(int Done, int Total, int TagsFound);
     private sealed record Drawing(string RelativePath, string Folder, int DrawingId);
 
+    // REV18: Do not overlap PnP database access from a warm-up scan and a
+    // user-requested folder. All reads stay on the native UI thread.
+    private static readonly SemaphoreSlim ScanGate = new(1, 1);
     private static readonly List<Drawing> Registered = new();
     private static readonly Dictionary<string, FolderLines> CachedLines = new(StringComparer.OrdinalIgnoreCase);
     private static object? _dataLinks;
@@ -29,6 +32,8 @@ internal static class ProjectFolderLineCatalog
 
     public static string Diagnostic => _diagnostic;
     public static bool Ready => _ready;
+    public static int CachedFolderCount => CachedLines.Count;
+    public static bool IsCached(string folder) => CachedLines.ContainsKey(folder);
 
     // REV15: Show ONLY the immediate folders below Plant 3D Drawings,
     // exactly one choice per top-level folder. DWGs in nested subfolders
@@ -165,6 +170,22 @@ internal static class ProjectFolderLineCatalog
     public static async Task<FolderLines> GetLiveTagsAsync(
         string folder, IProgress<ScanProgress>? progress, CancellationToken cancellation)
     {
+        // The warm-up job and a manual folder choice must not interleave
+        // calls to Plant 3D's PnPDataLinks/DataLinksManager.
+        await ScanGate.WaitAsync(cancellation);
+        try
+        {
+            return await ScanFolderCoreAsync(folder, progress, cancellation);
+        }
+        finally
+        {
+            ScanGate.Release();
+        }
+    }
+
+    private static async Task<FolderLines> ScanFolderCoreAsync(
+        string folder, IProgress<ScanProgress>? progress, CancellationToken cancellation)
+    {
         if (!_ready || _dataLinks is null || _pnpDatabase is null)
             return new FolderLines(folder, Array.Empty<string>(), 0, _diagnostic);
 
@@ -210,7 +231,7 @@ internal static class ProjectFolderLineCatalog
                             "More than 500,000 database records inspected; scan stopped safely. Try a smaller folder.");
                     int partRow = ReadInt(row, "RowId");
                     if (partRow > 0) livePartIds.Add(partRow);
-                    if ((inspectedRows % 200) == 0)
+                    if ((inspectedRows % 64) == 0)
                         await Task.Delay(1, cancellation);
                 }
                 if (livePartIds.Count > 0)
@@ -261,7 +282,7 @@ internal static class ProjectFolderLineCatalog
                 progress?.Report(new ScanProgress(completed, drawings.Count, tags.Count));
                 // Allow WinForms to repaint and Cancel to run between DWGs.
                 // Individual Autodesk database requests remain synchronous.
-                await Task.Delay(5, cancellation);
+                await Task.Delay(10, cancellation);
             }
 
             cancellation.ThrowIfCancellationRequested();
