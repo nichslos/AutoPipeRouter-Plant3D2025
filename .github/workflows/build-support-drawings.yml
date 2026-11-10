@@ -806,6 +806,23 @@ jobs:
           if(-not $planner.Contains('SUPPORT_GEOMETRIC_TOP_APPROX')) { throw 'Support geometric elevation must display as TOS ~, never exact' }
           if(-not $planner.Contains('"TOS ~ ":"TOS EL. "')) { throw 'Maintain correct per-line TOS formatting' }
           if(-not $new.Contains('new DBText') -or -not $new.Contains('GeometricExtents')) { throw 'Preserve no-wrap member and Support labels' }
+      - name: Verify REV22.26 ten native Ortho views auto-placed with zero mouse clicks
+        shell: pwsh
+        run: |
+          $new = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoTenViewAutoPlacementTest.cs' -Raw
+          $prior = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoTenViewPlantSupportTosTest.cs' -Raw
+          $planner = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoTenViewAutoPlacement26.cs' -Raw
+          if($new -notmatch 'CommandMethod\("SPTC_ORTHO22_26_AUTO_PLACE_TEN_TEST"') { throw 'REV22.26 isolated command missing' }
+          if($prior -notmatch 'CommandMethod\("SPTC_ORTHO22_25_SUPPORT_TOS_TEST"') { throw 'REV22.25 working baseline missing' }
+          if($new -notmatch 'REV22.26 TEST') { throw 'Copied-project authorization missing' }
+          if($new.Contains('.GetPoint(') -or $new.Contains('PromptPointOptions(')) { throw 'REV22.26 must never ask for a paper-space placement click' }
+          foreach($key in @('NativeOrthoTenViewAutoPlacement26.Build(','STEP5_AUTO_PLACEMENT_ENABLED=True','STEP5_PAPER_POINT_CLICKS_REQUIRED=0','STEP10_REV22_TEN_GROUP_PLACED_AUTOMATICALLY=True','STEP10_ALL_TEN_NATIVE_VIEWS_REGISTERED=True','STEP10_VIEW_TITLE_COUNT','STEP10_SUPPORT_TOS_LABEL_COUNT','SupportOrthoPlantSupport25.Read','SupportOrthoMemberCalloutPlan25.Build','CreateNativePaperMemberLeaders25','NativeOrthoViewTitlePlan.BuildTitles','SupportFocusedCubePlanner.BuildAutomatic')) {
+            if(-not $new.Contains($key)) { throw "REV22.26 critical functionality missing: $key" }
+          }
+          foreach($key in @('NativeOrthoTenViewPlan.BuildAdjusted','NativeOrthoViewTitlePlan.ReserveBelow','candidate.Views[0].CenterX','candidate.Views[0].CenterY','adjusted.WasAdjusted','reserved.Titles.Count!=10')) {
+            if(-not $planner.Contains($key)) { throw "REV22.26 automatic TOP anchor or native title guard missing: $key" }
+          }
+          if($planner.Contains('.GetPoint(') -or $planner.Contains('PromptPointOptions(')) { throw 'Automatic planner cannot request user input' }
       - name: Compile SPTC Support Drawings
         run: dotnet build src/SPTC.SupportDrawings/SPTC.SupportDrawings.csproj -c Release
       - name: Verify compiled DLL
@@ -817,7 +834,7 @@ jobs:
       - name: Upload DLL artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SPTC-SupportDrawings-Plant3D2025-REV22_25
+          name: SPTC-SupportDrawings-Plant3D2025-REV22_26
           path: src/SPTC.SupportDrawings/bin/Release/net8.0-windows/SPTC.SupportDrawings.dll
           retention-days: 30
           if-no-files-found: error
