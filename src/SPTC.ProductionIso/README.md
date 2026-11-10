@@ -1,35 +1,29 @@
-# SPTC Production Iso REV16 — Large-Folder Incremental Scan + Cancel
+# SPTC Production Iso REV17 — Visible Line Count Beside Select All
 
-**Baseline:** REV15. All earlier revisions remain untouched.
+**Baseline:** REV16. All previous revisions remain unchanged.
 
-## Change
-- Remove REV15's fixed **120 DWGs per folder** restriction.
-- When a folder is chosen from the filter-row dropdown, inspect its registered Plant 3D DWGs in cancellable increments. The original Autodesk PnP DataLinks methods are invoked **only from the Plant 3D UI thread**, with asynchronous yields between drawings and longer runs of membership checks. They are **not** moved to `Task.Run`, which would risk unsafe cross-thread database access.
-- An **embedded progress panel** in the original dialog shows `Scanning n / total DWGs`, how many active line tags have been verified, and **Cancel**.
-- Cancel stops scanning at the next cooperative yield; **no incomplete result is applied**. The original Production Iso list remains available.
-- Only on a **fully verified** scan does the filter draw the folder's native-backed line list and clear hidden checked routes.
-- Successful folder-tag results are cached during that dialog session. No SQL, DWG, Project Manager, or ISO configuration writes.
-- Very large or anomalous data (more than 500,000 database row checks in one request) still fails safely with a diagnostic rather than hanging indefinitely. This is **not** a 120-DWG limit.
+## New feature
+- The bottom-left checkbox label shows **`Select All (N)`**, where `N` is the count of **line-number entries currently displayed**.
+- When no folder is selected (native Drawing/Project view), the count comes from Autodesk's current line list.
+- After selecting a Plant 3D Drawings folder and completing its scan, the count automatically switches to the number of line entries shown for that folder.
+- Selecting **All Project** restores the original native list and its count.
+- Native Drawing/Project toolbar clicks and typed native line filtering also refresh the displayed count via a lightweight **850 ms UI timer**. This reads existing list controls only: **no database queries or file enumeration**.
+- The value is the total **visible** line entries, not just selected (checked) entries. For an empty folder the label is `Select All (0)` if its filtered projection is available.
+- The count is presentation-only: the checkbox still selects/deselects using the same REV16 logic.
 
-## Preserved from REV15
-- Folder dropdown near the original Line Numbers Filter field.
-- Only first-level project folders under Plant 3D Drawings.
-- `All Project` restores the native list.
-- REV06 Select All.
-- Current DWG / All line-number toggle (REV09–11).
-- REV12 aligned Custom Save Location.
-- REV05 automatic background ISO DWG copying to the custom path.
+## Test procedure
+1. Close Plant 3D completely, reopen, and `NETLOAD` REV17's `SPTC.ProductionIso.dll`.
+2. Run `SPTC_PRODISO` and check the left footer **Select All (N)**.
+3. Use the native Drawing/Project buttons to change displayed routes; verify the number changes to match.
+4. Choose a folder from the dropdown in the native Filter row. After the folder scan completes, verify **Select All (N)** matches the folder's displayed routes.
+5. Choose **All Project** and verify the full list count is restored.
+6. Verify Select All still checks just the visible folder lines in folder mode.
+7. Test ISO creation with **one** known-good route only, after confirming the count and selection.
 
-## Recommended test
-1. Completely exit Plant 3D 2025, restart and `NETLOAD` REV16 `SPTC.ProductionIso.dll`.
-2. Run `SPTC_PRODISO` and click the arrow on the Line Numbers filter row.
-3. Choose the folder previously triggering the **more than 120 DWGs** warning.
-4. Watch the incremental progress indicator; test **Cancel** once to confirm the native dialog stays open and the list is not partially filtered.
-5. Reopen the dropdown and select that folder again. Confirm that a completed scan produces the expected tags.
-6. Choose `All Project` to restore unfiltered native lines.
-7. **Do not generate batch production ISOs until you verify the selectable native line checkboxes match the expected folder routes.** Start with one known-good pipeline.
+## Preserved
+REV05 automatic completed-DWG copying to Custom Save Location; REV06 Select All; REV09–11 native active/all toggle; REV12 field alignment; REV15 dropdown placement/top-level folder names; REV16 cancelable incremental folder scan.
 
-## Caveats
-- Cloud compilation confirms API *signatures within this plugin*, not whether Autodesk's runtime reflection-based `PnPDataLinks` access and checked-list detection match your Plant 3D 2025 installation. If the scan reports a relationship or checkbox problem, run `SPTC_FOLDERDIAG`, press F2, and send the output.
-- An individual blocking Autodesk database method call cannot be interrupted instantly; Cancel is processed between calls, and database latency depends on the project's server.
-- Project folders are derived from the registered Piping drawing paths. Empty folders without DWG registration are not listed.
+## Notes
+Count reading is restricted to existing native/UI list items, so it does not scan DWGs or query PnP metadata. If Autodesk uses a different line-list UI class on another installation and the count cannot be safely determined, the label remains `Select All` rather than showing an invented count.
+
+No changes to Project Manager, model DWGs, PnP database, `IsoConfig.xml`, or existing generated ISOs. The build needs runtime testing in Plant 3D 2025.
