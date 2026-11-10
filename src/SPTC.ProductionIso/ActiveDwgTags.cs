@@ -239,7 +239,15 @@ internal static class ActiveDwgTags
             if (entry == null) continue;
             Type t = entry.GetType();
             string? name = t.GetProperty("Key")?.GetValue(entry)?.ToString();
-            if (!string.Equals(name, key, StringComparison.OrdinalIgnoreCase)) continue;
+            // Display labels and PnP property keys may differ only by
+            // spaces/underscores (e.g. "Line Number Tag" vs "LineNumberTag").
+            // Compare normalized names, not a substring or guessed prefix.
+            if (!string.Equals(name, key, StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(
+                    new string((name ?? "").Where(char.IsLetterOrDigit).ToArray()),
+                    new string(key.Where(char.IsLetterOrDigit).ToArray()),
+                    StringComparison.OrdinalIgnoreCase))
+                continue;
             return t.GetProperty("Value")?.GetValue(entry)?.ToString();
         }
         return null;
