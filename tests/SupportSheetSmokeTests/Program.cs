@@ -1134,6 +1134,61 @@ Assert(combinedPlan24.Callouts.Count==140&&
     "REV22.24 support gets one exact description label per each 10 native views, never steel TOS");
 Assert(combinedPlan24.HorizontalTosLines==rev223Plan.HorizontalTosLines,
     "REV22.24 13 structure members retain their existing horizontal-only TOS unchanged");
+// REV22.25: the screenshot has genuine TOP OF PIPE / COP elevations
+// but NO shown TopOfSteel; never reuse those pipe elevation fields.
+var supportPipeOnly=new Dictionary<string,string>
+{
+    ["LongDescriptionSize"]="Clamped Stanchion 16\"",
+    ["Top of Pipe"]="4306.3543",
+    ["Bottom of Pipe"]="3899.9543",
+    ["COP Elevation (Port 1)"]="4103.1543"
+};
+var tosApprox25=SupportOrthoSupportTos25.Evaluate(supportPipeOnly,4012.125);
+Assert(tosApprox25.Source=="SUPPORT_GEOMETRIC_TOP_APPROX"&&
+    SupportOrthoSupportTos25.Display(tosApprox25)=="TOS ~ +4012.125 mm",
+    "REV22.25 support pipe elevation properties MUST NOT be accepted as exact TOS");
+var actualSupportTos=new Dictionary<string,string>
+{
+    ["TopOfSteel"]="4172.5000",
+    ["Top of Pipe"]="4306.3543",
+    ["COP Elevation (Port 1)"]="4103.1543"
+};
+var tosExact25=SupportOrthoSupportTos25.Evaluate(actualSupportTos,4012.125);
+Assert(tosExact25.Source=="SUPPORT_EXPLICIT_TOP_OF_STEEL"&&
+    SupportOrthoSupportTos25.Display(tosExact25)=="TOS EL. +4172.5 mm",
+    "REV22.25 exact native TopOfSteel wins over geometric top and pipe elevations");
+Assert(SupportOrthoSupportTos25.Display(
+    SupportOrthoSupportTos25.Evaluate(supportPipeOnly,double.NaN))=="TOS: N/A",
+    "REV22.25 absent explicit and invalid geometry must report N/A without inventing elevation");
+var mixedRev25=rev223Members.Select(x=>
+    new SupportOrthoMemberCalloutPlan25.Member(x.Handle,x.Size,
+        x.X,x.Y,x.Z,x.IsHorizontal,x.TosText,x.TosSource))
+    .Concat(new[]{
+        new SupportOrthoMemberCalloutPlan25.Member(
+            "7FA","Clamped Stanchion 16\"",
+            7956.295,3484.858,612.937,true,
+            tosApprox25.Text,tosApprox25.Source)})
+    .ToArray();
+var plan25=SupportOrthoMemberCalloutPlan25.Build(
+    rev217Cameras,reservedTitleFrames.Titles,mixedRev25,594,841);
+Assert(plan25.Callouts.Count==140&&plan25.Skipped.Count==0,
+    "REV22.25 mixed model 13 structure + one support receives 140 source-linked labels");
+Assert(plan25.Callouts.Count(x=>x.Handle=="7FA"&&x.HasTos)==10&&
+    plan25.Callouts.Where(x=>x.Handle=="7FA")
+        .All(x=>x.Text=="[7FA] Clamped Stanchion 16\"\\nTOS ~ +4012.125 mm"),
+    "REV22.25 every support label gets its own second-line approximate TOS");
+Assert(plan25.TosLines==rev223Plan.HorizontalTosLines+10&&
+    plan25.Callouts.Where(x=>x.Handle!="7FA").Count(x=>x.HasTos)==
+        rev223Plan.HorizontalTosLines,
+    "REV22.25 all previous horizontal steel TOS counts remain unchanged");
+var exactModel25=mixedRev25.Select(x=>x.Handle=="7FA"?
+    x with {TosText=tosExact25.Text,TosSource=tosExact25.Source}:x).ToArray();
+var exactPlan25=SupportOrthoMemberCalloutPlan25.Build(
+    rev217Cameras,reservedTitleFrames.Titles,exactModel25,594,841);
+Assert(exactPlan25.Callouts.Count(x=>x.Handle=="7FA"&&
+    x.Text.Contains("\\nTOS EL. +4172.5 mm"))==10,
+    "REV22.25 exact Support TopOfSteel displays without tilde, beneath its description");
+Console.WriteLine("PASS: REV22.25 Support TOS explicit vs approximate vs unavailable, no pipe elevation confusion, 140 annotations.");
 Console.WriteLine("PASS: REV22.24 Plant Piping Support PnP description and 14-object mixed ten-view annotation.");
 Console.WriteLine("PASS: REV22.23 nonwrapping DBText two-line member labels and 130-collision-safe paper rectangles.");
 Console.WriteLine("PASS: REV22.22 exact native MText paragraph conversion, no fl-7.5TOS concatenation, no source model changes.");
