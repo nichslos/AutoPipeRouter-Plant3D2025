@@ -24,11 +24,27 @@ internal static class NativeIsoDialogEnhancer
     [DllImport("user32.dll")] private static extern IntPtr SetParent(IntPtr child, IntPtr parent);
     [DllImport("user32.dll")] private static extern bool GetClientRect(IntPtr hwnd, out Rectangle rect);
     [DllImport("user32.dll")] private static extern bool SetWindowPos(IntPtr hwnd, IntPtr insertAfter, int x, int y, int cx, int cy, uint flags);
+    [DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr hwnd, out WinRect rect);
+    [DllImport("user32.dll")] private static extern bool ScreenToClient(IntPtr hwnd, ref WinPoint point);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetClassName(IntPtr hwnd, StringBuilder name, int capacity);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct WinRect { public int Left, Top, Right, Bottom; public int Width => Right - Left; public int Height => Bottom - Top; }
+    [StructLayout(LayoutKind.Sequential)]
+    private struct WinPoint { public int X, Y; }
 
     private static System.Windows.Forms.Timer? _watch;
     private static IntPtr _native = IntPtr.Zero;
     private static UserControl? _overlay;
+    private static Label? _destinationLabel;
     private static TextBox? _destinationBox;
+    private static Button? _destinationBrowse;
+    // REV19: inexpensive layout watcher; it only relayouts if native client
+    // dimensions change. It never queries PnP databases or project files.
+    private static System.Windows.Forms.Timer? _layoutWatch;
+    private static Size _lastDialogClientSize = Size.Empty;
+    private static int _fallbackRowLeft = -1;
+    private static int _fallbackTextboxLeft = -1;
     private static string _destination = "";
     private static string? _source;
     private static Document? _document;
@@ -255,19 +271,35 @@ internal static class NativeIsoDialogEnhancer
             _overlay = new UserControl
             {
                 BackColor = SystemColors.Control,
-                Size = new Size(510, 34)
+                Size = new Size(510, 34),
+                TabStop = false
             };
-            var label = new Label
+            _destinationLabel = new Label
             {
                 Text = "Custom Save Location:",
                 Location = new Point(0, 7),
                 Width = 141,
-                AutoSize = false
+                Height = 22,
+                AutoSize = false,
+                TextAlign = ContentAlignment.MiddleLeft,
+                Font = SystemFonts.MessageBoxFont
             };
-            _destinationBox = new TextBox { Text = _destination, Location = new Point(142, 3), Height = 24 };
+            _destinationBox = new TextBox
+            {
+                Text = _destination,
+                Location = new Point(142, 3),
+                Height = 24,
+                Font = SystemFonts.MessageBoxFont
+            };
             _destinationBox.TextChanged += (_, _) => _destination = _destinationBox.Text.Trim();
-            var browse = new Button { Text = "...", Width = 31, Height = 25 };
-            browse.Click += (_, _) =>
+            _destinationBrowse = new Button
+            {
+                Text = "...",
+                Width = 31,
+                Height = 25,
+                TabStop = false
+            };
+            _destinationBrowse.Click += (_, _) =>
             {
                 using var picker = new FolderBrowserDialog
                 {
@@ -278,31 +310,46 @@ internal static class NativeIsoDialogEnhancer
                 if (picker.ShowDialog() == DialogResult.OK)
                     _destinationBox.Text = picker.SelectedPath;
             };
-            _overlay.Controls.Add(label);
+
+            _overlay.Controls.Add(_destinationLabel);
             _overlay.Controls.Add(_destinationBox);
-            _overlay.Controls.Add(browse);
-            _overlay.Resize += (_, _) =>
-            {
-                int width = Math.Max(100, _overlay.Width - 181);
-                _destinationBox.Width = width;
-                browse.Location = new Point(146 + width, 2);
-            };
-            // Attach a managed child UI into the original Win32 dialog HWND.
-            // No overwrite of the native window procedure and no project configuration edits.
+            _overlay.Controls.Add(_destinationBrowse);
+
+            // Attach a managed child UI into the ORIGINAL Production Iso dialog.
+            // No edits to native ISO configuration, project data or drawings.
             _ = _overlay.Handle;
             SetParent(_overlay.Handle, dialog);
             PositionOverlay(dialog);
             _overlay.Show();
-            // REV14: folder catalog is attached read-only, while its
-            // Folders button is hosted beside Select All at the bottom-left.
-            // The original native Filter funnel is no longer covered.
+
             ProjectFolderLinePicker.Attach(dialog, _document);
             NativeIsoLineSelectOverlay.Attach(dialog);
-            // REV18: begin a one-time incremental cache of registered
-            // drawing-folder line tags after the native dialog has painted.
-            // Selection from a completed folder will then be immediate.
             ProjectFolderLinePicker.BeginAutomaticPrecache();
-            _document?.Editor.WriteMessage("\nSPTC: Original Production Iso dialog located; custom folder field attached.");
+
+            // Win32 SetParent does not guarantee that the child receives
+            // Autodesk's parent-resize messages. Watch only CLIENT DIMENSIONS,
+            // then calculate custom field geometry from the native Revision row.
+            _lastDialogClientSize = Size.Empty;
+            _layoutWatch?.Dispose();
+            _layoutWatch = new System.Windows.Forms.Timer { Interval = 180 };
+            _layoutWatch.Tick += (_, _) =>
+            {
+                if (_native != dialog || _overlay is null || _overlay.IsDisposed)
+                    return;
+                if (GetClientRect(dialog, out Rectangle nativeClient))
+                {
+                    Size size = new Size(nativeClient.Width, nativeClient.Height);
+                    if (_lastDialogClientSize != size)
+                    {
+                        _lastDialogClientSize = size;
+                        PositionOverlay(dialog);
+                    }
+                }
+            };
+            _layoutWatch.Start();
+
+            _document?.Editor.WriteMessage(
+                "\nSPTC REV19: Native Production Iso dialog found; custom location row tracks Revision number when resized.");
         }
         catch (Exception ex)
         {
@@ -311,30 +358,152 @@ internal static class NativeIsoDialogEnhancer
         }
     }
 
+    /// <summary>
+    /// Determine native Revision label and textbox coordinates without
+    /// changing either Autodesk control. This gives stable alignment even
+    /// when Windows display scaling or dialog width differs.
+    /// </summary>
+    private static bool TryRevisionRow(IntPtr dialog, out Rectangle label, out Rectangle edit)
+    {
+        label = Rectangle.Empty;
+        edit = Rectangle.Empty;
+
+        IntPtr nativeLabel = IntPtr.Zero;
+        EnumChildWindows(dialog, (hwnd, _) =>
+        {
+            if (WindowText(hwnd).Trim().StartsWith("Revision number",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                nativeLabel = hwnd;
+                return false;
+            }
+            return true;
+        }, IntPtr.Zero);
+
+        if (nativeLabel == IntPtr.Zero || !TryClientRect(dialog, nativeLabel, out Rectangle labelRect))
+            return false;
+
+        label = labelRect;
+        Rectangle chosen = Rectangle.Empty;
+        int bestScore = int.MinValue;
+        int labelCenterY = label.Top + label.Height / 2;
+        EnumChildWindows(dialog, (hwnd, _) =>
+        {
+            if (hwnd == nativeLabel || !TryClientRect(dialog, hwnd, out Rectangle rect))
+                return true;
+            if (rect.Width < 110 || rect.Height < 15 || rect.Height > 43)
+                return true;
+            if (rect.Left < label.Left + 90 ||
+                Math.Abs(rect.Top + rect.Height / 2 - labelCenterY) > 17)
+                return true;
+
+            Control? control = Control.FromHandle(hwnd);
+            var cls = new StringBuilder(128);
+            GetClassName(hwnd, cls, cls.Capacity);
+            bool isEdit = control is TextBoxBase ||
+                          cls.ToString().Contains("EDIT", StringComparison.OrdinalIgnoreCase);
+            if (!isEdit) return true;
+
+            // Native Revision entry is the long textbox on the same row.
+            int score = rect.Width * 2 - Math.Abs(rect.Top + rect.Height / 2 - labelCenterY);
+            if (score > bestScore)
+            {
+                bestScore = score;
+                chosen = rect;
+            }
+            return true;
+        }, IntPtr.Zero);
+
+        if (chosen.IsEmpty) return false;
+        edit = chosen;
+        return true;
+    }
+
+    private static bool TryClientRect(IntPtr dialog, IntPtr hwnd, out Rectangle clientRect)
+    {
+        clientRect = Rectangle.Empty;
+        if (!GetWindowRect(hwnd, out WinRect rect)) return false;
+        var a = new WinPoint { X = rect.Left, Y = rect.Top };
+        var b = new WinPoint { X = rect.Right, Y = rect.Bottom };
+        if (!ScreenToClient(dialog, ref a) || !ScreenToClient(dialog, ref b))
+            return false;
+        clientRect = Rectangle.FromLTRB(a.X, a.Y, b.X, b.Y);
+        return clientRect.Width > 0 && clientRect.Height > 0;
+    }
+
     private static void PositionOverlay(IntPtr dialog)
     {
-        if (_overlay == null || _overlay.IsDisposed || !GetClientRect(dialog, out Rectangle bounds))
+        if (_overlay is null || _overlay.IsDisposed ||
+            _destinationLabel is null || _destinationBox is null ||
+            _destinationBrowse is null ||
+            !GetClientRect(dialog, out Rectangle bounds))
             return;
-        // REV12: align Custom Save Location label and textbox with the native
-        // Revision number label and textbox (about 28 px further left).
-        // Preserve the right edge and Browse button location.
-        int x = Math.Max(0, (int)(bounds.Width * 0.29) - 28);
-        int y = (int)(bounds.Height * 0.384);
-        int w = Math.Max(300, bounds.Width - x - 15);
-        SetWindowPos(_overlay.Handle, IntPtr.Zero, x, y, w, 34, 0x0004 | 0x0040);
+
+        int rowLeft, fieldLeft, rowTop, rightEdge;
+        if (TryRevisionRow(dialog, out Rectangle revisionLabel, out Rectangle revisionInput))
+        {
+            // Native labels share the exact same LEFT edge. Both native and
+            // custom textboxes share the same LEFT edge too.
+            rowLeft = revisionLabel.Left;
+            fieldLeft = revisionInput.Left;
+            rowTop = revisionInput.Bottom + 9;
+            rightEdge = revisionInput.Right;
+        }
+        else
+        {
+            // Fallback if Autodesk renders labels without child HWNDs.
+            // Capture the original REV12 alignment once and keep left edges
+            // fixed while stretching the parent. Right edge expands with it.
+            if (_fallbackRowLeft < 0)
+            {
+                _fallbackRowLeft = Math.Max(0, (int)(bounds.Width * 0.29) - 28);
+                _fallbackTextboxLeft = _fallbackRowLeft + 142;
+            }
+            rowLeft = _fallbackRowLeft;
+            fieldLeft = _fallbackTextboxLeft;
+            rowTop = (int)(bounds.Height * 0.384);
+            rightEdge = bounds.Width - 15;
+        }
+
+        int firstField = Math.Max(136, fieldLeft - rowLeft);
+        int width = Math.Max(240, rightEdge - rowLeft);
+        // Align the right edge of Browse with native Revision number textbox.
+        int browseX = Math.Max(firstField + 110, width - 31);
+        int actualWidth = Math.Max(width, browseX + 31);
+
+        // Resize BOTH the Win32 child window AND its managed controls.
+        // Updating controls directly avoids dependence on a missed Resize event
+        // after SetParent/SetWindowPos in Autodesk's native window.
+        _overlay.Size = new Size(actualWidth, 34);
+        _destinationLabel.Location = new Point(0, 3);
+        _destinationLabel.Size = new Size(Math.Max(100, firstField - 5), 26);
+        _destinationBox.Location = new Point(firstField, 3);
+        _destinationBox.Width = Math.Max(100, browseX - firstField - 5);
+        _destinationBrowse.Location = new Point(browseX, 2);
+
+        SetWindowPos(_overlay.Handle, IntPtr.Zero,
+            rowLeft, rowTop, actualWidth, 34, 0x0004 | 0x0040);
         NativeIsoLineSelectOverlay.Position(dialog);
         ProjectFolderLinePicker.Position(dialog);
     }
 
     private static void RemoveOverlay()
     {
+        try { _layoutWatch?.Stop(); } catch { }
+        try { _layoutWatch?.Dispose(); } catch { }
+        _layoutWatch = null;
+        _lastDialogClientSize = Size.Empty;
+        _fallbackRowLeft = -1;
+        _fallbackTextboxLeft = -1;
         ProjectFolderLinePicker.Hide();
         NativeIsoToolbarClickFilter.Detach();
         NativeIsoLineSelectOverlay.Hide();
         _native = IntPtr.Zero;
         try { _overlay?.Dispose(); } catch { }
         _overlay = null;
+        _destinationLabel = null;
         _destinationBox = null;
+        _destinationBrowse = null;
     }
 
     private static void Detach()
