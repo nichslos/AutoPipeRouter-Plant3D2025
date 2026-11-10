@@ -33,6 +33,19 @@ internal static class ActiveDwgTags
 
     private static readonly HashSet<string> Tags = new(StringComparer.OrdinalIgnoreCase);
     public static int Count => Tags.Count;
+    public static bool HasScanned { get; private set; }
+    public static int DirectTaggedParts { get; private set; }
+    public static int GroupTaggedParts { get; private set; }
+    public static void Invalidate()
+    {
+        HasScanned = false;
+        Tags.Clear();
+        CheckedEntities = 0;
+        LinkedEntities = 0;
+        DirectTaggedParts = 0;
+        GroupTaggedParts = 0;
+        LastDiagnostic = "Not scanned";
+    }
     public static IReadOnlyList<string> CurrentTags => Tags.OrderBy(t => t, StringComparer.OrdinalIgnoreCase).ToArray();
     public static int CheckedEntities { get; private set; }
     public static int LinkedEntities { get; private set; }
@@ -41,9 +54,12 @@ internal static class ActiveDwgTags
 
     public static void Scan(Document doc)
     {
-        Tags.Clear();
-        CheckedEntities = 0;
-        LinkedEntities = 0;
+        Invalidate();
+        HasScanned = true;
+        // Prefer the actual current LineNumberTag on physical piping parts.
+        // Group associations can retain old tags after route renames.
+        var componentTags = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var relationshipTags = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         _lastAppliedDialog = IntPtr.Zero;
         try
         {
@@ -116,10 +132,28 @@ internal static class ActiveDwgTags
                         int rowId = Convert.ToInt32(rowObj);
                         if (rowId <= 0) continue;
 
-                        // Component -> current line-group membership, not stale
-                        // group records that merely remain in the project DB.
+                        // REV22: The value shown in Properties for a *current*
+                        // physical object is more authoritative than a stale
+                        // relationship to an older P3dLineGroup Tag.
+                        string? actualTag = PropertyFromRow(
+                            properties.Invoke(dlm, new object[] { rowId, true }),
+                            "LineNumberTag");
+                        if (!string.IsNullOrWhiteSpace(actualTag) &&
+                            !actualTag.Trim().Equals("Unassigned",
+                                StringComparison.OrdinalIgnoreCase))
+                        {
+                            componentTags.Add(actualTag.Trim());
+                            DirectTaggedParts++;
+                            LinkedEntities++;
+                            continue;
+                        }
+
+                        // If this part has no direct line-number property, only
+                        // then fall back to its explicit line-group relationship.
+                        // Never count standalone/orphan group records as live.
                         object? groupIds = related.Invoke(dlm,
-                            new object[] { "P3dLineGroupPartRelationship", "Part", rowId, "LineGroup" });
+                            new object[] { "P3dLineGroupPartRelationship",
+                                "Part", rowId, "LineGroup" });
                         bool linked = false;
                         if (groupIds is IEnumerable enumerated)
                         {
@@ -128,27 +162,18 @@ internal static class ActiveDwgTags
                                 if (group == null) continue;
                                 int groupId = Convert.ToInt32(group);
                                 if (groupId <= 0) continue;
-                                string? tag = PropertyFromRow(properties.Invoke(dlm, new object[] { groupId, false }), "Tag");
-                                if (string.IsNullOrWhiteSpace(tag)) continue;
-                                if (tag.Equals("Unassigned", StringComparison.OrdinalIgnoreCase)) continue;
-                                Tags.Add(tag.Trim());
+                                string? tag = PropertyFromRow(
+                                    properties.Invoke(dlm, new object[] { groupId, false }),
+                                    "Tag");
+                                if (string.IsNullOrWhiteSpace(tag) ||
+                                    tag.Trim().Equals("Unassigned",
+                                        StringComparison.OrdinalIgnoreCase))
+                                    continue;
+                                relationshipTags.Add(tag.Trim());
                                 linked = true;
                             }
                         }
-
-                        // Some models expose the inherited LineNumberTag directly
-                        // on the component. This is only used when group lookup
-                        // returned no usable Tag.
-                        if (!linked)
-                        {
-                            string? tag = PropertyFromRow(properties.Invoke(dlm, new object[] { rowId, true }), "LineNumberTag");
-                            if (!string.IsNullOrWhiteSpace(tag) &&
-                                !tag.Equals("Unassigned", StringComparison.OrdinalIgnoreCase))
-                            {
-                                Tags.Add(tag.Trim());
-                                linked = true;
-                            }
-                        }
+                        if (linked) GroupTaggedParts++;
                         if (linked) LinkedEntities++;
                     }
                     catch
@@ -160,7 +185,14 @@ internal static class ActiveDwgTags
                 tr.Commit();
             }
 
-            LastDiagnostic = $"Scanned {CheckedEntities} Plant objects; found {LinkedEntities} linked objects, {Count} live route tag(s).";
+            // Use direct tags whenever actual component properties provided
+            // any. The fallback group set can contain old-but-registered tags.
+            foreach (string tag in (componentTags.Count > 0
+                         ? componentTags : relationshipTags))
+                Tags.Add(tag);
+            LastDiagnostic = $"Scanned {CheckedEntities} Plant objects; " +
+                $"{DirectTaggedParts} direct-tagged, {GroupTaggedParts} fallback " +
+                $"group-tagged, {Count} distinct current route tag(s).";
             doc.Editor.WriteMessage("\nSPTC REV08: " + LastDiagnostic);
             if (Count > 0)
                 doc.Editor.WriteMessage("\nSPTC REV08 actual tags: " + string.Join(", ", CurrentTags));
