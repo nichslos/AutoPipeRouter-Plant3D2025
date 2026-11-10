@@ -42,6 +42,7 @@ internal static class NativeIsoDialogEnhancer
     // REV19: inexpensive layout watcher; it only relayouts if native client
     // dimensions change. It never queries PnP databases or project files.
     private static System.Windows.Forms.Timer? _layoutWatch;
+    private static System.Windows.Forms.Timer? _activeFilterVerify;
     private static Size _lastDialogClientSize = Size.Empty;
     private static int _fallbackRowLeft = -1;
     private static int _fallbackTextboxLeft = -1;
@@ -168,9 +169,18 @@ internal static class NativeIsoDialogEnhancer
                         if (ActiveDwgTags.Count != 1) return false;
                         // REV10: first click shows this DWG's actual route,
                         // next click clears the filter and restores native lines.
-                        return showActive
-                            ? ActiveDwgTags.ApplyOneTag(native, _document)
-                            : ActiveDwgTags.ClearOneTag(native, _document);
+                        // REV21: the top buttons previously left a long
+                        // route tag in Search even when the filtered native
+                        // line list was EMPTY. Fail open: restore native lines
+                        // if the tag cannot be displayed after Autodesk updates.
+                        CancelFilterVerification();
+                        if (showActive)
+                        {
+                            bool applied = ActiveDwgTags.ApplyOneTag(native, _document);
+                            if (applied) VerifyFilterHasVisibleLines(native);
+                            return applied;
+                        }
+                        return ActiveDwgTags.ClearOneTag(native, _document);
                     });
                 }
 
@@ -237,6 +247,42 @@ internal static class NativeIsoDialogEnhancer
             _copyState = "Error: " + ex.Message;
             _document?.Editor.WriteMessage("\nSPTC ISO monitor: " + ex.Message);
         }
+    }
+
+    private static void CancelFilterVerification()
+    {
+        try { _activeFilterVerify?.Stop(); } catch { }
+        try { _activeFilterVerify?.Dispose(); } catch { }
+        _activeFilterVerify = null;
+    }
+
+    private static void VerifyFilterHasVisibleLines(IntPtr native)
+    {
+        CancelFilterVerification();
+        var timer = new System.Windows.Forms.Timer { Interval = 900 };
+        _activeFilterVerify = timer;
+        timer.Tick += (_, _) =>
+        {
+            if (!ReferenceEquals(_activeFilterVerify, timer)) return;
+            CancelFilterVerification();
+            if (_native != native || ProjectFolderLinePicker.FolderActive)
+                return;
+
+            int? count = NativeIsoLineSelectOverlay.NativeDisplayedCount(native);
+            if (count != 0) return; // no read or one/more results: leave native UI alone
+
+            // Only undo a failed automatic filter; no line tags, DWGs,
+            // drawing-folder data or project databases are modified.
+            if (ActiveDwgTags.ClearOneTag(native, _document))
+            {
+                NativeIsoToolbarClickFilter.MarkAllLinesRestored(native);
+                NativeIsoLineSelectOverlay.UpdateDisplayedCount();
+                _document?.Editor.WriteMessage(
+                    "\nSPTC REV21: Current DWG tag did not match a line in the " +
+                    "native ISO list. Cleared the search filter so routes remain visible.");
+            }
+        };
+        timer.Start();
     }
 
     private static string? ReadSourcePath(IntPtr dialog)
@@ -497,6 +543,7 @@ internal static class NativeIsoDialogEnhancer
 
     private static void RemoveOverlay()
     {
+        CancelFilterVerification();
         try { _layoutWatch?.Stop(); } catch { }
         try { _layoutWatch?.Dispose(); } catch { }
         _layoutWatch = null;
