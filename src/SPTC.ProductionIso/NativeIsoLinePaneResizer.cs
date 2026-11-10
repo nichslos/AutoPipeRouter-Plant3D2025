@@ -47,16 +47,22 @@ internal static class NativeIsoLinePaneResizer
     private static int _initialLeftHeight;
     private static int _lastParentWidth;
     private static bool _adjusting;
+    private static Action? _onDragRelayout;
+    private static int _leftColumn = -1;
+    private static int _rightColumn = -1;
+    private static int _columnPadding;
     private static readonly Dictionary<Control, int> OriginalListRightMargins = new();
+    private static readonly Dictionary<Control, int> OriginalContainerMargins = new();
 
     public static bool IsAvailable => _handle is { IsDisposed: false };
 
-    public static void Attach(IntPtr dialog)
+    public static void Attach(IntPtr dialog, Action? onDragRelayout = null)
     {
         if (dialog == IntPtr.Zero) return;
         if (_dialog == dialog && IsAvailable) return;
         Hide();
         _dialog = dialog;
+        _onDragRelayout = onDragRelayout;
 
         // Resolve original Autodesk group controls, never a SPTC overlay.
         // Both must be siblings in the same layout parent.
@@ -95,11 +101,26 @@ internal static class NativeIsoLinePaneResizer
         _initialRightMargin = Math.Max(4, _parent.ClientSize.Width - _right.Right);
         _initialLeftHeight = _left.Height;
         _lastParentWidth = _parent.ClientSize.Width;
+        if (_parent is TableLayoutPanel table &&
+            table.GetColumn(_left) >= 0 &&
+            table.GetColumn(_right) > table.GetColumn(_left))
+        {
+            _leftColumn = table.GetColumn(_left);
+            _rightColumn = table.GetColumn(_right);
+            _columnPadding = Math.Max(0,
+                table.GetColumnWidths()[_leftColumn] - _left.Width);
+        }
+        else
+        {
+            _leftColumn = -1;
+            _rightColumn = -1;
+        }
 
         // Some Autodesk lists are not anchored to both sides of their group.
         // Preserve their original right margins, so the actual line list gets
         // wider when the Display lines border grows.
         OriginalListRightMargins.Clear();
+        OriginalContainerMargins.Clear();
         RegisterLineLists(_left);
 
         _handle = new Panel
@@ -123,6 +144,7 @@ internal static class NativeIsoLinePaneResizer
             if (!_dragging || _handle == null) return;
             int delta = Control.MousePosition.X - _dragMouseStart;
             SetDesiredWidth(_dragWidthStart + delta);
+            _onDragRelayout?.Invoke();
         };
         _handle.MouseUp += (_, _) =>
         {
@@ -179,6 +201,17 @@ internal static class NativeIsoLinePaneResizer
             {
                 OriginalListRightMargins[child] =
                     Math.Max(3, root.ClientSize.Width - child.Right);
+                // Preserve nested container right margins too. Otherwise a
+                // list inside a fixed-width panel would not grow with its group.
+                Control? ancestor = child.Parent;
+                while (ancestor != null && !ReferenceEquals(ancestor, _left))
+                {
+                    if (!OriginalContainerMargins.ContainsKey(ancestor) &&
+                        ancestor.Parent != null)
+                        OriginalContainerMargins[ancestor] =
+                            Math.Max(3, ancestor.Parent.ClientSize.Width - ancestor.Right);
+                    ancestor = ancestor.Parent;
+                }
             }
             else
             {
@@ -226,22 +259,38 @@ internal static class NativeIsoLinePaneResizer
                 newRightWidth = available - newRightX - _initialRightMargin;
             }
 
-            _left.SuspendLayout();
-            _right.SuspendLayout();
-            try
+            if (_parent is TableLayoutPanel table && _leftColumn >= 0 &&
+                _leftColumn < table.ColumnStyles.Count)
             {
-                if (_left.Width != target)
-                    _left.Width = target;
-                if (_right.Left != newRightX || _right.Width != newRightWidth)
-                    _right.SetBounds(newRightX, _right.Top,
-                        Math.Max(280, newRightWidth), _right.Height);
-                AdjustLineListWidths();
+                // Autodesk may use a fixed-width left TableLayoutPanel column.
+                // Change its column width rather than fighting the layout
+                // engine by assigning child GroupBox.Bounds directly.
+                table.SuspendLayout();
+                try
+                {
+                    table.ColumnStyles[_leftColumn].SizeType = SizeType.Absolute;
+                    table.ColumnStyles[_leftColumn].Width = target + _columnPadding;
+                }
+                finally { table.ResumeLayout(true); }
             }
-            finally
+            else
             {
-                _left.ResumeLayout(true);
-                _right.ResumeLayout(true);
+                _left.SuspendLayout();
+                _right.SuspendLayout();
+                try
+                {
+                    if (_left.Width != target) _left.Width = target;
+                    if (_right.Left != newRightX || _right.Width != newRightWidth)
+                        _right.SetBounds(newRightX, _right.Top,
+                            Math.Max(280, newRightWidth), _right.Height);
+                }
+                finally
+                {
+                    _left.ResumeLayout(true);
+                    _right.ResumeLayout(true);
+                }
             }
+            AdjustLineListWidths();
 
             _targetWidth = target;
             _lastParentWidth = available;
@@ -257,21 +306,33 @@ internal static class NativeIsoLinePaneResizer
 
     private static void AdjustLineListWidths()
     {
+        // Resize ancestor panels first (outermost to innermost).
+        foreach (var pair in OriginalContainerMargins
+                     .OrderBy(entry => DepthFromLeft(entry.Key)).ToArray())
+        {
+            if (pair.Key.IsDisposed || pair.Key.Parent == null) continue;
+            int width = pair.Key.Parent.ClientSize.Width -
+                pair.Key.Left - pair.Value;
+            if (width >= 100 && pair.Key.Width != width)
+                pair.Key.Width = width;
+        }
+
         foreach (var entry in OriginalListRightMargins.ToArray())
         {
             Control list = entry.Key;
-            if (list.IsDisposed || _left == null) continue;
-
-            // For a nested panel, use that container's actual width. Where
-            // Autodesk uses directly-parented list items, width increases.
-            Control? parent = list.Parent;
-            if (parent == null) continue;
-            int newWidth = parent.ClientSize.Width - list.Left - entry.Value;
-            if (newWidth > list.Width && newWidth > 100)
-                list.Width = newWidth;
-            else if (newWidth >= 100 && list.Width != newWidth)
+            if (list.IsDisposed || list.Parent == null) continue;
+            int newWidth = list.Parent.ClientSize.Width - list.Left - entry.Value;
+            if (newWidth >= 100 && list.Width != newWidth)
                 list.Width = newWidth;
         }
+    }
+
+    private static int DepthFromLeft(Control control)
+    {
+        int depth = 0;
+        for (Control? c = control.Parent; c != null && c != _left; c = c.Parent)
+            depth++;
+        return depth;
     }
 
     private static void PositionHandle()
@@ -312,6 +373,10 @@ internal static class NativeIsoLinePaneResizer
         _targetWidth = 0;
         _initialWidth = 0;
         _lastParentWidth = 0;
+        _leftColumn = -1;
+        _rightColumn = -1;
+        _onDragRelayout = null;
+        OriginalContainerMargins.Clear();
         OriginalListRightMargins.Clear();
     }
 }
