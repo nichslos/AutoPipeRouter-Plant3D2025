@@ -60,6 +60,10 @@ internal static class NativeIsoLinePaneResizer
     private static FilterChild? _nativeFilterInput;
     private static FilterChild? _nativeFilterFunnel;
     private static readonly List<FilterChild> _nativeFilterParents = new();
+    // REV22: original three Drawing/Project/Filter mode icons above the
+    // search bar must travel with the widened left group, not stay behind.
+    private sealed record TopToolbarTarget(IntPtr Handle, int RightGap);
+    private static readonly List<TopToolbarTarget> _topToolbarTargets = new();
 
     public static bool IsAvailable => _handle is { IsDisposed: false };
 
@@ -134,6 +138,7 @@ internal static class NativeIsoLinePaneResizer
         // widening the left group. Filter controls have their own anchoring and
         // were left behind in REV20 even when the list itself grew.
         CaptureFilterRow();
+        CaptureTopToolbar();
 
         _handle = new Panel
         {
@@ -304,6 +309,7 @@ internal static class NativeIsoLinePaneResizer
             }
             AdjustLineListWidths();
             StretchFilterRow();
+            MoveTopToolbar();
 
             _targetWidth = target;
             _lastParentWidth = available;
@@ -338,6 +344,101 @@ internal static class NativeIsoLinePaneResizer
             if (newWidth >= 100 && list.Width != newWidth)
                 list.Width = newWidth;
         }
+    }
+
+    private static void CaptureTopToolbar()
+    {
+        _topToolbarTargets.Clear();
+        if (_left == null || !GetWindowRect(_left.Handle, out RECT group))
+            return;
+
+        var candidates = new List<(IntPtr Handle, RECT Rect, bool Strip)>();
+        EnumChildWindows(_left.Handle, (hwnd, _) =>
+        {
+            if (!GetWindowRect(hwnd, out RECT rect)) return true;
+            int w = rect.Right - rect.Left, h = rect.Bottom - rect.Top;
+            int cy = (rect.Top + rect.Bottom) / 2 - group.Top;
+            if (cy < 8 || cy > 48 || h < 15 || h > 43 ||
+                rect.Left < group.Left + 55 ||
+                rect.Right > group.Right - 5)
+                return true;
+
+            Control? c = Control.FromHandle(hwnd);
+            var cls = new StringBuilder(96);
+            GetClassName(hwnd, cls, cls.Capacity);
+            bool isStrip = c is ToolStrip && w >= 60 && w <= 160;
+            bool isButton = (c is ButtonBase ||
+                cls.ToString().Contains("BUTTON", StringComparison.OrdinalIgnoreCase))
+                && w >= 15 && w <= 45;
+            if (isStrip || isButton)
+                candidates.Add((hwnd, rect, isStrip));
+            return true;
+        }, IntPtr.Zero);
+
+        // Prefer a complete native toolbar container: moving its HWND keeps
+        // the three original controls and their click events intact.
+        var strip = candidates.Where(c => c.Strip).OrderByDescending(c => c.Rect.Right).FirstOrDefault();
+        if (strip.Handle != IntPtr.Zero)
+        {
+            _topToolbarTargets.Add(new TopToolbarTarget(
+                strip.Handle, group.Right - strip.Rect.Right));
+            return;
+        }
+
+        var buttons = candidates.Where(c => !c.Strip)
+            .OrderBy(c => c.Rect.Left).ToList();
+        List<(IntPtr Handle, RECT Rect, bool Strip)>? triple = null;
+        for (int i = 0; i + 2 < buttons.Count; i++)
+        {
+            var groupThree = buttons.Skip(i).Take(3).ToList();
+            if (groupThree[2].Rect.Right - groupThree[0].Rect.Left > 130)
+                continue;
+            int topMin = groupThree.Min(c => c.Rect.Top);
+            int topMax = groupThree.Max(c => c.Rect.Top);
+            if (topMax - topMin > 12) continue;
+            triple = groupThree;
+        }
+        if (triple == null) return;
+
+        // If the toolbar buttons share a small non-GroupBox parent, move the
+        // containing panel as a unit instead of moving children outside it.
+        IntPtr shared = GetParent(triple[0].Handle);
+        if (shared != IntPtr.Zero && shared != _left.Handle &&
+            triple.All(c => GetParent(c.Handle) == shared) &&
+            GetWindowRect(shared, out RECT p) &&
+            p.Right - p.Left <= 170 && p.Bottom - p.Top <= 55)
+        {
+            _topToolbarTargets.Add(new TopToolbarTarget(shared, group.Right - p.Right));
+        }
+        else
+        {
+            foreach (var button in triple)
+                _topToolbarTargets.Add(new TopToolbarTarget(
+                    button.Handle, group.Right - button.Rect.Right));
+        }
+    }
+
+    private static void MoveTopToolbar()
+    {
+        if (_left == null || !GetWindowRect(_left.Handle, out RECT group))
+            return;
+        foreach (var button in _topToolbarTargets)
+            UpdateRightEdge(button.Handle,
+                group.Right - button.RightGap, resize: false);
+    }
+
+    // Used by REV22 click detection after the three toolbar icons shift.
+    // Native clicks must continue working regardless of left-pane width.
+    public static bool IsTopToolbarPoint(int screenX, int screenY)
+    {
+        foreach (var target in _topToolbarTargets)
+        {
+            if (GetWindowRect(target.Handle, out RECT r) &&
+                screenX >= r.Left - 2 && screenX <= r.Right + 2 &&
+                screenY >= r.Top - 2 && screenY <= r.Bottom + 2)
+                return true;
+        }
+        return false;
     }
 
     // Search only the narrow horizontal filter band (below the 3 toolbar
@@ -523,5 +624,6 @@ internal static class NativeIsoLinePaneResizer
         _nativeFilterInput = null;
         _nativeFilterFunnel = null;
         _nativeFilterParents.Clear();
+        _topToolbarTargets.Clear();
     }
 }
