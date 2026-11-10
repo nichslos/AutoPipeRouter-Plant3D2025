@@ -170,6 +170,10 @@ internal static class ProjectFolderLineCatalog
     public static async Task<FolderLines> GetLiveTagsAsync(
         string folder, IProgress<ScanProgress>? progress, CancellationToken cancellation)
     {
+        // REV18: A completed folder is instant even if another folder is
+        // currently being warmed on the UI thread.
+        if (CachedLines.TryGetValue(folder, out FolderLines? cached))
+            return cached;
         // The warm-up job and a manual folder choice must not interleave
         // calls to Plant 3D's PnPDataLinks/DataLinksManager.
         await ScanGate.WaitAsync(cancellation);
