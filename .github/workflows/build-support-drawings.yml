@@ -823,6 +823,31 @@ jobs:
             if(-not $planner.Contains($key)) { throw "REV22.26 automatic TOP anchor or native title guard missing: $key" }
           }
           if($planner.Contains('.GetPoint(') -or $planner.Contains('PromptPointOptions(')) { throw 'Automatic planner cannot request user input' }
+      - name: Verify REV22.27 Pipe Line Number Tag and BOP elevation annotations
+        shell: pwsh
+        run: |
+          $new = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoTenViewPipeAnnotationsTest.cs' -Raw
+          $prior = Get-Content 'src/SPTC.SupportDrawings/NativeOrthoTenViewAutoPlacementTest.cs' -Raw
+          $pipe = Get-Content 'src/SPTC.SupportDrawings/SupportOrthoPlantPipe27.cs' -Raw
+          $fields = Get-Content 'src/SPTC.SupportDrawings/SupportOrthoPipeLabel27.cs' -Raw
+          $planner = Get-Content 'src/SPTC.SupportDrawings/SupportOrthoMemberCalloutPlan27.cs' -Raw
+          if($new -notmatch 'CommandMethod\("SPTC_ORTHO22_27_PIPE_BOP_TEST"') { throw 'Isolated REV22.27 command missing' }
+          if($prior -notmatch 'CommandMethod\("SPTC_ORTHO22_26_AUTO_PLACE_TEN_TEST"') { throw 'Working REV22.26 fallback missing' }
+          if($new -notmatch 'REV22.27 TEST') { throw 'Copied-project confirmation missing' }
+          foreach($key in @('SupportOrthoPlantPipe27.Read(','SupportOrthoPipeLabel27.IsNativePipeType','SupportOrthoMemberCalloutPlan27.Build','CreateNativePaperMemberLeaders27','STEP10_PIPE_ANNOTATION_SOURCE_COUNT','STEP10_PIPE_BOP_LABEL_COUNT','STEP10_PIPE_BOP_EXPECTED','STEP10_HORIZONTAL_TOS_LABEL_COUNT','STEP10_SUPPORT_TOS_LABEL_COUNT','STEP10_ALL_TEN_NATIVE_VIEWS_REGISTERED=True','STEP5_PAPER_POINT_CLICKS_REQUIRED=0')) {
+            if(-not $new.Contains($key)) { throw "REV22.27 functionality missing: $key" }
+          }
+          if($new.Contains('.GetPoint(') -or $new.Contains('PromptPointOptions(')) { throw 'REV22.27 must preserve zero paper insertion clicks' }
+          foreach($key in @('FindAcPpRowId','GetAllProperties','LineNumberTag','BottomOfPipe','TypeDescriptor','BOUNDS_CLIPPED_TO_NATIVE_ORTHOCUBE','cube.MinX','cube.MaxX')) {
+            if(-not $pipe.Contains($key)) { throw "REV22.27 source Pipe metadata not checked: $key" }
+          }
+          foreach($key in @('EXPLICIT_BOTTOM_OF_PIPE','BOP_NOT_AVAILABLE','Line Number Tag','Bottom of Pipe','LineNumberTag','BOP EL. ')) {
+            if(-not $fields.Contains($key)) { throw "REV22.27 pipe PnP field requirement missing: $key" }
+          }
+          if($fields.Contains('TopOfPipe') -and $fields.Contains('BOP EL. ' + 'TopOfPipe')) { throw 'Do not substitute TOP for BOP' }
+          if(-not $planner.Contains('PipeBopSource') -or -not $planner.Contains('PipeBopText') -or -not $planner.Contains('BopLines')) { throw 'REV22.27 BOP must be distinct from existing TOS' }
+          if(-not $planner.Contains('bool isPipe=member.PipeBopSource!=null;')) { throw 'Explicit pipe BOP eligibility missing' }
+          if(-not $new.Contains('new DBText') -or -not $new.Contains('GeometricExtents')) { throw 'Native nonwrapping label rendering missing' }
       - name: Compile SPTC Support Drawings
         run: dotnet build src/SPTC.SupportDrawings/SPTC.SupportDrawings.csproj -c Release
       - name: Verify compiled DLL
@@ -834,7 +859,7 @@ jobs:
       - name: Upload DLL artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SPTC-SupportDrawings-Plant3D2025-REV22_26
+          name: SPTC-SupportDrawings-Plant3D2025-REV22_27
           path: src/SPTC.SupportDrawings/bin/Release/net8.0-windows/SPTC.SupportDrawings.dll
           retention-days: 30
           if-no-files-found: error
