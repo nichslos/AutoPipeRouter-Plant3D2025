@@ -45,6 +45,7 @@ internal static class NativeIsoDialogEnhancer
     private static Size _lastDialogClientSize = Size.Empty;
     private static int _fallbackRowLeft = -1;
     private static int _fallbackTextboxLeft = -1;
+    private static int _fallbackRowTop = -1;
     private static string _destination = "";
     private static string? _source;
     private static Document? _document;
@@ -458,10 +459,11 @@ internal static class NativeIsoDialogEnhancer
             {
                 _fallbackRowLeft = Math.Max(0, (int)(bounds.Width * 0.29) - 28);
                 _fallbackTextboxLeft = _fallbackRowLeft + 142;
+                _fallbackRowTop = (int)(bounds.Height * 0.384);
             }
             rowLeft = _fallbackRowLeft;
             fieldLeft = _fallbackTextboxLeft;
-            rowTop = (int)(bounds.Height * 0.384);
+            rowTop = _fallbackRowTop;
             rightEdge = bounds.Width - 15;
         }
 
@@ -495,6 +497,7 @@ internal static class NativeIsoDialogEnhancer
         _lastDialogClientSize = Size.Empty;
         _fallbackRowLeft = -1;
         _fallbackTextboxLeft = -1;
+        _fallbackRowTop = -1;
         ProjectFolderLinePicker.Hide();
         NativeIsoToolbarClickFilter.Detach();
         NativeIsoLineSelectOverlay.Hide();
