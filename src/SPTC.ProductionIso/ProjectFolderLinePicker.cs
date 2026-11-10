@@ -4,6 +4,8 @@ using System.Drawing;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 using Autodesk.AutoCAD.ApplicationServices;
 
@@ -57,6 +59,12 @@ internal static class ProjectFolderLinePicker
     private static readonly List<NativeEntry> VisibleEntries = new();
     private static bool _updating;
     private static string _folder = "";
+    // REV16: cancel is cooperative and executed between PnP database calls.
+    private static CancellationTokenSource? _scanCancellation;
+    private static long _scanSerial;
+    private static UserControl? _scanPanel;
+    private static Label? _scanStatus;
+    private static ProgressBar? _scanBar;
 
     private sealed record FolderMenuChoice(string Label, string? Key)
     {
@@ -125,6 +133,8 @@ internal static class ProjectFolderLinePicker
             PositionMenu();
         if (FolderActive && _lineHost is { IsDisposed: false })
             PositionList(dialog);
+        if (_scanPanel is { IsDisposed: false })
+            PositionScanPanel();
     }
 
     private static void PositionFilterButton(IntPtr dialog)
@@ -333,26 +343,52 @@ internal static class ProjectFolderLinePicker
         try { old?.Dispose(); } catch { }
     }
 
-    private static void ApplyFolder(string folder)
+    // REV16: This is an async event handler but PnP API calls remain on the
+    // WinForms/Plant 3D UI thread. The catalog periodically awaits between
+    // drawing batches; no Autodesk API object crosses worker threads.
+    private static async void ApplyFolder(string folder)
     {
-        if (_document == null || _dialog == IntPtr.Zero) return;
-        Cursor.Current = Cursors.WaitCursor;
+        if (_document is null || _dialog == IntPtr.Zero) return;
+        CancelPendingScan();
+        var cts = new CancellationTokenSource();
+        _scanCancellation = cts;
+        long serial = ++_scanSerial;
+        ShowScanPanel(folder, cts);
+
         try
         {
+            var progress = new Progress<ProjectFolderLineCatalog.ScanProgress>(state =>
+            {
+                if (serial != _scanSerial || _scanPanel is null ||
+                    _scanPanel.IsDisposed || cts.IsCancellationRequested)
+                    return;
+                if (_scanStatus != null)
+                    _scanStatus.Text = $"Scanning {state.Done} / {state.Total} DWGs\n" +
+                        $"{state.TagsFound} line tags verified";
+                if (_scanBar != null)
+                {
+                    _scanBar.Maximum = Math.Max(1, state.Total);
+                    _scanBar.Value = Math.Clamp(state.Done, 0, _scanBar.Maximum);
+                }
+            });
+
             ProjectFolderLineCatalog.FolderLines result =
-                ProjectFolderLineCatalog.GetLiveTags(folder);
-            _document.Editor.WriteMessage("\nSPTC REV13 " + folder + ": " + result.Note);
-            if (result.Note.StartsWith("Unable", StringComparison.OrdinalIgnoreCase) ||
-                result.Note.StartsWith("Folder has", StringComparison.OrdinalIgnoreCase) ||
-                result.Note.Contains("unavailable", StringComparison.OrdinalIgnoreCase))
+                await ProjectFolderLineCatalog.GetLiveTagsAsync(
+                    folder, progress, cts.Token);
+
+            if (cts.IsCancellationRequested || serial != _scanSerial ||
+                _dialog == IntPtr.Zero || _document is null)
+                return;
+
+            _document.Editor.WriteMessage("\nSPTC REV16 " + folder + ": " + result.Note);
+            if (!result.Note.StartsWith("Verified ", StringComparison.OrdinalIgnoreCase))
             {
                 MessageBox.Show(result.Note, "SPTC Folder Filter",
                     MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
 
-            // REV09-11 optional active-route text filter may be enabled.
-            // Reset it before reading the project's full native line list.
+            // Only after a COMPLETE verified scan touch the temporary list.
             ActiveDwgTags.ClearOneTag(_dialog, null);
             _folder = "";
             DestroyProjection();
@@ -360,30 +396,26 @@ internal static class ProjectFolderLinePicker
             if (!TryBindNativeList(_dialog, out List<NativeEntry> nativeRows))
             {
                 MessageBox.Show(
-                    "Could not identify the original checked line list. Folder filtering has not changed any native entries.\n" +
-                    "Choose Project (second top icon) and retry, or run SPTC_FOLDERDIAG.",
+                    "Original Production Iso line checkboxes could not be found.\n" +
+                    "Choose Project (second icon) and retry. No drawing data was changed.",
                     "SPTC Folder Filter", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
 
             var allowed = new HashSet<string>(result.Tags, StringComparer.OrdinalIgnoreCase);
             var visible = nativeRows.Where(x => allowed.Contains(x.Tag)).ToList();
-
-            if (allowed.Count > 0 && visible.Count != allowed.Count)
+            if (allowed.Count > 0 &&
+                allowed.Any(tag => !visible.Any(x => tag.Equals(x.Tag, StringComparison.OrdinalIgnoreCase))))
             {
-                // Do not pretend that lines from other DWGs are selectable when
-                // Autodesk's current Drawing/Filter mode has not loaded them.
                 MessageBox.Show(
-                    $"This folder has {allowed.Count} verified line number(s), but only {visible.Count} " +
-                    "are currently available in the native list.\n" +
-                    "Click the second (Project) icon above Line Numbers to load project-wide routes, " +
-                    "then choose the folder again.",
+                    $"Folder has {allowed.Count} verified line tag(s), but not all " +
+                    "appear in the currently loaded Production Iso list.\n" +
+                    "Click the Project icon, then select this folder again.",
                     "SPTC Folder Filter", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
 
-            // All underlying line checks outside this folder must be cleared,
-            // otherwise native ISO Create could still export hidden selections.
+            // Clear hidden selections to avoid generating unexpected ISOs.
             foreach (var row in nativeRows)
                 if (!allowed.Contains(row.Tag)) SetNativeChecked(row, false);
 
@@ -392,16 +424,106 @@ internal static class ProjectFolderLinePicker
             BuildProjection(visible);
             PositionList(_dialog);
             _document.Editor.WriteMessage(
-                $"\nSPTC REV13 folder selected: {folder}; {visible.Count} line number(s) shown. " +
-                "Native project records unchanged.");
+                $"\nSPTC REV16 folder selected: {folder}; {visible.Count} lines shown. " +
+                "Underlying project data unchanged.");
+        }
+        catch (OperationCanceledException)
+        {
+            _document?.Editor.WriteMessage("\nSPTC REV16: Folder scan canceled; original line list retained.");
         }
         catch (Exception ex)
         {
-            _folder = "";
-            DestroyProjection();
-            _document.Editor.WriteMessage("\nSPTC REV13 folder filter: " + ex.Message);
+            _document?.Editor.WriteMessage(
+                "\nSPTC REV16 folder filter: " + ex.GetBaseException().Message);
         }
-        finally { Cursor.Current = Cursors.Default; }
+        finally
+        {
+            if (serial == _scanSerial)
+            {
+                _scanCancellation = null;
+                HideScanPanel();
+            }
+            cts.Dispose();
+        }
+    }
+
+    private static void ShowScanPanel(string folder, CancellationTokenSource cts)
+    {
+        HideScanPanel();
+        if (_dialog == IntPtr.Zero) return;
+
+        _scanPanel = new UserControl
+        {
+            BackColor = SystemColors.Control,
+            BorderStyle = BorderStyle.FixedSingle,
+            Size = new Size(292, 112)
+        };
+        _scanStatus = new Label
+        {
+            Text = "Checking registered DWGs:\n" + folder,
+            Location = new Point(9, 7),
+            Size = new Size(272, 42),
+            AutoEllipsis = true
+        };
+        _scanBar = new ProgressBar
+        {
+            Location = new Point(9, 54),
+            Size = new Size(272, 15),
+            Style = ProgressBarStyle.Continuous,
+            Minimum = 0, Maximum = 1
+        };
+        var cancel = new Button
+        {
+            Text = "Cancel",
+            Location = new Point(199, 76),
+            Size = new Size(80, 26),
+            TabStop = false
+        };
+        cancel.Click += (_, _) => cts.Cancel();
+        _scanPanel.Controls.Add(_scanStatus);
+        _scanPanel.Controls.Add(_scanBar);
+        _scanPanel.Controls.Add(cancel);
+        _ = _scanPanel.Handle;
+        SetParent(_scanPanel.Handle, _dialog);
+        if (GetParent(_scanPanel.Handle) != _dialog)
+        {
+            HideScanPanel();
+            cts.Cancel();
+            return;
+        }
+        PositionScanPanel();
+        _scanPanel.Show();
+        _scanPanel.BringToFront();
+    }
+
+    private static void PositionScanPanel()
+    {
+        if (_dialog == IntPtr.Zero || _scanPanel is null ||
+            _scanPanel.IsDisposed || !GetClientRect(_dialog, out RECT bounds))
+            return;
+        int x = Math.Clamp(24, 3, Math.Max(3, bounds.Width - _scanPanel.Width - 8));
+        int y = Math.Clamp(153, 60, Math.Max(60, bounds.Height - _scanPanel.Height - 35));
+        SetWindowPos(_scanPanel.Handle, IntPtr.Zero, x, y,
+            _scanPanel.Width, _scanPanel.Height, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    }
+
+    private static void HideScanPanel()
+    {
+        UserControl? previous = _scanPanel;
+        _scanPanel = null;
+        _scanStatus = null;
+        _scanBar = null;
+        try { previous?.Dispose(); } catch { }
+    }
+
+    private static void CancelPendingScan()
+    {
+        // Increment the serial to invalidate progress/result callbacks from
+        // previous folder selections; cancellation is cooperative.
+        _scanSerial++;
+        try { _scanCancellation?.Cancel(); } catch (ObjectDisposedException) { }
+        _scanCancellation = null;
+        HideScanPanel();
     }
 
     private static bool TryBindNativeList(IntPtr dialog, out List<NativeEntry> result)
@@ -576,6 +698,7 @@ internal static class ProjectFolderLinePicker
 
     public static void ClearFolder()
     {
+        CancelPendingScan();
         if (_dialog != IntPtr.Zero)
             ActiveDwgTags.ClearOneTag(_dialog, null);
         _folder = "";
@@ -596,6 +719,7 @@ internal static class ProjectFolderLinePicker
 
     public static void Hide()
     {
+        CancelPendingScan();
         HideFolderMenu();
         _folder = "";
         DestroyProjection();
