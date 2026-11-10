@@ -223,22 +223,31 @@ for(int i=0;i<tenGroup.Views.Count;i++)
             "REV22 ten viewport rectangles cannot overlap");
     }
 }
-// REV22.26: the requested all-automatic Ortho layout needs NO click.
-// Derive top anchor from the saved 10-view native plan and reserve titles.
-var autoTen26=NativeOrthoTenViewAutoPlacement26.Build(ten,594,841);
+// REV22.26: test a representative full-scale support envelope. The
+// older REV22 tiny geometry smoke fixture intentionally has native
+// viewports too narrow for titles, and must NOT be silently accepted.
+var actualSupport26=NativeOrthoLayout.Build(
+    new BoundingBox3(0,0,0,703.275,924.229,1382.489),1);
+var tenCandidate26=NativeOrthoTenViewPlan.Build(actualSupport26,594,841);
+var tenOriginal26=NativeOrthoTenViewPlan.BuildAdjusted(
+    tenCandidate26,594,841,
+    tenCandidate26.Views[0].CenterX,
+    tenCandidate26.Views[0].CenterY);
+var autoTen26=NativeOrthoTenViewAutoPlacement26.Build(
+    tenCandidate26,594,841);
 Assert(autoTen26.Views.Count==10&&autoTen26.Titles.Count==10,
     "REV22.26 no-click planner automatically returns ten native viewport centers and ten titles");
 Assert(autoTen26.Views.Select(v=>v.Name).SequenceEqual(tenExpected)&&
     autoTen26.Titles.Select(t=>t.Name).SequenceEqual(tenExpected),
     "REV22.26 retain all ten TOP BOTTOM LEFT RIGHT FRONT BACK NW NE SW SE slots");
-Assert(Math.Abs(autoTen26.SuggestedTopX-ten.Views[0].CenterX)<1e-8&&
-    Math.Abs(autoTen26.SuggestedTopY-ten.Views[0].CenterY)<1e-8&&
+Assert(Math.Abs(autoTen26.SuggestedTopX-tenCandidate26.Views[0].CenterX)<1e-8&&
+    Math.Abs(autoTen26.SuggestedTopY-tenCandidate26.Views[0].CenterY)<1e-8&&
     Math.Abs(autoTen26.FinalTopX-autoTen26.Views[0].CenterX)<1e-8&&
     Math.Abs(autoTen26.FinalTopY-autoTen26.Views[0].CenterY)<1e-8,
     "REV22.26 native plan directly provides TOP placement without cursor input");
 for(int i=0;i<10;i++)
 {
-    var source=tenGroup.Views[i];
+    var source=tenOriginal26.Views[i];
     var final=autoTen26.Views[i];
     var title=autoTen26.Titles[i];
     Assert(Math.Abs(source.CenterX-final.CenterX)<1e-8&&
@@ -252,11 +261,16 @@ for(int i=0;i<10;i++)
         final.CenterY+final.PaperFrameHeight/2<=841*.94+1e-6,
         "REV22.26 automated view and caption sit outside titleblock and within paper "+final.Name);
 }
+bool tiny26Rejected=false;
+try{NativeOrthoTenViewAutoPlacement26.Build(ten,594,841);}
+catch(InvalidOperationException){tiny26Rejected=true;}
+Assert(tiny26Rejected,
+    "REV22.26 must reject a geometry fixture with views too narrow for real titles");
 bool tooSmallAuto26=false;
-try{NativeOrthoTenViewAutoPlacement26.Build(ten,100,100);}
+try{NativeOrthoTenViewAutoPlacement26.Build(tenCandidate26,140,780);}
 catch(InvalidOperationException){tooSmallAuto26=true;}
 Assert(tooSmallAuto26,
-    "REV22.26 fails closed when an automatic ten-view group cannot fit on sheet");
+    "REV22.26 fails closed when the automatic ten-view group cannot fit on sheet");
 Console.WriteLine("PASS: REV22.26 ten native Ortho views and ten titles placed automatically, with zero placement clicks.");
 
 var tenClick=NativeOrthoTenViewPlan.BuildAdjusted(ten,594,841,115,370);
