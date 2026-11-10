@@ -503,10 +503,15 @@ internal static class ProjectFolderLinePicker
     {
         if (_document is null || _dialog == IntPtr.Zero) return;
         CancelPendingScan();
+        bool cacheHit = ProjectFolderLineCatalog.IsCached(folder);
+        if (!cacheHit)
+            PausePrecacheForSelection();
         var cts = new CancellationTokenSource();
         _scanCancellation = cts;
         long serial = ++_scanSerial;
-        ShowScanPanel(folder, cts);
+        // Already verified folders load instantly; no progress popup.
+        if (!cacheHit)
+            ShowScanPanel(folder, cts);
 
         try
         {
@@ -599,6 +604,8 @@ internal static class ProjectFolderLinePicker
                 HideScanPanel();
             }
             cts.Dispose();
+            if (!cacheHit)
+                ResumePrecacheAfterSelection();
         }
     }
 
@@ -875,6 +882,7 @@ internal static class ProjectFolderLinePicker
 
     public static void Hide()
     {
+        StopPrecache();
         CancelPendingScan();
         HideFolderMenu();
         _folder = "";
