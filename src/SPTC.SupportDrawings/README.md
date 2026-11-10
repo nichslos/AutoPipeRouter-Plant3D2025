@@ -1,3 +1,29 @@
+# REV22.27 — Native Plant 3D PIPE Line Number Tag + BOP annotations on all ten Ortho views
+
+**New isolated command:** `SPTC_ORTHO22_27_PIPE_BOP_TEST` — AutoCAD Plant 3D 2025, COPIED project only. **REV22.26 and all earlier commands are unchanged.** Source screenshot: selected native `Pipe`, `Spec=CS300`, `Size=100`, `Line Number Tag=Unassigned`, `Bottom of Pipe=1117.5745`, `Top of Pipe=1231.8745`, `COP Elevation (Port 1)=1174.7245`. The last two are **not** BOP.
+
+**Per-pipe label example:**
+```text
+[PIPE_HANDLE] Line Number Tag: Unassigned
+BOP EL. +1117.5745 mm
+```
+
+**True source data only:** `SupportOrthoPlantPipe27.Read` accepts ONLY selected native Pipe entities in the dedicated nearby-pipe selection. It reads the active project's `Piping.DataLinksManager.FindAcPpRowId` / `GetAllProperties(row,true)`. Where the PnP row omits a calculated property, it additionally searches the **same entity's actual property descriptors** for `Line Number Tag` and `Bottom of Pipe`, or direct declared attributes. The `SupportOrthoPipeLabel27` parser preserves a real `Unassigned` tag when present; missing tags are shown as `Not available`, not assumed Unassigned. For BOP it reads only an explicit `BottomOfPipe`, `Bottom of Pipe`, or BOP property. If missing, `BOP: N/A` — never fabricated from TOP, COP, the nominal size, or raw geometric extents. The value is represented in model millimeters (drawing units must already be physically verified).
+
+**Pipe anchors and SupportFocus:** The long pipe's full `GeometricExtents` are never added to support X/Y bounds. The plugin still clips locally using the existing SupportFocus plan. The leader anchor uses the intersection of the actual pipe's source bounds with the compact native OrthoCube; pipes outside this cube are not labeled. This is bounds-based, not occlusion-aware; manually verify the leader targets the visible pipe segment.
+
+**Label construction:** `SupportOrthoMemberCalloutPlan27` combines the previous native Structure Member + Support annotation sources with the selected Pipe sources. Every source retains its independent handle. The pipe's secondary line is marked as BOP and counted independently from **horizontal-only steel TOS** and actual/approximate **Plant 3D Support TOS**. One-line or two-line labels use REV22.23 native non-wrapping measured `DBText`, paper-safe label rectangles and individual leaders, with explicit skip warnings if text cannot fit. No native Plant 3D `PLANTORTHOANNOTATE` association is claimed.
+
+**Auto placement preserved:** REV22.26's **zero insertion clicks**, same TOP/BOTTOM/LEFT/RIGHT/FRONT/BACK/NW/NE/SW/SE presets, two-column×five-row sheet, saved camera metadata, 10 titles, SupportFocus and optional local-pipe selection. Native views still generate from Autodesk's unsupported internal API. Use a COPIED registered model and native Ortho seed only.
+
+**Test:** Fully restart Plant 3D 2025, `NETLOAD` the new DLL, open the source model in a copied project. Run `SPTC_ORTHO22_27_PIPE_BOP_TEST`. Choose `SupportFocus`; select the Structure Members and/or Plant 3D Supports as before (without pipes). At the **next nearby Pipe selection prompt**, select one or more *native Pipe* objects to be annotated (not blocks or general solids). Choose an EMPTY Project Manager-registered native Ortho seed. Enter `REV22.27 TEST`. All ten views place automatically (no TOP anchor click). Verify the pipe line tags and BOP values against the source properties, and note any unavailable values.
+
+**Log:** `REV22_27_SELECTED_PIPE_IDS`, `REV22_27_PIPE_CANDIDATES`, `REV22_27_PIPE_PNP_LINKED_ROWS`, `REV22_27_PIPE_ANNOTATION_SOURCES`, `REV22_27_PIPE_SOURCE`, `REV22_27_PIPE_DIAGNOSTIC`, `STEP10_PIPE_BOP_LABEL_COUNT`, `STEP10_PIPE_BOP_EXPECTED`, `STEP5_PAPER_POINT_CLICKS_REQUIRED=0`, `STEP10_ALL_TEN_NATIVE_VIEWS_REGISTERED=True`, `STEP10_VIEW_TITLE_COUNT=10`, `STEP10_MEMBER_ANNOTATIONS_CHECK=PASS/PARTIAL`. **PASS** means label/registration counts agree, not that every property was accessible or the annotation endpoint is visually unobstructed. Submit `*_REV22_27_RESULT.txt` plus FRONT/NW close-up screenshots.
+
+**Important:** A Pipe tag of `Unassigned` is evidence that its line tag is not assigned, not a concrete project line number. Don't fabricate one. The annotations are nonassociative; check after model/view updates. This experimental native Ortho generator is not approved for production projects.
+
+---
+
 # REV22.26 — AUTO-PLACE ALL TEN NATIVE ORTHO VIEWS (ZERO PLACEMENT CLICKS)
 
 **New isolated Plant 3D 2025 test command:** `SPTC_ORTHO22_26_AUTO_PLACE_TEN_TEST`. Do not use in production: original native internal Autodesk `GenerateOrthos` remains unsupported. Test only in COPIED registered Plant 3D project; type `REV22.26 TEST` when prompted. REV22.25 and earlier commands remain available and untouched.
