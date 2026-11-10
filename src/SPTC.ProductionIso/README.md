@@ -1,32 +1,36 @@
-# SPTC Production Iso REV20 — Manual Folder Scan and Resizable Line Numbers
+# SPTC Production Iso REV21 — Stretch Native Filter and Keep Lines Visible
 
-**Baseline:** REV19. All previous revision branches and DLLs remain unchanged.
+**Baseline:** REV20. Earlier revision source branches and DLLs are unchanged.
 
-## Requested changes
-**1. No startup folder scanning.** REV18's automatic folder precache is **not launched** when Create Production Iso opens. The native dialog should become available without extra project-wide background PnP scans. The dropdown still uses the existing REV16 on-demand incremental scan with progress and Cancel when a folder is actually selected. A completed folder is cached only within the current dialog, so selecting it again does not rescan.
+## Fix 1: Native Filter bar follows the resized Display lines pane
+In REV20, the left **Display lines** GroupBox and line checklist could be widened, but the Autodesk native Line Numbers filter/search control and its funnel stayed at their old positions. This made the original funnel overlap the search area while the new folder arrow had already moved to the far right.
 
-**2. Wider, draggable left panel.** REV20 adds a narrow vertical resize grip on the boundary between the native **Display lines** and **Output settings** group boxes. Drag the grip right to widen the Line Numbers list and show long pipeline names without relying on horizontal scrolling; drag left to reduce it. When the dialog is very wide, the left pane starts wider automatically.
+REV21:
+- Captures the **original** filter textbox and native funnel positions before widening the panel.
+- Resizes the filter textbox (and its fixed-width ancestor containers, when present) to follow the expanded left pane.
+- Moves the original funnel icon to stay near the right edge of the Display lines section.
+- Anchors the custom folder dropdown just to the **left** of the original funnel using the GroupBox's current right edge (not the old search textbox width).
+- Preserves the same native search text; the resize handler only changes UI geometry and does not set filter values or modify line groups.
+- Keeps the draggable splitter and wider line checklist from REV20.
 
-The grip is enabled only if the running AutoCAD Plant 3D 2025 dialog exposes the two original **Display lines** and **Output settings** sections as sibling WinForms GroupBoxes. Both are required. If Autodesk uses a different native UI layout, the plugin leaves the original controls alone rather than guessing, and the drag grip will be unavailable. This is a safe fallback; please report the screen behavior in that case.
+## Fix 2: Avoid leaving a zero-line native list after automatic active-route filtering
+REV09+ uses Autodesk's native search textbox to implement the Drawing/Project active/all toggle. If the verified line tag does **not** match the native list in the selected Drawing/Project mode, REV20 could leave a long tag in the search textbox with **Select All (0)** and an empty line list.
 
-The implementation keeps the native original line checklist (not a copy). It tries both regular WinForms parent layout and the fixed-left-column TableLayoutPanel case, preserving space for Output settings. Any nested line-list container grows with the left border. The Custom Save Location field is repositioned in sync with the native Revision number row during resizing, retaining REV19 alignment.
+REV21 checks the native line count after a short delay **only when the plugin applied the active tag**. If the native list is empty, the plugin clears its automatic filter, restores the native list, and resynchronizes the toggle. It does not delete, rename, or edit any route; the text field is a filter, not a model tag editor.
 
-## Preserved
-- REV05 automatic copying of completed ISOs to Custom Save Location.
-- REV06 Select All and REV17 **Select All (N)** counter.
-- REV09–11 Active DWG / All line-number toolbar toggle.
-- REV15 first-level drawing-folder dropdown in the Line Numbers filter row.
-- REV16 folder scan with progress/Cancel on **user selection only**.
-- REV19 responsive Custom Save Location label, textbox and Browse.
-- Original project data, default ISO settings, PnP tables and model DWGs unchanged.
+## Still preserved
+- **No automatic folder scanning at dialog startup** (REV20).
+- Folder scanning begins **only after choosing a folder**; progress/Cancel and caching during the dialog remain.
+- `Select All (N)`, first-level Plant 3D Drawings folder dropdown, custom path, responsive Revision/Custom Save Location fields, and automatic copying of completed Production ISO DWGs.
+- No project/database or `IsoConfig.xml` edits.
 
-## Test
-1. Close Plant 3D completely, restart and NETLOAD REV20 `SPTC.ProductionIso.dll`.
-2. Open a drawing and run `SPTC_PRODISO`. Verify the normal list appears without an automatic folder scan.
-3. Look at the border between **Display lines** and **Output settings**. On supported native UI versions, a thin resize grip should appear; drag right to widen the Line Numbers list.
-4. Confirm long line names become visible without horizontal scrolling and the Output settings controls (Iso Style, Revision, Custom Save Location, Browse) remain usable.
-5. Stretch the entire dialog width and adjust the divider again. Verify the Custom Save Location textbox remains aligned with Revision and resizes.
-6. Choose a folder from the dropdown; scanning should begin **only then**. Check that Select All (N) continues to count the displayed items.
-7. Generate one known-good ISO to verify the selected native line checkbox and custom export location. Avoid generating all project ISOs until the line selection is confirmed.
+## Recommended test
+1. Fully exit/reopen Plant 3D 2025, then `NETLOAD` REV21 `SPTC.ProductionIso.dll`.
+2. Run `SPTC_PRODISO` and verify there is no automatic scan.
+3. Widen **Display lines** with the separator. Confirm that the **native funnel** and custom folder arrow move together to the right end of the filter row; the text entry area grows and remains legible.
+4. Confirm that route names stay inside the **Line Numbers** checklist and `Select All (N)` matches.
+5. Click Drawing or Project top icons to test the active/full toggle. If a long tag matches nothing, the list should automatically recover instead of remaining blank.
+6. Select a folder to confirm its on-demand scan still works; then choose All Project.
+7. Confirm Custom Save Location still stretches with the dialog and generate only a single known-good ISO test.
 
-**Runtime limitation:** GitHub compilation is not a Plant 3D GUI runtime test. Native dialog control structures differ among Autodesk builds. If the divider fails to appear or is unstable, send a screenshot and AutoCAD F2 output; the original REV19 build remains available.
+**Experimental:** compilation does not verify the proprietary Autodesk dialog layout at runtime. For an unrecognized native filter implementation, the plugin will skip that control rather than modify unrelated UI. Share a screenshot and F2 output if alignment or native line selection is not correct.
