@@ -271,6 +271,73 @@ try{NativeOrthoTenViewAutoPlacement26.Build(tenCandidate26,140,780);}
 catch(InvalidOperationException){tooSmallAuto26=true;}
 Assert(tooSmallAuto26,
     "REV22.26 fails closed when the automatic ten-view group cannot fit on sheet");
+// REV22.27 user screenshot: Pipe Line Number Tag=Unassigned,
+// BOP=1117.5745, TOP=1231.8745, COP=1174.7245.
+// Only the actual BottomOfPipe source supplies BOP elevation.
+var pipeProps27=new Dictionary<string,string>
+{
+    ["Class"]="Pipe",["Spec"]="CS300",["Size"]="100",
+    ["Line Number Tag"]="Unassigned",
+    ["Bottom of Pipe"]="1117.5745",
+    ["Top of Pipe"]="1231.8745",
+    ["COP Elevation (Port 1)"]="1174.7245"
+};
+var pipe27=SupportOrthoPipeLabel27.Evaluate(pipeProps27);
+Assert(pipe27.LineTag=="Unassigned"&&
+    pipe27.LineSource=="EXPLICIT_LINE_NUMBER_TAG"&&
+    pipe27.BopText=="BOP EL. +1117.5745 mm"&&
+    pipe27.BopSource=="EXPLICIT_BOTTOM_OF_PIPE",
+    "REV22.27 exact source Pipe line tag and BOP elevation; no rounding or TOP/COP substitution");
+Assert(SupportOrthoPipeLabel27.IsNativePipeType("Pipe")&&
+    SupportOrthoPipeLabel27.IsNativePipeType("AcPpDb3dPipe")&&
+    !SupportOrthoPipeLabel27.IsNativePipeType("AcPpSupport")&&
+    !SupportOrthoPipeLabel27.IsNativePipeType("StructureMember"),
+    "REV22.27 recognize native Plant 3D Pipe but never Support or steel as pipe");
+var missingPipe27=SupportOrthoPipeLabel27.Evaluate(
+    new Dictionary<string,string>{
+        ["Top of Pipe"]="1231.8745",
+        ["COP Elevation (Port 1)"]="1174.7245"
+    });
+Assert(missingPipe27.BopText=="BOP: N/A"&&
+    missingPipe27.LineTag=="Not available"&&
+    missingPipe27.BopSource=="BOP_NOT_AVAILABLE",
+    "REV22.27 never fabricate Bottom of Pipe from TOP/COP and never assume Unassigned tag");
+var rev227Source=rev223Members.Select(m=>
+    new SupportOrthoMemberCalloutPlan27.Member(
+        m.Handle,m.Size,m.X,m.Y,m.Z,
+        m.IsHorizontal,m.TosText,m.TosSource))
+    .Concat(new[]{
+        new SupportOrthoMemberCalloutPlan27.Member(
+            "7FA","Clamped Stanchion 16\"",
+            7956.295,3484.858,612.937,true,
+            tosApprox25.Text,tosApprox25.Source),
+        new SupportOrthoMemberCalloutPlan27.Member(
+            "9E1","Line Number Tag: "+pipe27.LineTag,
+            7956.295,3484.858,612.937,
+            false,null,"NOT_STEEL_TOS",
+            pipe27.BopText,pipe27.BopSource)
+    }).ToArray();
+var rev227Plan=SupportOrthoMemberCalloutPlan27.Build(
+    rev217Cameras,reservedTitleFrames.Titles,rev227Source,594,841);
+Assert(rev227Plan.Callouts.Count==150&&
+    rev227Plan.Callouts.Count(x=>x.Handle=="9E1"&&x.IsPipe)==10&&
+    rev227Plan.BopLines==10,
+    "REV22.27 ten native views annotate exactly one selected Pipe in addition to support/steel");
+Assert(rev227Plan.Callouts.Where(x=>x.Handle=="9E1").All(x=>
+    x.HasTos&&
+    x.Text=="[9E1] Line Number Tag: Unassigned\\nBOP EL. +1117.5745 mm"&&
+    !x.Text.Contains("TOS")),
+    "REV22.27 two separate nonwrapping DBText lines: real Line Number Tag and BOP");
+Assert(rev227Plan.TosLines==rev223Plan.HorizontalTosLines+10&&
+    rev227Plan.Callouts.Count(x=>x.Handle=="7FA"&&
+        x.Text.Contains("TOS ~ "))==10,
+    "REV22.27 Pipe BOP must not alter steel horizontal-only or Support TOS counts");
+Assert(rev227Plan.Callouts.All(x=>
+    x.LabelX+x.LabelWidth<=594*.78&&
+    x.LabelTop-x.LabelHeight>=841*.12),
+    "REV22.27 pipe BOP annotations obey the same paper safe bounds");
+Console.WriteLine("PASS: REV22.27 native pipe Line Number Tag + exact BOP separate from COP/TOP and TOS, 150 mixed annotations.");
+
 Console.WriteLine("PASS: REV22.26 ten native Ortho views and ten titles placed automatically, with zero placement clicks.");
 
 var tenClick=NativeOrthoTenViewPlan.BuildAdjusted(ten,594,841,115,370);
