@@ -789,6 +789,7 @@ jobs:
           $reader = Get-Content 'src/SPTC.SupportDrawings/SupportOrthoPlantSupport25.cs' -Raw
           $elev = Get-Content 'src/SPTC.SupportDrawings/SupportOrthoSupportTos25.cs' -Raw
           $planner = Get-Content 'src/SPTC.SupportDrawings/SupportOrthoMemberCalloutPlan25.cs' -Raw
+          $supportLabel = Get-Content 'src/SPTC.SupportDrawings/SupportOrthoSupportLabel24.cs' -Raw
           if($new -notmatch 'CommandMethod\("SPTC_ORTHO22_25_SUPPORT_TOS_TEST"') { throw 'REV22.25 command missing' }
           if($prior -notmatch 'CommandMethod\("SPTC_ORTHO22_24_SUPPORT_COMPAT_TEST"') { throw 'REV22.24 fallback missing' }
           if($new -notmatch 'REV22.25 TEST') { throw 'Copied project guard missing' }
@@ -799,7 +800,7 @@ jobs:
             if(-not $elev.Contains($term)) { throw "Missing safe support TOS property: $term" }
           }
           foreach($term in @('SupportOrthoSupportTos25.Evaluate','b.MaxPoint.Z','TosText','TosSource','LongDescriptionSize','DataLinksManager')) {
-            if(-not (($reader+$new).Contains($term))) { throw "Support source TOS or PnP missing: $term" }
+            if(-not (($reader+$new+$supportLabel).Contains($term))) { throw "Support source TOS or PnP missing: $term" }
           }
           if(-not $planner.Contains('bool addTos=member.HasTos;')) { throw 'REV22.25 support and steel TOS must use explicit per-object eligibility' }
           if(-not $planner.Contains('SUPPORT_GEOMETRIC_TOP_APPROX')) { throw 'Support geometric elevation must display as TOS ~, never exact' }
