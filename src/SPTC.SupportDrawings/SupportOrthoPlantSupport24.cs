@@ -118,7 +118,6 @@ internal static class SupportOrthoPlantSupport24
                             dlm,new object[]{id}));
                         if(row>0)
                         {
-                            linked++;
                             if(getProps.Invoke(dlm,new object[]{row,true})
                                 is IEnumerable pairs)
                             {
@@ -150,8 +149,22 @@ internal static class SupportOrthoPlantSupport24
                 // class name in either Entity ObjectClass or GetAllProperties.
                 bool rowIsSupport=SupportOrthoSupportLabel24.IsSupportClass(
                     className);
-                if(!nativeSupport&&!rowIsSupport)continue;
+                // The Properties palette can expose derived class Support
+                // while GetAllProperties omits Class entirely. In that case
+                // the dedicated PipeSupportsSpec + Support part subtype is
+                // authoritative support-category evidence.
+                string spec=SupportOrthoSupportLabel24.Get(
+                    data,"Spec")??"";
+                string subtype=SupportOrthoSupportLabel24.Get(
+                    data,"PartSubType","Part Subtype")??"";
+                bool supportSpec=SupportOrthoSupportLabel24.Normalize(spec)
+                    =="PIPESUPPORTSSPEC";
+                bool supportSubtype=SupportOrthoSupportLabel24.IsSupportClass(
+                    subtype);
+                if(!nativeSupport&&!rowIsSupport&&!supportSpec&&!supportSubtype)
+                    continue;
                 candidates++;
+                if(row>0)linked++;
                 if(row<=0)
                 {
                     notes.Add("SUPPORT_PNP_ROW_MISSING="+handle+
