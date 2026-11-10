@@ -394,7 +394,7 @@ internal static class NativeIsoDialogEnhancer
                 return true;
             if (rect.Width < 110 || rect.Height < 15 || rect.Height > 43)
                 return true;
-            if (rect.Left < label.Left + 90 ||
+            if (rect.Left < labelRect.Left + 90 ||
                 Math.Abs(rect.Top + rect.Height / 2 - labelCenterY) > 17)
                 return true;
 
