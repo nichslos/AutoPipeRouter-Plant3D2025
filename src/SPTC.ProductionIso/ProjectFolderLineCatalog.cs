@@ -4,6 +4,8 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Threading;
+using System.Threading.Tasks;
 using Autodesk.AutoCAD.ApplicationServices;
 
 namespace SPTC.ProductionIso;
@@ -14,6 +16,7 @@ internal static class ProjectFolderLineCatalog
 {
     public sealed record FolderChoice(string Key, string Caption, int DrawingCount);
     public sealed record FolderLines(string Folder, IReadOnlyList<string> Tags, int DrawingCount, string Note);
+    public sealed record ScanProgress(int Done, int Total, int TagsFound);
     private sealed record Drawing(string RelativePath, string Folder, int DrawingId);
 
     private static readonly List<Drawing> Registered = new();
@@ -156,7 +159,11 @@ internal static class ProjectFolderLineCatalog
         }
     }
 
-    public static FolderLines GetLiveTags(string folder)
+    // REV16: No arbitrary 120-DWG cutoff. Process project database lookups in
+    // short, cancellable slices on Plant 3D's UI synchronization context.
+    // IMPORTANT: Never Task.Run these Autodesk/PnP API calls on worker threads.
+    public static async Task<FolderLines> GetLiveTagsAsync(
+        string folder, IProgress<ScanProgress>? progress, CancellationToken cancellation)
     {
         if (!_ready || _dataLinks is null || _pnpDatabase is null)
             return new FolderLines(folder, Array.Empty<string>(), 0, _diagnostic);
@@ -165,13 +172,10 @@ internal static class ProjectFolderLineCatalog
             return cached;
 
         var drawings = Registered.Where(d => IsWithin(d.Folder, folder)).ToList();
-        if (drawings.Count > 120)
-            return new FolderLines(folder, Array.Empty<string>(), drawings.Count,
-                "Folder has more than 120 DWGs; automatic list filtering is disabled to avoid UI lag.");
-
         var tags = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
         try
         {
+            cancellation.ThrowIfCancellationRequested();
             object? linksTable = GetIndexed(GetProperty(_pnpDatabase, "Tables"), "PnPDataLinks");
             if (linksTable is null)
                 return new FolderLines(folder, Array.Empty<string>(), drawings.Count,
@@ -185,58 +189,90 @@ internal static class ProjectFolderLineCatalog
                 return new FolderLines(folder, Array.Empty<string>(), drawings.Count,
                     "Required Piping line-group relationship methods unavailable.");
 
-            int rowBudget = 10000;
+            // Protect against a pathological/corrupt project without refusing
+            // ordinary folders merely because they contain >120 drawings.
+            const int MaxInspectedRows = 500000;
+            int inspectedRows = 0;
+            int completed = 0;
+            progress?.Report(new ScanProgress(0, drawings.Count, 0));
             foreach (Drawing drawing in drawings)
             {
-                // Verify that a line group has at least one LIVE part in THIS DWG,
-                // not merely an old project-wide/renamed line-group record.
+                cancellation.ThrowIfCancellationRequested();
+                // Determine actual Plant part row IDs registered in this DWG.
+                // The same verified drawing-to-group/part relationship from REV15
+                // is retained; no geometry or project tables are changed.
                 var livePartIds = new HashSet<int>();
                 foreach (object row in ReadRows(linksTable, "DwgId=" + drawing.DrawingId))
                 {
-                    if (--rowBudget <= 0)
-                        throw new InvalidOperationException("Piping data exceeds safe 10,000-record read limit.");
+                    cancellation.ThrowIfCancellationRequested();
+                    if (++inspectedRows > MaxInspectedRows)
+                        throw new InvalidOperationException(
+                            "More than 500,000 database records inspected; scan stopped safely. Try a smaller folder.");
                     int partRow = ReadInt(row, "RowId");
                     if (partRow > 0) livePartIds.Add(partRow);
+                    if ((inspectedRows % 200) == 0)
+                        await Task.Delay(1, cancellation);
                 }
-                if (livePartIds.Count == 0) continue;
-
-                object? groups = related.Invoke(_dataLinks,
-                    new object[] { "P3dDrawingLineGroupRelationship", "Drawing", drawing.DrawingId, "LineGroup" });
-                if (groups is not IEnumerable groupIds) continue;
-                foreach (object? groupObj in groupIds)
+                if (livePartIds.Count > 0)
                 {
-                    if (groupObj is null) continue;
-                    int groupId = Convert.ToInt32(groupObj);
-                    if (groupId <= 0) continue;
-                    object? members = related.Invoke(_dataLinks,
-                        new object[] { "P3dLineGroupPartRelationship", "LineGroup", groupId, "Part" });
-                    if (members is not IEnumerable memberIds) continue;
-
-                    bool hasLivePart = false;
-                    foreach (object? member in memberIds)
+                    cancellation.ThrowIfCancellationRequested();
+                    object? groups = related.Invoke(_dataLinks,
+                        new object[] { "P3dDrawingLineGroupRelationship", "Drawing", drawing.DrawingId, "LineGroup" });
+                    if (groups is IEnumerable groupIds)
                     {
-                        if (--rowBudget <= 0)
-                            throw new InvalidOperationException("Piping data exceeds safe 10,000-record read limit.");
-                        if (member != null && livePartIds.Contains(Convert.ToInt32(member)))
+                        foreach (object? groupObj in groupIds)
                         {
-                            hasLivePart = true;
-                            break;
+                            cancellation.ThrowIfCancellationRequested();
+                            if (groupObj is null) continue;
+                            int groupId = Convert.ToInt32(groupObj);
+                            if (groupId <= 0) continue;
+                            object? members = related.Invoke(_dataLinks,
+                                new object[] { "P3dLineGroupPartRelationship", "LineGroup", groupId, "Part" });
+                            if (members is not IEnumerable memberIds) continue;
+
+                            bool hasLivePart = false;
+                            foreach (object? member in memberIds)
+                            {
+                                cancellation.ThrowIfCancellationRequested();
+                                if (++inspectedRows > MaxInspectedRows)
+                                    throw new InvalidOperationException(
+                                        "More than 500,000 database records inspected; scan stopped safely. Try a smaller folder.");
+                                if (member != null && livePartIds.Contains(Convert.ToInt32(member)))
+                                {
+                                    hasLivePart = true;
+                                    break;
+                                }
+                                if ((inspectedRows % 200) == 0)
+                                    await Task.Delay(1, cancellation);
+                            }
+                            if (!hasLivePart) continue;
+
+                            cancellation.ThrowIfCancellationRequested();
+                            object? props = properties.Invoke(_dataLinks, new object[] { groupId, false });
+                            string tag = ReadKeyValue(props, "Tag");
+                            if (!string.IsNullOrWhiteSpace(tag) &&
+                                !tag.Equals("Unassigned", StringComparison.OrdinalIgnoreCase))
+                                tags.Add(tag.Trim());
                         }
                     }
-                    if (!hasLivePart) continue;
-
-                    object? props = properties.Invoke(_dataLinks, new object[] { groupId, false });
-                    string tag = ReadKeyValue(props, "Tag");
-                    if (!string.IsNullOrWhiteSpace(tag) &&
-                        !tag.Equals("Unassigned", StringComparison.OrdinalIgnoreCase))
-                        tags.Add(tag.Trim());
                 }
+
+                completed++;
+                progress?.Report(new ScanProgress(completed, drawings.Count, tags.Count));
+                // Allow WinForms to repaint and Cancel to run between DWGs.
+                // Individual Autodesk database requests remain synchronous.
+                await Task.Delay(5, cancellation);
             }
 
+            cancellation.ThrowIfCancellationRequested();
             var result = new FolderLines(folder, tags.ToArray(), drawings.Count,
                 $"Verified {tags.Count} live line tag(s) in {drawings.Count} registered DWG(s).");
-            CachedLines[folder] = result;
+            CachedLines[folder] = result; // Cache only full, successful scans.
             return result;
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        {
+            throw; // Caller restores the original line list with no partial data.
         }
         catch (Exception ex)
         {
