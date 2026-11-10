@@ -103,7 +103,8 @@ internal static class NativeIsoLinePaneResizer
         _lastParentWidth = _parent.ClientSize.Width;
         if (_parent is TableLayoutPanel table &&
             table.GetColumn(_left) >= 0 &&
-            table.GetColumn(_right) > table.GetColumn(_left))
+            table.GetColumn(_right) > table.GetColumn(_left) &&
+            table.GetColumn(_left) < table.GetColumnWidths().Length)
         {
             _leftColumn = table.GetColumn(_left);
             _rightColumn = table.GetColumn(_right);
