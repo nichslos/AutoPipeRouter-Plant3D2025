@@ -81,7 +81,9 @@ internal static class NativeIsoDialogEnhancer
         _nativeClosedAt = DateTime.MinValue;
         // REV09: discover active DWG line-group tags but do not filter
         // the native list until the user explicitly clicks a top mode icon.
-        ActiveDwgTags.Scan(doc);
+        // REV22: do not scan every model component while opening the dialog.
+        // Read current piping objects on the first requested active-DWG view.
+        ActiveDwgTags.Invalidate();
         _watch = new System.Windows.Forms.Timer { Interval = 1500 };
         _watch.Tick += OnTick;
         _watch.Start();
@@ -159,28 +161,25 @@ internal static class NativeIsoDialogEnhancer
                     // filter after Autodesk finishes updating the line list.
                     NativeIsoToolbarClickFilter.Attach(native, showActive =>
                     {
-                        // REV13: a Drawing/Project button click exits the
-                        // selected folder view before native list modes change.
-                        if (ProjectFolderLinePicker.FolderActive)
-                        {
-                            ProjectFolderLinePicker.ClearFolder();
+                        // REV22: native toolbar clicks are handed to Autodesk
+                        // unchanged. Our supplemental exact-match list is
+                        // removed immediately before Autodesk refreshes it.
+                        // No substring search is written into the filter field.
+                        if (!showActive)
+                            return true; // Native Drawing/Project full list
+
+                        if (_document is null)
                             return false;
-                        }
-                        if (ActiveDwgTags.Count != 1) return false;
-                        // REV10: first click shows this DWG's actual route,
-                        // next click clears the filter and restores native lines.
-                        // REV21: the top buttons previously left a long
-                        // route tag in Search even when the filtered native
-                        // line list was EMPTY. Fail open: restore native lines
-                        // if the tag cannot be displayed after Autodesk updates.
-                        CancelFilterVerification();
-                        if (showActive)
-                        {
-                            bool applied = ActiveDwgTags.ApplyOneTag(native, _document);
-                            if (applied) VerifyFilterHasVisibleLines(native);
-                            return applied;
-                        }
-                        return ActiveDwgTags.ClearOneTag(native, _document);
+                        if (!ActiveDwgTags.HasScanned)
+                            ActiveDwgTags.Scan(_document);
+
+                        // Count may legitimately be >1 if two routes have
+                        // components in this DWG. Never guess which is newer.
+                        if (ActiveDwgTags.Count == 0)
+                            return false;
+
+                        return ProjectFolderLinePicker.ShowExactActiveDwgTags(
+                            ActiveDwgTags.CurrentTags, _document);
                     });
                 }
 
