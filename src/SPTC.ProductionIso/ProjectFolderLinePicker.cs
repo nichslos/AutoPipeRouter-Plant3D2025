@@ -36,10 +36,15 @@ internal static class ProjectFolderLinePicker
     [DllImport("user32.dll")] private static extern IntPtr GetParent(IntPtr hwnd);
     [DllImport("user32.dll")] private static extern bool SetWindowPos(IntPtr hwnd, IntPtr after, int x, int y, int width, int height, uint flags);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetClassName(IntPtr hwnd, StringBuilder cls, int size);
+    [DllImport("user32.dll")] private static extern IntPtr SendMessage(
+        IntPtr hwnd, int message, IntPtr wParam, IntPtr lParam);
 
     private const uint SWP_SHOWWINDOW = 0x0040;
     private const uint SWP_NOACTIVATE = 0x0010;
     private const uint SWP_NOZORDER = 0x0004;
+    private const int WM_LBUTTONDOWN = 0x0201;
+    private const int WM_LBUTTONUP = 0x0202;
+    private const int MK_LBUTTON = 0x0001;
 
     private sealed record NativeEntry(int Index, string Tag);
     private static IntPtr _dialog;
@@ -58,6 +63,8 @@ internal static class ProjectFolderLinePicker
     private static ListView? _nativeView;
     private static readonly List<NativeEntry> VisibleEntries = new();
     private static bool _updating;
+    private static System.Windows.Forms.Timer? _nativeCommitTimer;
+    private static bool _committingNative;
     private static string _folder = "";
     private static bool _activeDwgView;
     public static bool ActiveDwgView => _activeDwgView;
@@ -870,27 +877,200 @@ internal static class ProjectFolderLinePicker
         NativeIsoLineSelectOverlay.UpdateDisplayedCount();
     }
 
-    private static bool SetNativeChecked(NativeEntry entry, bool check)
+    // REV24: A programmatic .SetItemChecked() changes the icon but does not
+    // necessarily fire Autodesk's native mouse/selection handlers, which can
+    // keep Create disabled. For USER selections only, deliver a genuine
+    // mouse down/up pair directly to the verified original native row.
+    // The source checked-list item's text and final checked state are verified.
+    private static bool SetNativeChecked(NativeEntry entry, bool check,
+        bool userAction = false)
     {
         if (_nativeChecked != null)
         {
-            if (entry.Index >= _nativeChecked.Items.Count ||
-                !_nativeChecked.GetItemText(_nativeChecked.Items[entry.Index])
-                    .Trim().Equals(entry.Tag, StringComparison.OrdinalIgnoreCase))
-                return false;
-            _nativeChecked.SetItemChecked(entry.Index, check);
-            return true;
-        }
-        if (_nativeView != null)
-        {
-            if (entry.Index >= _nativeView.Items.Count ||
-                !_nativeView.Items[entry.Index].Text.Trim()
+            CheckedListBox list = _nativeChecked;
+            if (list.IsDisposed || entry.Index < 0 ||
+                entry.Index >= list.Items.Count ||
+                !list.GetItemText(list.Items[entry.Index]).Trim()
                     .Equals(entry.Tag, StringComparison.OrdinalIgnoreCase))
                 return false;
-            _nativeView.Items[entry.Index].Checked = check;
-            return true;
+
+            if (userAction)
+            {
+                if (!ClickNativeCheckedRow(list, entry.Index, check))
+                    return false;
+                ScheduleNativeSelectionCommit();
+                return list.GetItemChecked(entry.Index) == check;
+            }
+
+            // Preserve REV23 fast programmatic unchecking for hidden old rows.
+            list.SetItemChecked(entry.Index, check);
+            return list.GetItemChecked(entry.Index) == check;
         }
+
+        if (_nativeView != null)
+        {
+            ListView list = _nativeView;
+            if (list.IsDisposed || entry.Index < 0 ||
+                entry.Index >= list.Items.Count ||
+                !list.Items[entry.Index].Text.Trim()
+                    .Equals(entry.Tag, StringComparison.OrdinalIgnoreCase))
+                return false;
+            var item = list.Items[entry.Index];
+            if (userAction)
+            {
+                // For ListView, the real item's Checked + Selected state
+                // triggers its normal ItemChecked/SelectedIndexChanged events.
+                item.Checked = check;
+                item.Selected = true;
+                list.EnsureVisible(entry.Index);
+                ScheduleNativeSelectionCommit();
+            }
+            else item.Checked = check;
+            return item.Checked == check;
+        }
+
         return false;
+    }
+
+    private static bool ClickNativeCheckedRow(
+        CheckedListBox list, int index, bool desired)
+    {
+        if (list.IsDisposed || !list.IsHandleCreated ||
+            index < 0 || index >= list.Items.Count)
+            return false;
+
+        try
+        {
+            bool before = list.GetItemChecked(index);
+            if (before == desired)
+            {
+                // An existing checked row may still need the native selection
+                // event that the original Create button expects.
+                if (desired)
+                {
+                    if (list.SelectedIndex == index) list.ClearSelected();
+                    list.SelectedIndex = index;
+                }
+                return true;
+            }
+
+            int oldTopIndex = list.TopIndex;
+            try
+            {
+                list.TopIndex = index;
+                Rectangle rect = list.GetItemRectangle(index);
+                if (rect.Height <= 0) return false;
+                int x = Math.Clamp(rect.Left + 12, 5, Math.Max(5, list.ClientSize.Width - 6));
+                int y = rect.Top + rect.Height / 2;
+                if (y < 0 || y >= list.ClientSize.Height)
+                    return false;
+
+                IntPtr location = new IntPtr(
+                    ((y & 0xFFFF) << 16) | (x & 0xFFFF));
+
+                // The original Click/ItemCheck/SelectedIndexChanged handlers
+                // now run as with an ordinary click on the native checklist.
+                // Native checkbox may require two clicks if CheckOnClick=false.
+                for (int attempt = 0; attempt < 2 &&
+                     list.GetItemChecked(index) != desired; attempt++)
+                {
+                    SendMessage(list.Handle, WM_LBUTTONDOWN,
+                        new IntPtr(MK_LBUTTON), location);
+                    SendMessage(list.Handle, WM_LBUTTONUP, IntPtr.Zero, location);
+                }
+
+                if (list.GetItemChecked(index) != desired)
+                {
+                    // Safe fallback to the old mechanism if an Autodesk
+                    // custom control ignores synthetic mouse messages.
+                    list.SetItemChecked(index, desired);
+                }
+
+                if (list.GetItemChecked(index) == desired && desired)
+                    list.SelectedIndex = index;
+
+                return list.GetItemChecked(index) == desired;
+            }
+            finally
+            {
+                if (!list.IsDisposed && list.Items.Count > 0)
+                    list.TopIndex = Math.Clamp(oldTopIndex, 0,
+                        list.Items.Count - 1);
+            }
+        }
+        catch (Exception ex)
+        {
+            _document?.Editor.WriteMessage(
+                "\nSPTC REV24: Native checkbox interaction failed: " +
+                ex.GetBaseException().Message);
+            return false;
+        }
+    }
+
+    private static void ScheduleNativeSelectionCommit()
+    {
+        try { _nativeCommitTimer?.Stop(); _nativeCommitTimer?.Dispose(); }
+        catch { }
+        _nativeCommitTimer = new System.Windows.Forms.Timer { Interval = 220 };
+        _nativeCommitTimer.Tick += (_, _) =>
+        {
+            try { _nativeCommitTimer?.Stop(); _nativeCommitTimer?.Dispose(); }
+            catch { }
+            _nativeCommitTimer = null;
+            VerifyNativeCreateState();
+        };
+        _nativeCommitTimer.Start();
+    }
+
+    private static void VerifyNativeCreateState()
+    {
+        if (_committingNative || !HasVisibleProjection || _dialog == IntPtr.Zero)
+            return;
+        _committingNative = true;
+        try
+        {
+            int selected = VisibleEntries.Count(GetNativeChecked);
+            if (selected < 1) return;
+
+            Control? create = null;
+            EnumChildWindows(_dialog, (hwnd, _) =>
+            {
+                if (Control.FromHandle(hwnd) is Button b &&
+                    string.Equals(b.Text.Trim(), "Create",
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    create = b;
+                    return false;
+                }
+                return true;
+            }, IntPtr.Zero);
+            if (create is null || create.Enabled) return;
+
+            // Already-checked native row may need its SelectedIndexChanged
+            // event after the ItemCheck event has fully committed.
+            if (_nativeChecked != null && !_nativeChecked.IsDisposed)
+            {
+                NativeEntry first = VisibleEntries.First(GetNativeChecked);
+                if (_nativeChecked.SelectedIndex == first.Index)
+                    _nativeChecked.ClearSelected();
+                _nativeChecked.SelectedIndex = first.Index;
+            }
+            else if (_nativeView != null && !_nativeView.IsDisposed)
+            {
+                NativeEntry first = VisibleEntries.First(GetNativeChecked);
+                _nativeView.Items[first.Index].Selected = true;
+            }
+
+            // We MUST NOT force Create.Enabled=true. Autodesk may reject
+            // generation for reasons beyond the checkmarks (style, scope,
+            // pipeline validation). Make the discrepancy diagnosable.
+            if (!create.Enabled)
+                _document?.Editor.WriteMessage(
+                    "\nSPTC REV24: Native Create is still disabled despite " +
+                    selected + " checked native ISO line(s). " +
+                    "No forced Create override; verify the native list source and selected route.");
+        }
+        finally { _committingNative = false; }
     }
 
     private static bool GetNativeChecked(NativeEntry entry)
@@ -928,7 +1108,7 @@ internal static class ProjectFolderLinePicker
         {
             if (_updating || e.Index < 0 || e.Index >= VisibleEntries.Count) return;
             bool requested = e.NewValue == CheckState.Checked;
-            if (!SetNativeChecked(VisibleEntries[e.Index], requested))
+            if (!SetNativeChecked(VisibleEntries[e.Index], requested, userAction: true))
             {
                 e.NewValue = e.CurrentValue;
                 _document?.Editor.WriteMessage(
@@ -984,7 +1164,7 @@ internal static class ProjectFolderLinePicker
         {
             for (int i = 0; i < VisibleEntries.Count; i++)
             {
-                bool success = SetNativeChecked(VisibleEntries[i], value);
+                bool success = SetNativeChecked(VisibleEntries[i], value, userAction: true);
                 if (!success) return false;
                 _folderLineList.SetItemChecked(i, value);
             }
@@ -1015,6 +1195,9 @@ internal static class ProjectFolderLinePicker
 
     public static void Hide()
     {
+        try { _nativeCommitTimer?.Stop(); _nativeCommitTimer?.Dispose(); }
+        catch { }
+        _nativeCommitTimer = null;
         StopPrecache();
         CancelPendingScan();
         HideFolderMenu();
