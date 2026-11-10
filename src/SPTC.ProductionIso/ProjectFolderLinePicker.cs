@@ -66,6 +66,15 @@ internal static class ProjectFolderLinePicker
     private static Label? _scanStatus;
     private static ProgressBar? _scanBar;
 
+    // REV18: build a read-only per-folder line-tag cache automatically after
+    // the Production Iso dialog opens. The warm-up runs cooperatively on the
+    // Plant 3D UI thread and is canceled when the dialog closes.
+    private static System.Windows.Forms.Timer? _precacheStart;
+    private static CancellationTokenSource? _precacheCts;
+    private static Task? _precacheTask;
+    private static long _precacheSerial;
+    private static bool _resumePrecache;
+
     private sealed record FolderMenuChoice(string Label, string? Key)
     {
         public override string ToString() => Label;
@@ -206,6 +215,143 @@ internal static class ProjectFolderLinePicker
             return false;
         client = new RECT { Left = a.X, Top = a.Y, Right = b.X, Bottom = b.Y };
         return true;
+    }
+
+    /// <summary>
+    /// Starts a one-time read-ahead of each registered Plant 3D Drawings folder.
+    /// Folder selection later reuses completed results. This is deliberately
+    /// delayed until after the native Create Production Iso dialog has painted.
+    /// </summary>
+    public static void BeginAutomaticPrecache()
+    {
+        if (_dialog == IntPtr.Zero || _document is null) return;
+        if (_precacheTask is { IsCompleted: false }) return;
+        SchedulePrecache(800);
+    }
+
+    private static void SchedulePrecache(int delayMs)
+    {
+        try { _precacheStart?.Stop(); _precacheStart?.Dispose(); } catch { }
+        _precacheStart = new System.Windows.Forms.Timer
+        {
+            Interval = Math.Max(200, delayMs)
+        };
+        _precacheStart.Tick += (_, _) =>
+        {
+            try { _precacheStart?.Stop(); _precacheStart?.Dispose(); } catch { }
+            _precacheStart = null;
+            StartPrecache();
+        };
+        _precacheStart.Start();
+    }
+
+    private static void StartPrecache()
+    {
+        if (_dialog == IntPtr.Zero || _document is null ||
+            _precacheTask is { IsCompleted: false })
+            return;
+
+        var cts = new CancellationTokenSource();
+        _precacheCts = cts;
+        long serial = ++_precacheSerial;
+        Document doc = _document;
+        _precacheTask = RunPrecacheAsync(doc, cts, serial);
+    }
+
+    private static async Task RunPrecacheAsync(
+        Document doc, CancellationTokenSource cts, long serial)
+    {
+        try
+        {
+            // Initial yield allows the native dialog and plugin controls to
+            // become interactive before we access PnP project metadata.
+            await Task.Delay(40, cts.Token);
+            if (!ProjectFolderLineCatalog.Ready)
+                ProjectFolderLineCatalog.Initialize(doc);
+            if (!ProjectFolderLineCatalog.Ready)
+            {
+                doc.Editor.WriteMessage(
+                    "\nSPTC REV18: Automatic folder cache unavailable: " +
+                    ProjectFolderLineCatalog.Diagnostic);
+                return;
+            }
+
+            var folders = ProjectFolderLineCatalog.Folders;
+            doc.Editor.WriteMessage(
+                $"\nSPTC REV18: Preloading line tags for {folders.Count} folders; " +
+                "Production Iso remains usable.");
+
+            foreach (var folder in folders)
+            {
+                cts.Token.ThrowIfCancellationRequested();
+                if (_dialog == IntPtr.Zero || _precacheSerial != serial) return;
+                if (ProjectFolderLineCatalog.IsCached(folder.Key)) continue;
+
+                await Task.Delay(35, cts.Token);
+                var result = await ProjectFolderLineCatalog.GetLiveTagsAsync(
+                    folder.Key, null, cts.Token);
+                if (!result.Note.StartsWith("Verified ", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Don't retry the same broken PnP query in a tight loop.
+                    doc.Editor.WriteMessage(
+                        "\nSPTC REV18 cache skipped " + folder.Key + ": " + result.Note);
+                }
+            }
+            if (!cts.IsCancellationRequested && _dialog != IntPtr.Zero)
+                doc.Editor.WriteMessage(
+                    $"\nSPTC REV18: Folder cache ready for " +
+                    $"{ProjectFolderLineCatalog.CachedFolderCount} folders.");
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            doc.Editor.WriteMessage(
+                "\nSPTC REV18 cache: " + ex.GetBaseException().Message);
+        }
+        finally
+        {
+            if (_precacheSerial == serial)
+            {
+                _precacheTask = null;
+                _precacheCts = null;
+                if (_resumePrecache && _dialog != IntPtr.Zero)
+                {
+                    _resumePrecache = false;
+                    SchedulePrecache(400);
+                }
+            }
+            cts.Dispose();
+        }
+    }
+
+    private static void PausePrecacheForSelection()
+    {
+        // Folder clicks take priority over warming unrequested folders.
+        try { _precacheStart?.Stop(); _precacheStart?.Dispose(); } catch { }
+        _precacheStart = null;
+        try { _precacheCts?.Cancel(); } catch (ObjectDisposedException) { }
+    }
+
+    private static void ResumePrecacheAfterSelection()
+    {
+        if (_dialog == IntPtr.Zero) return;
+        _resumePrecache = true;
+        if (_precacheTask is null || _precacheTask.IsCompleted)
+        {
+            _resumePrecache = false;
+            SchedulePrecache(400);
+        }
+        // Otherwise the canceled warm-up's finally block restarts it.
+    }
+
+    private static void StopPrecache()
+    {
+        _resumePrecache = false;
+        try { _precacheStart?.Stop(); _precacheStart?.Dispose(); } catch { }
+        _precacheStart = null;
+        try { _precacheCts?.Cancel(); } catch (ObjectDisposedException) { }
+        _precacheCts = null;
+        _precacheSerial++;
     }
 
     // The arrow is inside the native Filter row. The original funnel remains
