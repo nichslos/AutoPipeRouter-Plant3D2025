@@ -93,7 +93,7 @@ internal sealed class NativeIsoToolbarClickFilter : IMessageFilter
         // Autodesk switches Drawing/Project modes. The original line-list
         // items may be reloaded; retaining indices until the delayed callback
         // caused a transient blank list/overlay during loading.
-        ProjectFolderLinePicker.ClearVisibleProjection();
+        ProjectFolderLinePicker.PrepareForNativeModeChange();
         // REV11: restoring ALL only clears an existing text filter and can be
         // requested sooner. The native Drawing/Project button may still need
         // its own time to refresh a large or network-backed project list.
