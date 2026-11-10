@@ -76,6 +76,16 @@ internal sealed class NativeIsoToolbarClickFilter : IMessageFilter
         _active = new NativeIsoToolbarClickFilter(dialog, toggle);
     }
 
+    // REV21: If applying the active tag returns an empty native line list,
+    // the dialog enhancer clears that filter. Keep the next native toolbar
+    // click synchronized with the restored All view.
+    public static void MarkAllLinesRestored(IntPtr dialog)
+    {
+        if (_active is { _disposed: false } current &&
+            current._dialog == dialog)
+            current._showingActive = false;
+    }
+
     private void Schedule()
     {
         if (_disposed) return;
