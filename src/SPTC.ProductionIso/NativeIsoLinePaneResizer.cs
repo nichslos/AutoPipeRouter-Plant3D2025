@@ -599,7 +599,13 @@ internal static class NativeIsoLinePaneResizer
         if (_lastParentWidth != _parent.ClientSize.Width)
             Layout();
         else
+        {
+            // REV22: WinForms parent resizing can re-layout the icon toolbar
+            // after our column-width calculation. Keep the three original
+            // icons anchored to the live right edge during dialog stretches.
+            MoveTopToolbar();
             PositionHandle();
+        }
     }
 
     public static void Hide()
