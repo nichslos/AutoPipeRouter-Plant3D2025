@@ -591,8 +591,7 @@ internal static class ProjectFolderLinePicker
 
             // Only after a COMPLETE verified scan touch the temporary list.
             ActiveDwgTags.ClearOneTag(_dialog, null);
-            _folder = "";
-            DestroyProjection();
+            ClearVisibleProjection();
 
             if (!TryBindNativeList(_dialog, out List<NativeEntry> nativeRows))
             {
@@ -855,6 +854,14 @@ internal static class ProjectFolderLinePicker
     /// rebuilds the line list on Drawing/Project mode changes. Avoid stale
     /// item indices and transient blank overlays while the list loads.
     /// </summary>
+    public static void PrepareForNativeModeChange()
+    {
+        // Cancel an unfinished manual folder scan so a stale completion
+        // cannot rebuild its temporary list after Autodesk changes mode.
+        CancelPendingScan();
+        ClearVisibleProjection();
+    }
+
     public static void ClearVisibleProjection()
     {
         _activeDwgView = false;
