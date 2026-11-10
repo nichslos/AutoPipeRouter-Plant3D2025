@@ -195,12 +195,15 @@ internal static class NativeIsoLineSelectOverlay
         {
             // REV13: Select All applies only to the visible folder routes.
             // Do NOT select lines hidden behind the folder projection.
-            if (ProjectFolderLinePicker.FolderActive)
+            if (ProjectFolderLinePicker.HasVisibleProjection)
             {
+                // REV23: also cover the exact Active DWG projection. REV22
+                // wrongly invoked native Select All for ALL project rows,
+                // including hidden old routes when Active-only was shown.
                 if (ProjectFolderLinePicker.TrySelectAllVisible(selected))
                     return;
                 throw new InvalidOperationException(
-                    "Folder-specific native line selection is no longer available.");
+                    "The visible line selection is no longer available.");
             }
             if (ApplySelection(_dialog, selected))
                 return;
