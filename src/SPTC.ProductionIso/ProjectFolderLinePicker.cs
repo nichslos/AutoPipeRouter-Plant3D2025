@@ -158,22 +158,56 @@ internal static class ProjectFolderLinePicker
         if (_filterHost == null || _filterHost.IsDisposed ||
             !GetClientRect(dialog, out RECT bounds)) return;
 
-        // Known REV12 dialog geometry is a fallback only. Prefer the actual
-        // native filter textbox so changes in screen scaling follow Autodesk.
+        // REV21: Anchor our folder arrow to the RIGHT EDGE of the resizable
+        // Display lines GroupBox, not the old/fixed-width native search edit.
+        // REV20 widened the group but left the funnel behind, causing the
+        // user to see two arrows at opposite ends of the filter row.
         int x = (int)(bounds.Width * 0.25) - 22;
         int y = (int)(bounds.Height * 0.145);
         if (TryFindNativeFilterEdit(dialog, out RECT edit))
-        {
-            // The original funnel occupies the rightmost ~24 px.
-            // Place our 23 px arrow immediately before it, not over it.
-            x = edit.Right - 54;
             y = edit.Top + 1;
+
+        if (TryFindDisplayLinesGroup(dialog, out RECT group))
+        {
+            // Rightmost 28px are reserved for Autodesk's funnel icon.
+            // The custom folder dropdown occupies the preceding 24px.
+            x = group.Right - 57;
+            if (!TryFindNativeFilterEdit(dialog, out _))
+                y = group.Top + 43;
         }
+        else if (TryFindNativeFilterEdit(dialog, out RECT editFallback))
+            x = editFallback.Right - 54;
 
         x = Math.Clamp(x, 12, Math.Max(12, bounds.Width - 50));
         y = Math.Clamp(y, 42, Math.Max(42, bounds.Height - 40));
         SetWindowPos(_filterHost.Handle, IntPtr.Zero, x, y, 24, 23,
             SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    }
+
+    private static bool TryFindDisplayLinesGroup(IntPtr dialog, out RECT groupBounds)
+    {
+        groupBounds = default;
+        RECT matched = default;
+        bool found = false;
+        EnumChildWindows(dialog, (hwnd, _) =>
+        {
+            if (Control.FromHandle(hwnd) is GroupBox box &&
+                box.Text.Trim().Equals("Display lines", StringComparison.OrdinalIgnoreCase) &&
+                GetWindowRect(hwnd, out RECT r))
+            {
+                POINT a = new() { X = r.Left, Y = r.Top };
+                POINT b = new() { X = r.Right, Y = r.Bottom };
+                if (ScreenToClient(dialog, ref a) && ScreenToClient(dialog, ref b))
+                {
+                    matched = new RECT { Left = a.X, Top = a.Y, Right = b.X, Bottom = b.Y };
+                    found = true;
+                    return false;
+                }
+            }
+            return true;
+        }, IntPtr.Zero);
+        groupBounds = matched;
+        return found;
     }
 
     private static bool TryFindNativeFilterEdit(IntPtr dialog, out RECT client)
