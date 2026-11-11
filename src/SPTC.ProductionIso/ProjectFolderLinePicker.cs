@@ -656,30 +656,52 @@ internal static class ProjectFolderLinePicker
                 return;
             }
 
-            // REV38: folder validation must run against Autodesk's FULL
-            // Project-wide native checklist, NOT the two rows left behind by
-            // the Active-DWG exact filter (A-008 and A-08 in the user test).
-            // Restore temporarily pruned original row objects BEFORE the
-            // original text filter is cleared. Never fabricate native rows.
+            // REV38: restore the complete Autodesk Project source first.
+            // Do not fabricate native rows or force-enable Create.
             NativeIsoExactLineFilter.End(restore: true);
             ActiveDwgTags.ClearOneTag(_dialog, null);
             ClearVisibleProjection();
 
-            // The SPTC top-toolbar mouse filter normally intercepts all
-            // three icon clicks; invoke Autodesk's real Project action
-            // directly so it can rebuild the complete native ISO source.
             bool projectRefreshed =
                 NativeIsoToolbarClickFilter.TryRefreshNativeProjectList(_dialog);
             NativeIsoToolbarClickFilter.MarkAllLinesRestored(_dialog);
 
-            // Some native WinForms data bindings repopulate asynchronously.
-            // Yield once on the UI thread before snapshotting native rows.
-            await Task.Delay(200, cts.Token);
-            if (cts.IsCancellationRequested || serial != _scanSerial ||
-                _dialog == IntPtr.Zero || _document is null)
-                return;
+            var allowed = new HashSet<string>(result.Tags,
+                StringComparer.OrdinalIgnoreCase);
+            var available = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            List<NativeEntry> nativeRows = new();
+            bool nativeBound = false;
 
-            if (!TryBindNativeList(_dialog, out List<NativeEntry> nativeRows))
+            // REV39: Autodesk regenerates the Project-wide ISO checklist on
+            // its UI thread. REV38 sampled it after a fixed 200 ms, sometimes
+            // seeing only the two Active-DWG rows from the previous filter.
+            // Poll only the ORIGINAL native checklist for up to 4.15 seconds;
+            // stop as soon as every verified folder tag has been repopulated.
+            // No PnP or project database writes, no generated/imaginary rows.
+            for (int attempt = 0; attempt < 17; attempt++)
+            {
+                await Task.Delay(attempt == 0 ? 150 : 250, cts.Token);
+                if (cts.IsCancellationRequested || serial != _scanSerial ||
+                    _dialog == IntPtr.Zero || _document is null)
+                    return;
+
+                nativeBound = TryBindNativeList(_dialog, out nativeRows);
+                if (nativeBound)
+                {
+                    available = new HashSet<string>(
+                        nativeRows.Select(x => x.Tag),
+                        StringComparer.OrdinalIgnoreCase);
+                    if (allowed.All(tag => available.Contains(tag)))
+                        break;
+                }
+
+                // If the native Project command could not be invoked, do not
+                // repeatedly wait on an unchanged active-only source.
+                if (!projectRefreshed)
+                    break;
+            }
+
+            if (!nativeBound)
             {
                 MessageBox.Show(
                     "Autodesk's original Production Iso line checklist is not available.\n" +
@@ -690,10 +712,6 @@ internal static class ProjectFolderLinePicker
                 return;
             }
 
-            var allowed = new HashSet<string>(result.Tags,
-                StringComparer.OrdinalIgnoreCase);
-            var available = new HashSet<string>(
-                nativeRows.Select(x => x.Tag), StringComparer.OrdinalIgnoreCase);
             var missing = allowed.Where(tag => !available.Contains(tag)).ToArray();
 
             _document.Editor.WriteMessage(
