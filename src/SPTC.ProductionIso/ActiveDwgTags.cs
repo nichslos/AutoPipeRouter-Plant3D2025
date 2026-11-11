@@ -253,133 +253,129 @@ internal static class ActiveDwgTags
         return null;
     }
 
+    // REV27: find the REAL native Filter textbox inside Display lines,
+    // independently of how wide the left panel has been stretched. REV08's
+    // whole-dialog "x < 33%" search failed after the REV20 splitter resized
+    // the left column.
+    private static IntPtr FindNativeFilterInput(IntPtr dialog)
+    {
+        IntPtr group = IntPtr.Zero;
+        EnumChildWindows(dialog, (hwnd, _) =>
+        {
+            if (Control.FromHandle(hwnd) is GroupBox box &&
+                box.Text.Trim().Equals("Display lines", StringComparison.OrdinalIgnoreCase))
+            {
+                group = hwnd;
+                return false;
+            }
+            return true;
+        }, IntPtr.Zero);
+
+        if (group == IntPtr.Zero || !GetWindowRect(group, out RECT container))
+            return IntPtr.Zero;
+
+        IntPtr found = IntPtr.Zero;
+        int best = int.MinValue;
+        EnumChildWindows(group, (hwnd, _) =>
+        {
+            if (!GetWindowRect(hwnd, out RECT r) ||
+                r.Width < 70 || r.Height < 15 || r.Height > 46)
+                return true;
+
+            int relativeY = (r.Top + r.Bottom) / 2 - container.Top;
+            if (relativeY < 39 || relativeY > 112)
+                return true;
+
+            Control? control = Control.FromHandle(hwnd);
+            var cls = new StringBuilder(100);
+            GetClassName(hwnd, cls, cls.Capacity);
+            if (control is not TextBoxBase &&
+                !cls.ToString().Contains("EDIT", StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            // Prefer the input closest to the left margin of the Filter row,
+            // not a textbox embedded in an unrelated child control.
+            int score = r.Width - 2 * Math.Abs(r.Left - container.Left - 9);
+            if (score > best)
+            {
+                found = hwnd;
+                best = score;
+            }
+            return true;
+        }, IntPtr.Zero);
+        return found;
+    }
+
     public static bool ApplyOneTag(IntPtr dialog, Document? doc)
     {
         if (Count != 1 || dialog == IntPtr.Zero)
         {
             doc?.Editor.WriteMessage(
-                $"\nSPTC REV08: Found {Count} active tags. Exact native filter applies only when there is one verified route; no list modified.");
+                "\nSPTC REV27: Active native filter needs exactly one verified " +
+                "physical route; no list changed. Detected tags: " + Count);
             return false;
         }
-        if (!GetWindowRect(dialog, out RECT dlg)) return false;
+
+        IntPtr nativeFilter = FindNativeFilterInput(dialog);
+        if (nativeFilter == IntPtr.Zero)
+        {
+            doc?.Editor.WriteMessage(
+                "\nSPTC REV27: Original Filter textbox not found in Display lines. " +
+                "No route list changed.");
+            return false;
+        }
 
         string tag = Tags.First();
-        IntPtr candidate = IntPtr.Zero;
-        int score = int.MinValue;
-
-        EnumChildWindows(dialog, (hwnd, _) =>
-        {
-            if (!GetWindowRect(hwnd, out RECT rect) || rect.Width < 70 || rect.Height < 15 || rect.Height > 48)
-                return true;
-
-            // Top-left filter field immediately below Drawing / Project icons.
-            int cx = (rect.Left + rect.Right) / 2 - dlg.Left;
-            int cy = (rect.Top + rect.Bottom) / 2 - dlg.Top;
-            if (cx < 25 || cx > dlg.Width * 0.33 || cy < 75 || cy > 175) return true;
-
-            var cls = new StringBuilder(128);
-            GetClassName(hwnd, cls, cls.Capacity);
-            Control? c = Control.FromHandle(hwnd);
-            bool edit = c is TextBoxBase ||
-                        cls.ToString().Contains("EDIT", StringComparison.OrdinalIgnoreCase);
-            if (!edit) return true;
-
-            int quality = rect.Width - Math.Abs(cy - 120);
-            if (quality > score)
-            {
-                candidate = hwnd;
-                score = quality;
-            }
-            return true;
-        }, IntPtr.Zero);
-
-        if (candidate == IntPtr.Zero)
-        {
-            doc?.Editor.WriteMessage("\nSPTC REV08: Native filter textbox was not detected. No change made.");
-            return false;
-        }
-
-        // REV09: every native Drawing/Project click can clear the text field.
-        // Reapply the verified tag even when the dialog HWND is unchanged.
         try
         {
-            Control? control = Control.FromHandle(candidate);
-            if (control is TextBoxBase textbox)
-                textbox.Text = tag;
-            else if (!SetWindowText(candidate, tag))
+            // The native TextChanged handler itself updates its OWN original
+            // checked list; never create a second overlaid checklist.
+            if (Control.FromHandle(nativeFilter) is TextBoxBase edit)
+                edit.Text = tag;
+            else if (!SetWindowText(nativeFilter, tag))
                 return false;
 
             _lastAppliedDialog = dialog;
-            doc?.Editor.WriteMessage("\nSPTC REV09: Showing active DWG line tag: " + tag);
+            doc?.Editor.WriteMessage(
+                "\nSPTC REV27: Native active filter applied: " + tag);
             return true;
         }
         catch (Exception ex)
         {
-            doc?.Editor.WriteMessage("\nSPTC REV08 filter: " + ex.Message);
+            doc?.Editor.WriteMessage(
+                "\nSPTC REV27: Native active filter failed: " + ex.Message);
             return false;
         }
     }
 
-    // REV10: A second click on Drawing/Project clears only the temporary
-    // native text filter. It does NOT alter or remove any Plant 3D line groups.
-    // The original native list is repopulated by Autodesk's text-change handler.
     public static bool ClearOneTag(IntPtr dialog, Document? doc)
     {
-        if (dialog == IntPtr.Zero || !GetWindowRect(dialog, out RECT dlg))
-            return false;
-
-        IntPtr candidate = IntPtr.Zero;
-        int score = int.MinValue;
-        EnumChildWindows(dialog, (hwnd, _) =>
+        if (dialog == IntPtr.Zero) return false;
+        IntPtr nativeFilter = FindNativeFilterInput(dialog);
+        if (nativeFilter == IntPtr.Zero)
         {
-            if (!GetWindowRect(hwnd, out RECT rect) ||
-                rect.Width < 70 || rect.Height < 15 || rect.Height > 48)
-                return true;
-
-            int cx = (rect.Left + rect.Right) / 2 - dlg.Left;
-            int cy = (rect.Top + rect.Bottom) / 2 - dlg.Top;
-            if (cx < 25 || cx > dlg.Width * 0.33 || cy < 75 || cy > 175)
-                return true;
-
-            var cls = new StringBuilder(128);
-            GetClassName(hwnd, cls, cls.Capacity);
-            Control? c = Control.FromHandle(hwnd);
-            bool edit = c is TextBoxBase ||
-                        cls.ToString().Contains("EDIT", StringComparison.OrdinalIgnoreCase);
-            if (!edit) return true;
-
-            int quality = rect.Width - Math.Abs(cy - 120);
-            if (quality > score)
-            {
-                candidate = hwnd;
-                score = quality;
-            }
-            return true;
-        }, IntPtr.Zero);
-
-        if (candidate == IntPtr.Zero)
-        {
-            doc?.Editor.WriteMessage("\nSPTC REV10: Could not locate native line filter; full list was not restored.");
+            doc?.Editor.WriteMessage(
+                "\nSPTC REV27: Original Filter textbox not found for All-lines restore.");
             return false;
         }
 
         try
         {
-            Control? control = Control.FromHandle(candidate);
-            if (control is TextBoxBase textbox)
-                textbox.Text = "";
-            else if (!SetWindowText(candidate, ""))
+            if (Control.FromHandle(nativeFilter) is TextBoxBase edit)
+                edit.Text = "";
+            else if (!SetWindowText(nativeFilter, ""))
                 return false;
 
             _lastAppliedDialog = IntPtr.Zero;
-            doc?.Editor.WriteMessage("\nSPTC REV10: Cleared active-DWG filter; showing the native unfiltered line list.");
+            doc?.Editor.WriteMessage(
+                "\nSPTC REV27: Cleared native line filter; All Project lines restored.");
             return true;
         }
         catch (Exception ex)
         {
-            doc?.Editor.WriteMessage("\nSPTC REV10: Could not clear line filter: " + ex.Message);
+            doc?.Editor.WriteMessage(
+                "\nSPTC REV27: Native filter clear failed: " + ex.Message);
             return false;
         }
     }
-
 }
