@@ -306,6 +306,29 @@ internal static class ActiveDwgTags
         return found;
     }
 
+    // REV28: keep the independent DWG checkbox synchronized if Autodesk's
+    // Drawing/Project buttons or the user clear/change the native Filter text.
+    // UI-only read; it does not scan any PnP project metadata.
+    public static bool IsNativeFilterCurrent(IntPtr dialog)
+    {
+        if (dialog == IntPtr.Zero || Count != 1) return false;
+        IntPtr hwnd = FindNativeFilterInput(dialog);
+        if (hwnd == IntPtr.Zero) return false;
+
+        string current;
+        if (Control.FromHandle(hwnd) is TextBoxBase edit)
+            current = edit.Text;
+        else
+        {
+            var buffer = new StringBuilder(2048);
+            GetWindowText(hwnd, buffer, buffer.Capacity);
+            current = buffer.ToString();
+        }
+
+        return string.Equals(current.Trim(), Tags.First(),
+            StringComparison.OrdinalIgnoreCase);
+    }
+
     public static bool ApplyOneTag(IntPtr dialog, Document? doc)
     {
         if (Count != 1 || dialog == IntPtr.Zero)
