@@ -4,6 +4,8 @@ using System.Drawing;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Windows.Forms;
+using Autodesk.AutoCAD.ApplicationServices;
+using System.Diagnostics;
 
 namespace SPTC.ProductionIso;
 
@@ -62,23 +64,29 @@ internal static class NativeIsoLineSelectOverlay
 
     private static UserControl? _host;
     private static CheckBox? _toggle;
+    private static CheckBox? _activeDwgOnly;
+    private static ToolTip? _activeTip;
+    private static Document? _document;
     private static IntPtr _dialog;
     private static bool _setting;
+    private static bool _changingActiveMode;
+    private static long _activeRequestId;
     // REV17: lightweight UI-only count refresh. No PnP/SQL queries and no
     // changes to native checked states, even when the filter changes.
     private static System.Windows.Forms.Timer? _countTimer;
 
-    public static void Attach(IntPtr dialog)
+    public static void Attach(IntPtr dialog, Document? document)
     {
         if (_host != null && !_host.IsDisposed && _dialog == dialog)
             return;
 
         Hide();
         _dialog = dialog;
+        _document = document;
         _host = new UserControl
         {
             BackColor = SystemColors.Control,
-            Width = 174,
+            Width = 185,
             Height = 31
         };
         _toggle = new CheckBox
@@ -86,13 +94,34 @@ internal static class NativeIsoLineSelectOverlay
             Text = "Select All",
             AutoSize = false,
             Location = new Point(0, 2),
-            Width = 170,
+            Width = 125,
             Height = 25,
             Checked = false,
             Font = SystemFonts.MessageBoxFont
         };
         _toggle.CheckedChanged += ToggleChanged;
         _host.Controls.Add(_toggle);
+
+        // REV28: An INDEPENDENT active-DWG filter, instead of hijacking the
+        // original three Autodesk Drawing/Project/Filter mode buttons.
+        // Both the filter and the checkbox remain native; we do not draw
+        // another proxy line list over Autodesk's checked list.
+        _activeDwgOnly = new CheckBox
+        {
+            Text = "DWG",
+            AutoSize = false,
+            Location = new Point(124, 2),
+            Width = 56,
+            Height = 25,
+            Font = SystemFonts.MessageBoxFont
+        };
+        _activeDwgOnly.CheckedChanged += ActiveDwgOnlyChanged;
+        _host.Controls.Add(_activeDwgOnly);
+        _activeTip = new ToolTip();
+        _activeTip.SetToolTip(_activeDwgOnly,
+            "Filter the ORIGINAL Autodesk line list to the physical line " +
+            "number tag in the open DWG. Uncheck to clear the filter. " +
+            "Use Autodesk's Project button (2nd icon) to show all project routes.");
 
         _ = _host.Handle;
         SetParent(_host.Handle, dialog);
@@ -105,7 +134,8 @@ internal static class NativeIsoLineSelectOverlay
         _host.Show();
 
         UpdateDisplayedCount();
-        _countTimer = new System.Windows.Forms.Timer { Interval = 850 };
+        // REV28: reduced UI-thread polling; never enumerate the project DB.
+        _countTimer = new System.Windows.Forms.Timer { Interval = 1600 };
         _countTimer.Tick += (_, _) => UpdateDisplayedCount();
         _countTimer.Start();
     }
@@ -126,8 +156,112 @@ internal static class NativeIsoLineSelectOverlay
             top = Math.Min(dialogRect.Height - 116, listBounds.Bottom + 5);
         }
 
-        SetWindowPos(_host.Handle, IntPtr.Zero, left, top, 174, 29,
+        SetWindowPos(_host.Handle, IntPtr.Zero, left, top, 185, 29,
             SWP_NOACTIVATE | SWP_NOZORDER | SWP_SHOWWINDOW);
+    }
+
+    private static async void ActiveDwgOnlyChanged(object? sender, EventArgs args)
+    {
+        if (_changingActiveMode || _activeDwgOnly is null ||
+            _host is null || _host.IsDisposed || _dialog == IntPtr.Zero)
+            return;
+
+        bool turnOn = _activeDwgOnly.Checked;
+        long request = ++_activeRequestId;
+        var doc = _document;
+        if (!turnOn)
+        {
+            // Clearing Filter does not itself change native Drawing scope to
+            // Project scope. Autodesk's original second icon does that.
+            ActiveDwgTags.ClearOneTag(_dialog, doc);
+            UpdateDisplayedCount();
+            return;
+        }
+
+        if (doc is null)
+        {
+            ResetActiveDwgOnly();
+            return;
+        }
+
+        try
+        {
+            _activeDwgOnly.Enabled = false;
+            _activeDwgOnly.Text = "...";
+            // Let the dialog first repaint before a potentially slow PnP
+            // read. Autodesk DB APIs remain on the CAD UI thread.
+            await System.Threading.Tasks.Task.Delay(60);
+            if (request != _activeRequestId ||
+                _dialog == IntPtr.Zero || _activeDwgOnly is null ||
+                _activeDwgOnly.IsDisposed)
+                return;
+
+            var watch = Stopwatch.StartNew();
+            if (!ActiveDwgTags.HasScanned)
+                ActiveDwgTags.Scan(doc);
+            watch.Stop();
+            doc.Editor.WriteMessage(
+                "\nSPTC REV28: Physical current-DWG tag scan completed in " +
+                watch.ElapsedMilliseconds + " ms; tags=" + ActiveDwgTags.Count);
+
+            if (request != _activeRequestId ||
+                _dialog == IntPtr.Zero || _activeDwgOnly is null ||
+                _activeDwgOnly.IsDisposed)
+                return;
+
+            if (ActiveDwgTags.Count != 1)
+            {
+                doc.Editor.WriteMessage(
+                    "\nSPTC REV28: DWG filter requires exactly one verified " +
+                    "current physical line tag. Found " + ActiveDwgTags.Count +
+                    ". The original Autodesk list was left unchanged.");
+                ResetActiveDwgOnly();
+                return;
+            }
+
+            if (!ActiveDwgTags.ApplyOneTag(_dialog, doc))
+            {
+                ResetActiveDwgOnly();
+                return;
+            }
+
+            _activeDwgOnly.Checked = true;
+            // Native TextChanged may finish its list refresh in a later
+            // UI dispatch; counter update should not block or modify it.
+            await System.Threading.Tasks.Task.Delay(250);
+            if (request == _activeRequestId && _dialog != IntPtr.Zero)
+                UpdateDisplayedCount();
+        }
+        catch (Exception ex)
+        {
+            doc.Editor.WriteMessage(
+                "\nSPTC REV28: Active DWG native filter: " +
+                ex.GetBaseException().Message);
+            ResetActiveDwgOnly();
+        }
+        finally
+        {
+            if (request == _activeRequestId &&
+                _activeDwgOnly is { IsDisposed: false })
+            {
+                _activeDwgOnly.Text = "DWG";
+                _activeDwgOnly.Enabled = true;
+            }
+        }
+    }
+
+    private static void ResetActiveDwgOnly()
+    {
+        if (_activeDwgOnly is null || _activeDwgOnly.IsDisposed)
+            return;
+        _changingActiveMode = true;
+        try
+        {
+            _activeDwgOnly.Checked = false;
+            _activeDwgOnly.Text = "DWG";
+            _activeDwgOnly.Enabled = true;
+        }
+        finally { _changingActiveMode = false; }
     }
 
     // REV17: "Select All (N)" counts the lines currently displayed, not
@@ -402,13 +536,19 @@ internal static class NativeIsoLineSelectOverlay
 
     public static void Hide()
     {
+        _activeRequestId++;
         _dialog = IntPtr.Zero;
+        _document = null;
         try { _countTimer?.Stop(); } catch { }
         try { _countTimer?.Dispose(); } catch { }
         _countTimer = null;
+        try { _activeTip?.Dispose(); } catch { }
+        _activeTip = null;
         try { _host?.Dispose(); } catch { }
         _host = null;
         _toggle = null;
+        _activeDwgOnly = null;
         _setting = false;
+        _changingActiveMode = false;
     }
 }
