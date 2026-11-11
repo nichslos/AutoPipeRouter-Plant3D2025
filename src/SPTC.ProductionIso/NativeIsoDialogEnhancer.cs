@@ -191,6 +191,10 @@ internal static class NativeIsoDialogEnhancer
 
                         if (!showActive)
                         {
+                            // REV31: put ORIGINAL native row objects back
+                            // BEFORE Autodesk's Filter is cleared. The
+                            // Create button still uses its original list.
+                            NativeIsoExactLineFilter.End(restore: true);
                             bool cleared = ActiveDwgTags.ClearOneTag(native, _document);
                             if (cleared)
                                 NativeIsoLineSelectOverlay.UpdateDisplayedCount();
@@ -212,13 +216,16 @@ internal static class NativeIsoDialogEnhancer
                         bool applied = ActiveDwgTags.ApplyOneTag(native, _document);
                         if (applied)
                         {
+                            // REV31: Autodesk's native Filter does a broad
+                            // substring match (A-08 also returns A-088 and
+                            // CAP...+A-088). Reversibly remove nonexact rows
+                            // from the SAME original checked-list control.
+                            NativeIsoExactLineFilter.Begin(
+                                native, ActiveDwgTags.CurrentTags[0], _document);
                             _document.Editor.WriteMessage(
-                                "\nSPTC REV30: Active line filter uses Autodesk's " +
-                                "ORIGINAL checklist. Click its checkbox directly; " +
-                                "no proxy checkbox and no forced Create.");
-                            // Update the displayed number after Autodesk
-                            // commits TextChanged and its own list refresh.
-                            NativeIsoLineSelectOverlay.UpdateDisplayedCount();
+                                "\nSPTC REV31: Exact match requested for " +
+                                ActiveDwgTags.CurrentTags[0] +
+                                "; preserving the real Autodesk checklist/Create.");
                         }
                         return applied;
                     });
@@ -618,6 +625,9 @@ internal static class NativeIsoDialogEnhancer
 
     private static void RemoveOverlay()
     {
+        // Dispose timer immediately when the native dialog closes;
+        // do not restore rows into a closing or disposed Autodesk window.
+        NativeIsoExactLineFilter.End(restore: false);
         CancelFilterVerification();
         try { _layoutWatch?.Stop(); } catch { }
         try { _layoutWatch?.Dispose(); } catch { }
