@@ -1,42 +1,46 @@
-# SPTC Production Iso REV27 — Native Active-Line Selection and Faster Dialog Detection
+# SPTC Production Iso REV28 — Restore Native Drawing / Project Buttons
 
-**Baseline:** REV26. Earlier branches and compiled DLLs remain unchanged.
+**Baseline:** REV27. Earlier REV01–REV27 revision branches and builds are unchanged.
 
-## Runtime problems reported
-- The user cannot check line `A-08` after switching to Active DWG even in REV26, while checking the original All Project lines works.
-- Running `SPTC_PRODISO` takes approximately **5–8 seconds** before Create Production Iso appears.
+## Reported problem
+After the user selected an Active DWG line in REV27, clicking again did **not** restore all project routes. Only two drawing-scope entries (for example `A-008` and `A-08`) appeared, and the dialog still lagged.
 
-## REV27: Remove the duplicate Active-DWG checkbox list
-REV22–26 created a temporary **second CheckedListBox** covering Autodesk's original line list and attempted to forward the visual check to the underlying original. That forwarding does not reliably activate the native **Create** button. Merely adjusting the order of nested ItemCheck events in REV26 was insufficient.
+## Verified cause
+Official Autodesk Plant 3D documentation defines the original top three **Display lines** buttons:
+- **Drawing (first)** — only line numbers present in the current drawing;
+- **Project (second)** — all line numbers in the entire project;
+- **Filter (third)** — line numbers in the current selection set.
 
-REV27 changes strategy:
-- **Active DWG mode does not create any temporary checklist.** It sets the exact verified physical component line tag into Autodesk's **original Line Numbers Filter textbox**. Autodesk's own native TextChanged filtering then determines which items remain displayed in the original **clickable** line-number checklist.
-- **All Project mode clears that native filter textbox** and returns the original list. There are no proxy checkboxes or native click-message relays in Active mode.
-- The filter textbox is found **inside the Display lines GroupBox**, independently of how wide the resizable left panel is. The earlier approach relied on a fixed percentage of the entire dialog and could fail after stretching.
-- The existing REV23 single Active/All toolbar toggle is retained, so Autodesk's original toolbar click does not also reload the checklist.
-- The original REV17 Select All works directly on the original native checked items in Active mode. Native Create remains governed by Autodesk eligibility; the plugin does not force it on.
-- A lightweight check records whether the original native list contains only the expected exact tag. If filtering is slow or unusual, a warning is logged to F2, **but the plugin does not automatically clear the filter**. This prevents old line names from reappearing unexpectedly.
-- **Tradeoff:** The verified current tag is visible in the original native Filter textbox while Active mode is selected. This is intentional: it avoids maintaining a second checkbox list and lets Autodesk own selection/ISO generation. If Autodesk's native filter matches additional lines rather than exactly one, the plugin logs a warning; review the visible list before Create.
+REV23–27 installed a global WinForms message filter that intercepted **all three buttons**, bypassing their original native actions. The plugin treated the buttons as a single Active/All toggle and tried to restore All by clearing the native *search text*, which never changed the underlying Autodesk **drawing/project scope**. Consequently the list could get stuck showing two current-drawing tags.
 
-## REV27: Faster startup detection and objective timing
-- The dialog-watcher interval before first detection changes from **1500 ms to 150 ms**; after the dialog appears it switches to **1000 ms** to avoid unnecessary repeated window enumeration.
-- The AutoCAD **F2** command log records
-  `SPTC REV27: Native dialog detected after N ms; enhancements attached in M ms.`
-- **Important:** Polling less slowly can remove the extra wait for SPTC UI injection, but cannot guarantee a 5–8 second reduction if the `PLANTPRODUCTIONISO` native Autodesk command itself needs project/network database loading. Compare by running `PLANTPRODUCTIONISO` directly without `SPTC_PRODISO`.
+## REV28 fix
+- **Stop installing** the SPTC toolbar click interceptor. Drawing, Project and Filter now have their original Autodesk documented functions and their original native clicks load the corresponding line-number lists.
+- Keep Active DWG exact-tag filtering **separate** from the original mode buttons. Added a compact **DWG** checkbox beside `Select All (N)`, with explanatory tooltip.
+- Check **DWG** to perform a one-time read-only inspection of the actual Plant 3D piping components in the currently opened DWG, then place the unique verified physical `LineNumberTag` in Autodesk's **original native Filter textbox**. The line-number checklist and Create button remain Autodesk's original controls, not a duplicate proxy list.
+- Uncheck **DWG** to clear only the native Filter text. To return to *every line in the entire project* (not just the opened drawing), **click Autodesk's second/Project toolbar button**. This is not the same as unchecking DWG because the Autodesk mode itself determines which list is loaded.
+- If the actual physical model contains 0 or 2+ unique current route tags, the supplemental DWG filter declines to guess a single route; the native list is left unchanged and a diagnostic is logged in F2.
+- A nonblocking 60ms paint-yield occurs before the on-demand physical-tag inspection. There is **no startup-wide PnP scan**, and Autodesk API calls remain on the CAD UI thread.
+- When the user changes the native Filter text manually or the Autodesk mode button changes it, the DWG checkbox resets to reflect the native field.
+- `Select All (N)` still reads visible original line items. Its UI polling has been reduced from 850ms to 1600ms, and the dialog layout watch from 180ms to 450ms, avoiding unnecessary UI-thread/window enumeration while the project loads.
+- The original native Create ISO button is never forcibly enabled.
 
-## Preserved from REV26
-- User-triggered first-level `Plant 3D Drawings` folder dropdown, with its separate folder-specific projection when selected.
-- Resizable Line Numbers divider and dynamic vertical grip, Select All (N) counter.
-- Responsive Revision number / Custom Save Location row and background copy of completed DWGs to the selected custom directory.
-- No edits to model DWGs, PnP/Project Manager data, ISO style or `IsoConfig.xml`.
+## Preserved
+- REV25 adaptive vertical line-pane splitter.
+- Folder dropdown at the native Filter row; only first-level physical Plant 3D Drawings folder names shown, folder scanning only on request.
+- REV19 dynamically aligned and stretched Custom Save Location controls.
+- REV05 automatic copy of finished Production ISO DWGs to custom location.
+- No model, database, project setup, or IsoConfig.xml changes.
 
-## Runtime test
-1. Fully exit/restart Plant 3D 2025, `NETLOAD` REV27 `SPTC.ProductionIso.dll`.
-2. Run `SPTC_PRODISO`, noting how long the native dialog takes to appear.
-3. Click a top toolbar button once to show the actual current DWG line tag; it should filter the original list (the tag may be displayed in the original Filter field).
-4. Check **the original native checkbox next to A-08**. It should stay checked and enable native Create if Autodesk recognizes it as a valid route.
-5. Click the same toolbar button again to clear the Filter field and show All Project.
-6. Repeat several times and verify the original Create works for one sample ISO; verify the custom copied output if specified.
-7. If selection or performance still fails, close the dialog and press **F2**. Provide the `SPTC REV27:` timing line, any active filter verification diagnostics, and the results of testing `PLANTPRODUCTIONISO` directly.
+## Test REV28
+1. Close Plant 3D completely, reopen it and NETLOAD REV28's `SPTC.ProductionIso.dll`.
+2. Run `SPTC_PRODISO` and wait until the native dialogue appears.
+3. Click the **second upper-left icon (Project)**. The original native project scope should show the full project line-number list, rather than just `A-008` and `A-08`.
+4. Check the **DWG** checkbox near `Select All (N)`. The original native Filter field should contain the unique physical tag in the current opened DWG and the native line checklist should narrow accordingly.
+5. Check that actual original checkbox next to that tag, and verify Create becomes enabled if Autodesk permits the ISO.
+6. Uncheck **DWG** to clear text; click the **second Project icon** to get the full project list. Repeat Project → DWG → Project at least three times.
+7. If the list is still slow or shows too few routes, click the original **Project** button while the `DWG` checkbox is **off**. If that still takes 5–8 seconds, compare with running native `PLANTPRODUCTIONISO` without SPTC. In F2, inspect `SPTC REV27: Native dialog detected after N ms; enhancements attached in M ms.` These timings distinguish Autodesk's native loading from the extra plugin UI attachment.
+8. Test one known-good ISO, confirming the copied output arrives in the selected custom location if provided.
 
-**Status:** Compiled on GitHub, then requires runtime validation. This revision deliberately favors native checked-list reliability over the previous visual-only active projection.
+**Limitations:** The physical LineNumberTag scan occurs on the first DWG checkbox click and may briefly pause for a slow network-backed PnP lookup; it does not run automatically on dialog startup. The original Plant 3D Project-mode list might also require its own project database query on demand. Cloud compilation is not a runtime test.
+
+**Important:** This revision deliberately changes the UI interaction: the top Autodesk icons are native source selectors again, while the supplemental DWG checkbox is the explicit active-tag filter. This prevents the previous mode/desynchronization and restores normal project-wide selection.
