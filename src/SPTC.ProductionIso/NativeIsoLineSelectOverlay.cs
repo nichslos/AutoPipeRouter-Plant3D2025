@@ -365,11 +365,12 @@ internal static class NativeIsoLineSelectOverlay
                             finally { _setting = false; }
                         }
 
-                        // A native ItemCheck implementation may commit
-                        // the first entry after this callback returns. Retry
-                        // only that entry once on a later UI tick if needed.
-                        if (native.Items.Count > 0 &&
-                            native.GetItemChecked(0) != selected)
+                        // REV39: Autodesk may asynchronously revert row zero
+                        // AFTER this callback exits. An immediate state check
+                        // misses that later native event. Always verify once
+                        // on a deferred UI tick; repair only row zero if it
+                        // actually differs. Do not synthesize clicks or alter Create.
+                        if (native.Items.Count > 0)
                             ScheduleFirstRowRetry(native, parent, generation, selected);
 
                         Button? create = FindNativeCreateButton(parent);
