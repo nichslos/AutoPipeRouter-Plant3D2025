@@ -57,50 +57,116 @@ internal static class ProjectFolderLineCatalog
         }
     }
 
-    // REV25: The folder DROPDOWN must never synchronously initialize
-    // PnPDataLinks/PnPDrawings; in REV24 that blocked the UI for ~3 seconds
-    // and showed a blank unpainted child menu. Read only the immediate
-    // physical directories below "Plant 3D Drawings" on a worker. No
-    // Autodesk API objects are accessed from the worker thread.
-    // Registered PnP membership is verified on the UI thread ONLY after
-    // a folder is selected.
-    public static Task<IReadOnlyList<string>> ReadDirectFolderNamesAsync(
+    // REV32: A Plant 3D Drawings node shown in Project Manager is a
+    // project/registered-drawings concept. It need not exist as a physical
+    // "{projectRoot}\Plant 3D Drawings" directory. REV25 assumed that
+    // directory existed, causing "Folder list unavailable — see F2 log".
+    //
+    // Enumerate registered PIPING drawing paths from the current project
+    // instead. This is metadata only: do not open DWGs, load PnPDrawings,
+    // scan line components, enumerate network directories, or modify files.
+    //
+    // IMPORTANT: Plant 3D managed project APIs must run on the CAD UI
+    // synchronization context. Read-only metadata batches periodically
+    // yield to the WinForms message pump; Task.Run is deliberately NOT used.
+    public static async Task<IReadOnlyList<string>> ReadDirectFolderNamesAsync(
         CancellationToken cancellation)
     {
         cancellation.ThrowIfCancellationRequested();
+        if (_ready)
+            return Folders.Select(f => f.Key).ToArray();
 
-        // Reflection access to CurrentProject is UI-thread only. Capture a
-        // plain string before dispatching any directory I/O.
+        SynchronizationContext? originalContext = SynchronizationContext.Current;
+        // Yield the first paint before requesting drawing metadata; this
+        // avoids the blank dropdown popup in a network-backed project.
+        if (originalContext != null)
+            await Task.Yield();
+
+        cancellation.ThrowIfCancellationRequested();
+
         Type? plantApp = FindPlantType(
             "Autodesk.ProcessPower.PlantInstance.PlantApplication");
         object? project = plantApp?.GetProperty("CurrentProject",
             BindingFlags.Public | BindingFlags.Static)?.GetValue(null);
+        if (project == null)
+            throw new InvalidOperationException(
+                "PlantApplication.CurrentProject is unavailable.");
+
         string projectRoot =
             Convert.ToString(GetProperty(project, "ProjectFolderPath")) ?? "";
-        if (string.IsNullOrWhiteSpace(projectRoot))
+        object? projectParts = GetProperty(project, "ProjectParts");
+        object? piping = GetIndexed(projectParts, "Piping");
+        if (piping == null)
             throw new InvalidOperationException(
-                "Current Plant 3D project folder is unavailable.");
+                "Current project has no accessible Piping ProjectPart.");
 
-        string drawingsRoot = Path.Combine(projectRoot, "Plant 3D Drawings");
-        return Task.Run<IReadOnlyList<string>>(() =>
+        object? result = Invoke(piping, "GetPnPDrawingFiles");
+        if (result is not IEnumerable drawings)
+            throw new InvalidOperationException(
+                "Piping.GetPnPDrawingFiles returned no registered drawing collection.");
+
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        int count = 0;
+        int rejected = 0;
+        foreach (object? drawing in drawings)
         {
             cancellation.ThrowIfCancellationRequested();
-            if (!Directory.Exists(drawingsRoot))
-                throw new DirectoryNotFoundException(
-                    "Plant 3D Drawings physical folder not found in the " +
-                    "current project root. No unrelated folders were listed.");
+            if (drawing == null) continue;
 
-            // Enumerate only first-level directories, never recurse through
-            // network DWGs or parse project DB when merely opening the menu.
-            return (IReadOnlyList<string>)Directory.EnumerateDirectories(
-                    drawingsRoot, "*", SearchOption.TopDirectoryOnly)
-                .Select(Path.GetFileName)
-                .Where(name => !string.IsNullOrWhiteSpace(name))
-                .Select(name => name!)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
-                .ToArray();
-        }, cancellation);
+            string raw =
+                Convert.ToString(GetProperty(drawing, "RelativeFilePath")) ?? "";
+            if (string.IsNullOrWhiteSpace(raw))
+                raw = Convert.ToString(
+                    GetProperty(drawing, "ResolvedFilePath")) ?? "";
+
+            string path = raw.Replace('/', '\\').Trim().Trim('"');
+            if (Path.IsPathRooted(path) &&
+                !string.IsNullOrWhiteSpace(projectRoot))
+            {
+                try { path = Path.GetRelativePath(projectRoot, path); }
+                catch { rejected++; continue; }
+            }
+            while (path.StartsWith(".\\", StringComparison.Ordinal))
+                path = path[2..];
+            path = path.TrimStart('\\');
+
+            if (!path.EndsWith(".dwg", StringComparison.OrdinalIgnoreCase) ||
+                Path.IsPathRooted(path) ||
+                path.Equals("..", StringComparison.Ordinal) ||
+                path.StartsWith("..\\", StringComparison.Ordinal))
+            {
+                rejected++;
+                continue;
+            }
+
+            // FolderOf strips the optional "Plant 3D Drawings" or
+            // "Plant 3D Models" prefix and takes the project hierarchy
+            // relative to the registered file rather than Windows folders.
+            string folder = FolderOf(path);
+            if (!string.IsNullOrWhiteSpace(folder))
+            {
+                string direct = folder.Split('\\', 2)[0].Trim();
+                if (direct.Length > 0)
+                    names.Add(direct);
+            }
+
+            if (++count > 5000)
+                throw new InvalidOperationException(
+                    "More than 5,000 registered DWG paths; folder listing stopped.");
+
+            // Cooperatively yield when WinForms provided an original CAD
+            // context. If not, do not transfer project objects to a worker.
+            if (originalContext != null && count % 32 == 0)
+                await Task.Yield();
+        }
+
+        if (count == 0 && names.Count == 0)
+            throw new InvalidOperationException(
+                "No usable registered DWG paths (rejected " + rejected +
+                "). Verify the Piping drawing registration in Project Manager.");
+
+        return names.OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
     }
 
     public static void Reset()
