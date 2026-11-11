@@ -656,32 +656,72 @@ internal static class ProjectFolderLinePicker
                 return;
             }
 
-            // Only after a COMPLETE verified scan touch the temporary list.
+            // REV38: folder validation must run against Autodesk's FULL
+            // Project-wide native checklist, NOT the two rows left behind by
+            // the Active-DWG exact filter (A-008 and A-08 in the user test).
+            // Restore temporarily pruned original row objects BEFORE the
+            // original text filter is cleared. Never fabricate native rows.
+            NativeIsoExactLineFilter.End(restore: true);
             ActiveDwgTags.ClearOneTag(_dialog, null);
             ClearVisibleProjection();
+
+            // The SPTC top-toolbar mouse filter normally intercepts all
+            // three icon clicks; invoke Autodesk's real Project action
+            // directly so it can rebuild the complete native ISO source.
+            bool projectRefreshed =
+                NativeIsoToolbarClickFilter.TryRefreshNativeProjectList(_dialog);
+            NativeIsoToolbarClickFilter.MarkAllLinesRestored(_dialog);
+
+            // Some native WinForms data bindings repopulate asynchronously.
+            // Yield once on the UI thread before snapshotting native rows.
+            await Task.Delay(200, cts.Token);
+            if (cts.IsCancellationRequested || serial != _scanSerial ||
+                _dialog == IntPtr.Zero || _document is null)
+                return;
 
             if (!TryBindNativeList(_dialog, out List<NativeEntry> nativeRows))
             {
                 MessageBox.Show(
-                    "Original Production Iso line checkboxes could not be found.\n" +
-                    "Choose Project (second icon) and retry. No drawing data was changed.",
-                    "SPTC Folder Filter", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    "Autodesk's original Production Iso line checklist is not available.\n" +
+                    "Close and reopen Production Iso, then select the folder again. " +
+                    "No drawing or project records were changed.",
+                    "SPTC Folder Filter", MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
                 return;
             }
 
-            var allowed = new HashSet<string>(result.Tags, StringComparer.OrdinalIgnoreCase);
-            var visible = nativeRows.Where(x => allowed.Contains(x.Tag)).ToList();
-            if (allowed.Count > 0 &&
-                allowed.Any(tag => !visible.Any(x => tag.Equals(x.Tag, StringComparison.OrdinalIgnoreCase))))
+            var allowed = new HashSet<string>(result.Tags,
+                StringComparer.OrdinalIgnoreCase);
+            var available = new HashSet<string>(
+                nativeRows.Select(x => x.Tag), StringComparer.OrdinalIgnoreCase);
+            var missing = allowed.Where(tag => !available.Contains(tag)).ToArray();
+
+            _document.Editor.WriteMessage(
+                "\nSPTC REV38 folder native Project refresh=" +
+                projectRefreshed + "; verified=" + allowed.Count +
+                "; native ISO list=" + nativeRows.Count +
+                "; missing verified tags=" + missing.Length + ".");
+
+            if (missing.Length > 0)
             {
+                // We must NOT present incomplete folder coverage as safe.
+                // PnP drawing tags are not themselves proof that a line is
+                // eligible for ISO generation in the current style/project.
                 MessageBox.Show(
-                    $"Folder has {allowed.Count} verified line tag(s), but not all " +
-                    "appear in the currently loaded Production Iso list.\n" +
-                    "Click the Project icon, then select this folder again.",
-                    "SPTC Folder Filter", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    $"Folder has {allowed.Count} verified line tag(s), but " +
+                    $"{missing.Length} are not in Autodesk's currently loaded " +
+                    $"Production Iso checklist ({nativeRows.Count} rows).\n" +
+                    "Examples: " + string.Join(", ", missing.Take(5)) + "\n" +
+                    "No partial folder selection was applied. " +
+                    "Try reopening Production Iso in Project mode, or check " +
+                    "whether the missing lines are eligible for the ISO style.",
+                    "SPTC Folder Filter", MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
                 return;
             }
 
+            var visible = nativeRows
+                .Where(x => allowed.Contains(x.Tag)).ToList();
             // Clear hidden selections to avoid generating unexpected ISOs.
             foreach (var row in nativeRows)
                 if (!allowed.Contains(row.Tag)) SetNativeChecked(row, false);
