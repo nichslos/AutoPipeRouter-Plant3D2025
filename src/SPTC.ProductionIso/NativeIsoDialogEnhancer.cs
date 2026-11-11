@@ -174,35 +174,13 @@ internal static class NativeIsoDialogEnhancer
                     // to enumerate desktop HWNDs 6 times/second thereafter.
                     if (_watch != null) _watch.Interval = 1000;
 
-                    NativeIsoToolbarClickFilter.Attach(native, showActive =>
-                    {
-                        CancelFilterVerification();
-                        // REV27: Do not put a second CheckedListBox on top of
-                        // Autodesk's original. It was selectable visually but
-                        // the native Create button still saw no valid choice.
-                        // Keep ONLY the native list with native checkboxes.
-                        ProjectFolderLinePicker.ClearVisibleProjection();
+                    // REV28: Restore ALL Autodesk toolbar buttons unchanged.
+                    // Drawing = current drawing; Project = all project;
+                    // Filter = selection set (official native behavior).
+                    // We no longer swallow their mouse messages or pretend
+                    // clearing search text switches Autodesk's list scope.
+                    // The optional SPTC DWG toggle lives beside Select All.
 
-                        if (!showActive)
-                            return ActiveDwgTags.ClearOneTag(native, _document);
-
-                        if (_document is null) return false;
-                        if (!ActiveDwgTags.HasScanned)
-                            ActiveDwgTags.Scan(_document);
-                        if (ActiveDwgTags.Count != 1)
-                        {
-                            _document.Editor.WriteMessage(
-                                "\nSPTC REV27: Active DWG has " + ActiveDwgTags.Count +
-                                " verified line tags; native exact filter requires " +
-                                "one unique tag. Original list left available.");
-                            return false;
-                        }
-
-                        bool applied = ActiveDwgTags.ApplyOneTag(native, _document);
-                        if (applied)
-                            VerifyNativeFilteredLineLater(native, ActiveDwgTags.CurrentTags[0]);
-                        return applied;
-                    });
                 }
 
                 // Path discovery only; never enumerate network DWGs on the UI thread.
@@ -425,7 +403,7 @@ internal static class NativeIsoDialogEnhancer
             _overlay.Show();
 
             ProjectFolderLinePicker.Attach(dialog, _document);
-            NativeIsoLineSelectOverlay.Attach(dialog);
+            NativeIsoLineSelectOverlay.Attach(dialog, _document);
             // REV20: avoid REV18's eager scan. Folder metadata/line numbers
             // are queried only AFTER the user chooses a folder.
             // Widen native Display lines through a draggable splitter when
@@ -438,7 +416,7 @@ internal static class NativeIsoDialogEnhancer
             // then calculate custom field geometry from the native Revision row.
             _lastDialogClientSize = Size.Empty;
             _layoutWatch?.Dispose();
-            _layoutWatch = new System.Windows.Forms.Timer { Interval = 180 };
+            _layoutWatch = new System.Windows.Forms.Timer { Interval = 450 };
             _layoutWatch.Tick += (_, _) =>
             {
                 if (_native != dialog || _overlay is null || _overlay.IsDisposed)
