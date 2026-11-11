@@ -84,7 +84,9 @@ internal static class NativeIsoDialogEnhancer
         // REV22: do not scan every model component while opening the dialog.
         // Read current piping objects on the first requested active-DWG view.
         ActiveDwgTags.Invalidate();
-        _watch = new System.Windows.Forms.Timer { Interval = 1500 };
+        // REV27: 1.5 s polling alone could defer enhancement placement.
+        // Detect the native window promptly without touching project data.
+        _watch = new System.Windows.Forms.Timer { Interval = 150 };
         _watch.Tick += OnTick;
         _watch.Start();
         doc.SendStringToExecute("_.PLANTPRODUCTIONISO ", true, false, false);
@@ -154,35 +156,51 @@ internal static class NativeIsoDialogEnhancer
                 _noWindowTicks = 0;
                 if (_native != native)
                 {
+                    // Tell apart Autodesk's own dialog load from plugin UI
+                    // attachment time when a project feels slow.
+                    var elapsedToNative = DateTime.UtcNow - _launchUtc;
+                    var attachWatch = Stopwatch.StartNew();
                     _native = native;
                     Attach(native);
-                    // Do not touch the line filter on dialog opening.
-                    // A click on Drawing or Project triggers an exact active-DWG
-                    // filter after Autodesk finishes updating the line list.
+                    attachWatch.Stop();
+
+                    _document?.Editor.WriteMessage(
+                        "\nSPTC REV27: Native dialog detected after " +
+                        elapsedToNative.TotalMilliseconds.ToString("F0") +
+                        " ms; enhancements attached in " +
+                        attachWatch.ElapsedMilliseconds + " ms.");
+
+                    // Once the dialog exists, use slower monitoring. No need
+                    // to enumerate desktop HWNDs 6 times/second thereafter.
+                    if (_watch != null) _watch.Interval = 1000;
+
                     NativeIsoToolbarClickFilter.Attach(native, showActive =>
                     {
-                        // REV23: two native list queries were competing with
-                        // SPTC's exact-match projection. The REV23 toolbar
-                        // handler owns the Active/All toggle and suppresses
-                        // the underlying native mode-button mouse click.
+                        // REV27: Do not put a second CheckedListBox on top of
+                        // Autodesk's original. It was selectable visually but
+                        // the native Create button still saw no valid choice.
+                        // Keep ONLY the native list with native checkboxes.
+                        ProjectFolderLinePicker.ClearVisibleProjection();
+
                         if (!showActive)
-                        {
-                            ProjectFolderLinePicker.ClearVisibleProjection();
-                            return true;
-                        }
+                            return ActiveDwgTags.ClearOneTag(native, _document);
 
                         if (_document is null) return false;
                         if (!ActiveDwgTags.HasScanned)
                             ActiveDwgTags.Scan(_document);
-                        if (ActiveDwgTags.Count == 0)
+                        if (ActiveDwgTags.Count != 1)
                         {
                             _document.Editor.WriteMessage(
-                                "\nSPTC REV23: No current physical piping tags; native line list left visible.");
+                                "\nSPTC REV27: Active DWG has " + ActiveDwgTags.Count +
+                                " verified line tags; native exact filter requires " +
+                                "one unique tag. Original list left available.");
                             return false;
                         }
 
-                        return ProjectFolderLinePicker.ShowExactActiveDwgTags(
-                            ActiveDwgTags.CurrentTags, _document);
+                        bool applied = ActiveDwgTags.ApplyOneTag(native, _document);
+                        if (applied)
+                            VerifyNativeFilteredLineLater(native, ActiveDwgTags.CurrentTags[0]);
+                        return applied;
                     });
                 }
 
@@ -249,6 +267,39 @@ internal static class NativeIsoDialogEnhancer
             _copyState = "Error: " + ex.Message;
             _document?.Editor.WriteMessage("\nSPTC ISO monitor: " + ex.Message);
         }
+    }
+
+    // REV27: native filter remains the authority. If the Autodesk filter
+    // doesn't narrow its OWN list to the exact tag, restore All mode instead
+    // of presenting stale/partial route names as safe to generate.
+    private static void VerifyNativeFilteredLineLater(IntPtr dialog, string tag)
+    {
+        CancelFilterVerification();
+        var timer = new System.Windows.Forms.Timer { Interval = 650 };
+        _activeFilterVerify = timer;
+        timer.Tick += (_, _) =>
+        {
+            if (!ReferenceEquals(_activeFilterVerify, timer)) return;
+            CancelFilterVerification();
+            if (_native != dialog || ProjectFolderLinePicker.HasVisibleProjection)
+                return;
+
+            if (!ProjectFolderLinePicker.VerifyNativeExactLineFilter(tag, out string note))
+            {
+                ActiveDwgTags.ClearOneTag(dialog, _document);
+                NativeIsoToolbarClickFilter.MarkAllLinesRestored(dialog);
+                _document?.Editor.WriteMessage(
+                    "\nSPTC REV27: Native active filter did not yield exactly " +
+                    "the current route. Restored All lines; do not generate " +
+                    "an unintended route. Details: " + note);
+            }
+            else
+                _document?.Editor.WriteMessage(
+                    "\nSPTC REV27: Native active route " + tag +
+                    " visible and selectable in original Autodesk checklist.");
+            NativeIsoLineSelectOverlay.UpdateDisplayedCount();
+        };
+        timer.Start();
     }
 
     private static void CancelFilterVerification()
