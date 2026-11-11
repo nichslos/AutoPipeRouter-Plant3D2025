@@ -1,36 +1,40 @@
-# SPTC Production Iso REV30 — Real Native Checkbox in Active DWG Filter
+# SPTC Production Iso REV31 — Exact Native Active Line Matching
 
-**Baseline:** REV29. Earlier revision branches and DLLs remain unchanged.
+**Baseline:** REV30. Earlier source branches and DLLs are unchanged.
 
-## Reported bug
-With REV29, clicking any of the three top-left toolbar buttons shows the exact active DWG line (e.g. `A-08`) but selecting its checkbox is unreliable; the highlighted route is not genuinely checked in the underlying Autodesk list, so **Create** remains disabled.
+## Reported REV30 issue
+The Active DWG filter now uses Autodesk's **real native selectable checkbox list**, so the user can select the line and the Create button is no longer blocked by the duplicate-list proxy. However, typing the correct current physical route `A-08` into the native filter still returns multiple substring matches:
 
-## Root cause
-REV24–26 and REV29 use `ProjectFolderLinePicker.ShowExactActiveDwgTags` to position a **second, temporary `CheckedListBox`** directly over the native Autodesk Production Iso checklist. Although its line labels look correct, a click goes to the plugin's proxy and then gets relayed to a different, obscured Autodesk row. Repeated attempts at synthetic mouse events and delayed `ItemCheck` forwarding did not reliably satisfy Autodesk's actual Create-button validation.
+- `A-08` **wanted**
+- `A-088` **not wanted**
+- `CAP_BF_BND_TEE_RTEE+A-088` **not wanted**
+- `CAP_BLIND_BEND+A-088` **not wanted**
+- `CAP_BLIND+A-088` **not wanted**
 
-## REV30 fix
-- **Keep the REV24-style three-toolbar-button Active / All toggle:** one click activates the current-drawing filter, the next clears it, subsequent clicks alternate. The original Autodesk toolbar's separate Drawing/Project/Selection commands are still intercepted in this SPTC dialog, as in REV24/REV29.
-- **Do not create the temporary proxy checkbox list when Active DWG mode is selected.** Instead, identify the original native Filter textbox inside the live, resizable **Display lines** group and put the one verified physical Line Number Tag there. The original **Autodesk checklist stays visible and clickable**. The genuine native checkbox event can enable the genuine Create button, subject to Autodesk validation.
-- **Clear the original Filter textbox** when Active mode is toggled off. This restores unfiltered lines from the currently loaded native scope; it cannot by itself switch Autodesk's Drawing/Project scope. Full Project restoration is not guaranteed when the native scope was Drawing-only.
-- **Safety for multiple routes:** a single Autodesk native filter text cannot represent several nonmatching exact tags. When the current DWG contains zero or several verified physical line tags, REV30 refuses to pretend a single active route exists. The native list is left unchanged with an F2 diagnostic. No pipe/tag/database edits are made.
-- **Resizer-safe Select All (N):** the original line checklist is now found inside the actual resized Display lines group rather than assuming it occupies less than 33% of the entire dialog width. Users can click the genuine checkbox manually (preferred for initial testing).
-- The original checked list remains the sole source of selection truth; **Create is never force-enabled**.
+The Autodesk filter is **not an exact-match filter**. REV31 adds exact-match handling without reintroducing the unselectable overlay.
+
+## REV31 implementation
+- Keep REV24/REV29-style three-top-button Active/All toggle.
+- On Active click: detect exactly one real physical current-DWG Line Number Tag, apply REV30's native Filter text, and then perform **reversible exact-name narrowing** of the existing, original Autodesk checked-list item collection. This removes the four substring-only UI entries from the original control itself while preserving `A-08` as its **original object** in Autodesk's list.
+- On the next button click: restore the removed **original item objects** to their original positions (and retain their original check states) **before** clearing the native Filter field. This does not change SQL/PnP, drawing files, line tags, project metadata or ISO configuration.
+- No duplicate CheckedListBox is displayed. The visible checkbox remains **Autodesk's actual native checkbox**, with Autodesk's own Create eligibility logic. It is never force-enabled.
+- Use a small UI-only timer while Active mode is selected. Autodesk may re-populate substring matches asynchronously; the timer checks only the existing WinForms list contents and prunes any reappearing nonexact items. It does **not** query the project database or scan DWGs. Stop the timer on toggling All or closing the native dialog.
+- Restore original item objects only when the remaining native survivors still have the expected object identity; if Autodesk has replaced its list asynchronously, do not inject stale objects.
+- For a data-bound, virtual, or otherwise unrecognized native list, the plugin will **cancel exact filtering, clear the native Filter text and log `SPTC REV31:` to F2** rather than risk UI corruption or show extra lines as if they were exact.
 
 ## Unchanged
-- REV25 vertical splitter resizing and first-level Plant 3D Drawings folder filtering. The folder-specific projection is *unchanged* and may retain its earlier relay limitations; REV30 specifically fixes the **active-DWG toolbar filter** reported in the screenshot.
-- REV05 custom completed-ISO DWG copying, REV19 aligned Custom Save Location, Select All (N), on-demand folder scanning.
-- No project/database, piping model, IsoConfig.xml, or default production ISO output changes.
-- No startup lag-specific changes (as requested earlier).
+- Three upper toolbar buttons retain REV24-style Active/All behavior.
+- Select All (N), resizable Display lines panel, folder filtering, aligned Custom Save Location, and automatic copy of finished ISO DWGs to the custom path.
+- No startup-lag optimizations in this revision.
+- No project/Plant database, model geometry, line-number property, or `IsoConfig.xml` modifications.
 
-## Test checklist
-1. Fully exit AutoCAD Plant 3D 2025 and reopen; `NETLOAD` REV30 `SPTC.ProductionIso.dll`.
-2. Run `SPTC_PRODISO`. Confirm the native all-lines list appears at startup.
-3. Click an upper-left button once. The Filter textbox should now visibly contain the actual single physical line tag, e.g. `A-08`, and Autodesk's **original** line checklist should narrow.
-4. **Click the checkbox beside `A-08`, not just its text.** Verify the tick stays and the original Create button becomes enabled if the route is eligible.
-5. Click the same upper-left button again. The search text should clear and the native unfiltered list should return. Note that the original native list scope remains whatever it was before filtering.
-6. Test a second Active → Unfiltered cycle, then generate **one** known-good ISO if Create is genuinely enabled, checking custom output copying if specified.
+## Test
+1. Completely exit Plant 3D 2025; reopen and `NETLOAD` REV31 `SPTC.ProductionIso.dll`.
+2. Run `SPTC_PRODISO`. Click one of the three top-left buttons.
+3. The native Filter field should contain `A-08`, while the actual **Line Numbers** checklist must display **only `A-08`**, not `A-088` or longer names ending with `A-088`.
+4. Click the real `A-08` checkbox and confirm it remains checked and the native Create button becomes enabled if Autodesk considers the route eligible.
+5. Click the top icon again to return to All. Verify that the original list is restored and checked items behave normally; repeat Active → All several times.
+6. Test `Select All (1)` while Active. Confirm hidden nonmatching entries are not accidentally selected for ISO creation.
+7. Generate **one** known-good ISO only after confirming selection/Create works. Verify custom copied DWG in the designated folder if a custom path is set.
 
-## If a fault remains
-Close the dialog, press F2 and share any `SPTC REV30:` / `SPTC REV27:` / `SPTC REV29:` diagnostic lines along with a screenshot showing the Filter textbox and checkmark. If the original Filter field cannot be identified in your Autodesk build, the callback safely declines to apply the filter instead of drawing a second, misleading checklist.
-
-**Build versus runtime:** GitHub Actions compilation confirms the C# build only. Active-line checkbox behavior must be verified in the actual Plant 3D 2025 dialog.
+**Caveat:** This revision removes and reinserts original dialog-control items **in memory only**. That may depend on Plant 3D's undocumented control implementation and should be tested on a copy/sample project first. A successful cloud C# build does not prove native dialog runtime behavior. If filtering fails, F2 output beginning `SPTC REV31:` explains the safe fallback. REV30 remains available.
