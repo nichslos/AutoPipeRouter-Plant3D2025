@@ -363,7 +363,7 @@ internal static class NativeIsoLineSelectOverlay
                         Button? create = FindNativeCreateButton(parent);
                         WriteDiagnostic("REV37 Select All: desired=" + selected +
                             ", checked=" + checkedCount + "/" + native.Items.Count +
-                            ", firstRowChecked=" + native.GetItemChecked(0) +
+                            ", firstRowChecked=" + (native.Items.Count > 0 && native.GetItemChecked(0)) +
                             ", selectedIndex=" + native.SelectedIndex +
                             ", nativeContextMenu=" + usedNativeMenu +
                             ", CreateEnabled=" +
