@@ -70,6 +70,7 @@ internal static class NativeIsoLineSelectOverlay
     private static System.Windows.Forms.Timer? _countTimer;
     // REV36: diagnostics and deferred actual native selection, no fake Win32 clicks.
     private static int _generation;
+    private static System.Windows.Forms.Timer? _firstRowRetry;
 
     public static void Attach(IntPtr dialog)
     {
@@ -309,23 +310,27 @@ internal static class NativeIsoLineSelectOverlay
                             native.SelectedIndex = 0;
                         }
 
-                        // Preserve REV36's native context-menu command when
-                        // Autodesk provides one. Otherwise keep the working
-                        // native SetItemChecked path (not a proxy list).
-                        bool usedNativeMenu = TryNativeSelectAllMenu(native, selected);
-
-                        if (!usedNativeMenu)
+                        // REV38: the native context-menu "Select all" left
+                        // item zero untouched in the user test (436/437);
+                        // in filtered mode item zero is the ONLY line. Do
+                        // not invoke an opaque menu action and assume every
+                        // row changed. Use verified ORIGINAL native item
+                        // states. Process the first row LAST, after the other
+                        // ItemCheck handlers have settled.
+                        native.BeginUpdate();
+                        try
                         {
-                            native.BeginUpdate();
-                            try
-                            {
-                                for (int i = 0; i < expectedCount &&
-                                    i < native.Items.Count; i++)
-                                    if (native.GetItemChecked(i) != selected)
-                                        native.SetItemChecked(i, selected);
-                            }
-                            finally { native.EndUpdate(); }
+                            for (int i = 1; i < expectedCount &&
+                                i < native.Items.Count; i++)
+                                if (native.GetItemChecked(i) != selected)
+                                    native.SetItemChecked(i, selected);
+
+                            if (native.Items.Count > 0 &&
+                                native.GetItemChecked(0) != selected)
+                                native.SetItemChecked(0, selected);
                         }
+                        finally { native.EndUpdate(); }
+                        bool usedNativeMenu = false;
 
                         // Count/check states only AFTER all native events.
                         // In REV36 count was calculated BEFORE the extra
@@ -360,8 +365,15 @@ internal static class NativeIsoLineSelectOverlay
                             finally { _setting = false; }
                         }
 
+                        // A native ItemCheck implementation may commit
+                        // the first entry after this callback returns. Retry
+                        // only that entry once on a later UI tick if needed.
+                        if (native.Items.Count > 0 &&
+                            native.GetItemChecked(0) != selected)
+                            ScheduleFirstRowRetry(native, parent, generation, selected);
+
                         Button? create = FindNativeCreateButton(parent);
-                        WriteDiagnostic("REV37 Select All: desired=" + selected +
+                        WriteDiagnostic("REV38 Select All: desired=" + selected +
                             ", checked=" + checkedCount + "/" + native.Items.Count +
                             ", firstRowChecked=" + (native.Items.Count > 0 && native.GetItemChecked(0)) +
                             ", selectedIndex=" + native.SelectedIndex +
@@ -425,6 +437,57 @@ internal static class NativeIsoLineSelectOverlay
         }
 
         return false;
+    }
+
+    // REV38: fix the first-row-only rejection without synthesizing mouse
+    // clicks or forcing the Create button. The retry is canceled whenever
+    // Autodesk closes/recreates the native dialog.
+    private static void ScheduleFirstRowRetry(
+        CheckedListBox native, IntPtr parent, int generation, bool selected)
+    {
+        try { _firstRowRetry?.Stop(); _firstRowRetry?.Dispose(); }
+        catch { }
+        var timer = new System.Windows.Forms.Timer { Interval = 160 };
+        _firstRowRetry = timer;
+        timer.Tick += (_, _) =>
+        {
+            timer.Stop();
+            timer.Dispose();
+            if (ReferenceEquals(_firstRowRetry, timer)) _firstRowRetry = null;
+            if (_generation != generation || _dialog != parent ||
+                native.IsDisposed || native.Items.Count == 0)
+                return;
+            try
+            {
+                if (native.GetItemChecked(0) != selected)
+                    native.SetItemChecked(0, selected);
+
+                int actual = 0;
+                for (int i = 0; i < native.Items.Count; i++)
+                    if (native.GetItemChecked(i)) actual++;
+
+                bool allChecked = native.Items.Count > 0 &&
+                                  actual == native.Items.Count;
+                if (_toggle is { IsDisposed: false } toggle)
+                {
+                    _setting = true;
+                    try { toggle.Checked = allChecked; }
+                    finally { _setting = false; }
+                }
+                Button? create = FindNativeCreateButton(parent);
+                WriteDiagnostic("REV38 first-row retry: checked=" +
+                    native.GetItemChecked(0) + ", total=" +
+                    actual + "/" + native.Items.Count +
+                    ", CreateEnabled=" +
+                    (create is null ? "unknown" : create.Enabled.ToString()));
+            }
+            catch (Exception ex)
+            {
+                WriteDiagnostic("REV38 first-row retry failed: " +
+                    ex.GetBaseException().Message);
+            }
+        };
+        timer.Start();
     }
 
     // Context menu is an optional native path; only the exact native
@@ -571,6 +634,9 @@ internal static class NativeIsoLineSelectOverlay
     public static void Hide()
     {
         _generation++;
+        try { _firstRowRetry?.Stop(); _firstRowRetry?.Dispose(); }
+        catch { }
+        _firstRowRetry = null;
         _dialog = IntPtr.Zero;
         try { _countTimer?.Stop(); } catch { }
         try { _countTimer?.Dispose(); } catch { }
