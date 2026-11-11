@@ -1306,8 +1306,27 @@ internal static class ProjectFolderLinePicker
                     if (displayed.GetItemChecked(displayIndex) != desired)
                         return;
 
-                    if (SetNativeChecked(nativeRow, desired, userAction: true))
+                    // REV39: A single folder checkbox must use the same
+                    // verified native SetItemChecked path as working bulk
+                    // selection. Synthetic mouse clicks on Autodesk's
+                    // COVERED original list can invert/reject a single item
+                    // and our old callback then removed the visible check.
+                    // Keep the bulk Select All path unchanged.
+                    if (SetNativeChecked(nativeRow, desired))
                     {
+                        if (desired && _nativeChecked is { IsDisposed: false } native &&
+                            nativeRow.Index < native.Items.Count)
+                        {
+                            // Trigger genuine native selection notification
+                            // without sending clicks through the overlay.
+                            if (native.SelectedIndex == nativeRow.Index)
+                                native.ClearSelected();
+                            native.SelectedIndex = nativeRow.Index;
+                        }
+                        else if (desired && _nativeView is { IsDisposed: false } view &&
+                                 nativeRow.Index < view.Items.Count)
+                            view.Items[nativeRow.Index].Selected = true;
+
                         ScheduleNativeSelectionCommit();
                         return;
                     }
