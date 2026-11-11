@@ -1,40 +1,38 @@
-# SPTC Production Iso REV31 — Exact Native Active Line Matching
+# SPTC Production Iso REV32 — Restore Folder Dropdown
 
-**Baseline:** REV30. Earlier source branches and DLLs are unchanged.
+**Baseline:** REV31. All older revision branches, DLLs, and features remain unchanged.
 
-## Reported REV30 issue
-The Active DWG filter now uses Autodesk's **real native selectable checkbox list**, so the user can select the line and the Create button is no longer blocked by the duplicate-list proxy. However, typing the correct current physical route `A-08` into the native filter still returns multiple substring matches:
+## Problem from user screenshot
+Clicking the folder dropdown next to the Line Numbers filter showed:
 
-- `A-08` **wanted**
-- `A-088` **not wanted**
-- `CAP_BF_BND_TEE_RTEE+A-088` **not wanted**
-- `CAP_BLIND_BEND+A-088` **not wanted**
-- `CAP_BLIND+A-088` **not wanted**
+```
+Plant 3D Drawings folders
+All Project (no folder filter)
+Folder list unavailable — see F2 log
+```
 
-The Autodesk filter is **not an exact-match filter**. REV31 adds exact-match handling without reintroducing the unselectable overlay.
+In REV25–31, the quick folder list **assumed** that Project Manager's `Plant 3D Drawings` node must correspond to a real physical directory at `<ProjectFolderPath>\Plant 3D Drawings`. In Plant 3D, project drawing hierarchy and the directory layout are not necessarily identical. If that directory does not exist, `Directory.Exists` fails even when registered project folders and DWGs exist.
 
-## REV31 implementation
-- Keep REV24/REV29-style three-top-button Active/All toggle.
-- On Active click: detect exactly one real physical current-DWG Line Number Tag, apply REV30's native Filter text, and then perform **reversible exact-name narrowing** of the existing, original Autodesk checked-list item collection. This removes the four substring-only UI entries from the original control itself while preserving `A-08` as its **original object** in Autodesk's list.
-- On the next button click: restore the removed **original item objects** to their original positions (and retain their original check states) **before** clearing the native Filter field. This does not change SQL/PnP, drawing files, line tags, project metadata or ISO configuration.
-- No duplicate CheckedListBox is displayed. The visible checkbox remains **Autodesk's actual native checkbox**, with Autodesk's own Create eligibility logic. It is never force-enabled.
-- Use a small UI-only timer while Active mode is selected. Autodesk may re-populate substring matches asynchronously; the timer checks only the existing WinForms list contents and prunes any reappearing nonexact items. It does **not** query the project database or scan DWGs. Stop the timer on toggling All or closing the native dialog.
-- Restore original item objects only when the remaining native survivors still have the expected object identity; if Autodesk has replaced its list asynchronously, do not inject stale objects.
-- For a data-bound, virtual, or otherwise unrecognized native list, the plugin will **cancel exact filtering, clear the native Filter text and log `SPTC REV31:` to F2** rather than risk UI corruption or show extra lines as if they were exact.
+## REV32 changes (folder discovery only)
+- Replace the incorrect physical-directory assumption with the **current project's registered Piping drawing metadata**.
+- Call `Piping.GetPnPDrawingFiles` to obtain registered DWG paths, then reuse the existing `FolderOf` hierarchy parser to extract only the **first-level folder under Plant 3D Drawings**. Nested subfolders are not shown independently. Root DWGs do not introduce a fake folder.
+- Enumerate names **on demand when the user opens the dropdown**. No project-wide PnPDrawings SQL join, DWG opening, geometry scan, or file-system directory walk occurs merely to populate the folder menu.
+- All Plant 3D API/reflection access stays on the CAD UI thread; the code yields to the WinForms message pump every 32 paths (when a synchronization context exists). **No Task.Run with Autodesk objects.**
+- If the folder index from a previous user selection is already available, reuse its registered folder names immediately.
+- Add `SPTC REV32: Folder menu loaded N top-level folder(s) from registered Plant 3D Piping DWGs.` to AutoCAD F2 output.
+- On failure, show `Folder list unavailable — see F2 log` with a more specific `SPTC REV32: Registered drawing folder list failed: ...` diagnostic. No unexpected Windows folders are offered as a fallback.
 
 ## Unchanged
-- Three upper toolbar buttons retain REV24-style Active/All behavior.
-- Select All (N), resizable Display lines panel, folder filtering, aligned Custom Save Location, and automatic copy of finished ISO DWGs to the custom path.
-- No startup-lag optimizations in this revision.
-- No project/Plant database, model geometry, line-number property, or `IsoConfig.xml` modifications.
+- Folder-specific line verification starts **only after choosing a folder** and uses the prior PnP read-only verification and progress/Cancel workflow. No registration/PNP data writes.
+- REV31 native exact active-DWG line number view, original checkbox, Select All (N), three top buttons.
+- REV25 adaptive resizable line-number pane/vertical grip, REV19 Custom Save Location, automatic copying of completed ISO DWGs.
+- No changes to startup lag, Autodesk ISO generation, project file/drawing names, default ISO style/configuration, `IsoConfig.xml` or Project Manager.
 
 ## Test
-1. Completely exit Plant 3D 2025; reopen and `NETLOAD` REV31 `SPTC.ProductionIso.dll`.
-2. Run `SPTC_PRODISO`. Click one of the three top-left buttons.
-3. The native Filter field should contain `A-08`, while the actual **Line Numbers** checklist must display **only `A-08`**, not `A-088` or longer names ending with `A-088`.
-4. Click the real `A-08` checkbox and confirm it remains checked and the native Create button becomes enabled if Autodesk considers the route eligible.
-5. Click the top icon again to return to All. Verify that the original list is restored and checked items behave normally; repeat Active → All several times.
-6. Test `Select All (1)` while Active. Confirm hidden nonmatching entries are not accidentally selected for ISO creation.
-7. Generate **one** known-good ISO only after confirming selection/Create works. Verify custom copied DWG in the designated folder if a custom path is set.
+1. Restart Plant 3D 2025 and `NETLOAD` REV32 `SPTC.ProductionIso.dll`; run `SPTC_PRODISO`.
+2. Click the folder arrow in the Line Numbers filter row. You should see **All Project** and only the registered *direct child* folders visible under Project Manager → Plant 3D Drawings, not unrelated system directories.
+3. After folder names load, F2 should report `SPTC REV32: Folder menu loaded ...`.
+4. Select a small folder and confirm line-tag verification runs only for that selection. Check `Select All (N)` reflects the list.
+5. Return to All Project and confirm no change to original drawing/project data. Test one known-good ISO separately before any production batch.
 
-**Caveat:** This revision removes and reinserts original dialog-control items **in memory only**. That may depend on Plant 3D's undocumented control implementation and should be tested on a copy/sample project first. A successful cloud C# build does not prove native dialog runtime behavior. If filtering fails, F2 output beginning `SPTC REV31:` explains the safe fallback. REV30 remains available.
+**Runtime caveat:** GitHub Actions compilation verifies C# compatibility, not the actual structure of the user's Plant 3D project hierarchy. If the dropdown still cannot list folders, share the complete `SPTC REV32:` line from F2; the exception text will distinguish missing project metadata from missing registered Piping DWG paths.
