@@ -475,14 +475,15 @@ internal static class ProjectFolderLinePicker
             else
                 ApplyFolder(choice.Key);
         };
+        // Populate BEFORE showing the window, so its first painted frame
+        // is never an empty gray panel while folder discovery begins.
+        _choiceList.Items.Add(new FolderMenuChoice("Loading folders...", null));
         PositionMenu();
         _choicesHost.Show();
         _choicesHost.BringToFront();
 
-        // Do not block the CAD UI on PnP database indexing here.
-        // Paint a populated/usable menu instantly; only the physical direct
-        // directory names are read on a worker (no Autodesk API off-thread).
-        _choiceList.Items.Add(new FolderMenuChoice("Loading folders...", null));
+        // No PnP calls on menu open. Enumerate only physical direct
+        // folder names on a background filesystem-only task.
         _menuLoadCancel = new CancellationTokenSource();
         int loadVersion = ++_menuLoadVersion;
         _ = FillFolderNamesAsync(_menuLoadCancel.Token, loadVersion);
