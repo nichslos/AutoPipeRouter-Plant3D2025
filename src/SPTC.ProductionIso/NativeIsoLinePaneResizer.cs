@@ -115,6 +115,11 @@ internal static class NativeIsoLinePaneResizer
         _initialRightMargin = Math.Max(4, _parent.ClientSize.Width - _right.Right);
         _initialLeftHeight = _left.Height;
         _lastParentWidth = _parent.ClientSize.Width;
+        // REV25: WinForms can finish resizing the native group AFTER the
+        // parent window Resize event. Update the grip on the actual group
+        // geometry change too, not just at dialog-size polling intervals.
+        _left.SizeChanged += OnLeftGeometryChanged;
+        _left.LocationChanged += OnLeftGeometryChanged;
         if (_parent is TableLayoutPanel table &&
             table.GetColumn(_left) >= 0 &&
             table.GetColumn(_right) > table.GetColumn(_left) &&
@@ -584,6 +589,13 @@ internal static class NativeIsoLinePaneResizer
     // REV25: follow the CURRENT native Display lines GroupBox geometry.
     // REV20 incorrectly captured its height once when opened; this left
     // a short/overhanging drag bar after vertically resizing the dialog.
+    private static void OnLeftGeometryChanged(object? sender, EventArgs e)
+    {
+        if (_adjusting || _handle is null || _handle.IsDisposed)
+            return;
+        PositionHandle();
+    }
+
     private static void PositionHandle()
     {
         if (_handle == null || _handle.IsDisposed ||
@@ -633,6 +645,15 @@ internal static class NativeIsoLinePaneResizer
     public static void Hide()
     {
         _dragging = false;
+        if (_left != null)
+        {
+            try
+            {
+                _left.SizeChanged -= OnLeftGeometryChanged;
+                _left.LocationChanged -= OnLeftGeometryChanged;
+            }
+            catch { }
+        }
         _lastGripX = int.MinValue;
         _lastGripY = int.MinValue;
         _lastGripHeight = -1;
