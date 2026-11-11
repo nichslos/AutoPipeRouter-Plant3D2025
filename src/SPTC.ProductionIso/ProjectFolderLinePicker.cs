@@ -592,6 +592,29 @@ internal static class ProjectFolderLinePicker
 
         try
         {
+            // REV25: the quick dropdown intentionally does NOT load PnP.
+            // Initialize only after a specific folder is chosen, with the
+            // progress panel already visible and painted. All Autodesk API
+            // reflection/database calls remain on Plant 3D's UI thread.
+            if (!ProjectFolderLineCatalog.Ready)
+            {
+                await Task.Delay(50, cts.Token);
+                ProjectFolderLineCatalog.Initialize(_document);
+            }
+
+            if (!ProjectFolderLineCatalog.Ready ||
+                !ProjectFolderLineCatalog.Folders.Any(choice =>
+                    choice.Key.Equals(folder, StringComparison.OrdinalIgnoreCase)))
+            {
+                MessageBox.Show(
+                    "This physical folder is not a verified registered " +
+                    "Plant 3D drawing folder. No ISO lines were changed.\n" +
+                    ProjectFolderLineCatalog.Diagnostic,
+                    "SPTC Folder Filter", MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+                return;
+            }
+
             var progress = new Progress<ProjectFolderLineCatalog.ScanProgress>(state =>
             {
                 if (serial != _scanSerial || _scanPanel is null ||
