@@ -174,12 +174,32 @@ internal static class NativeIsoDialogEnhancer
                     // to enumerate desktop HWNDs 6 times/second thereafter.
                     if (_watch != null) _watch.Interval = 1000;
 
-                    // REV28: Restore ALL Autodesk toolbar buttons unchanged.
-                    // Drawing = current drawing; Project = all project;
-                    // Filter = selection set (official native behavior).
-                    // We no longer swallow their mouse messages or pretend
-                    // clearing search text switches Autodesk's list scope.
-                    // The optional SPTC DWG toggle lives beside Select All.
+                    // REV29: Restore the REV24 behavior of all three top
+                    // buttons. Each click alternates All Project ↔ exact
+                    // current DWG line tags using the original REV24 handler.
+                    // This deliberately bypasses Autodesk's separate
+                    // Drawing/Project/Selection buttons inside SPTC.
+                    NativeIsoToolbarClickFilter.Attach(native, showActive =>
+                    {
+                        if (!showActive)
+                        {
+                            ProjectFolderLinePicker.ClearVisibleProjection();
+                            return true;
+                        }
+
+                        if (_document is null) return false;
+                        if (!ActiveDwgTags.HasScanned)
+                            ActiveDwgTags.Scan(_document);
+                        if (ActiveDwgTags.Count == 0)
+                        {
+                            _document.Editor.WriteMessage(
+                                "\nSPTC REV29: No current physical piping line tags; " +
+                                "the complete native list remains visible.");
+                            return false;
+                        }
+                        return ProjectFolderLinePicker.ShowExactActiveDwgTags(
+                            ActiveDwgTags.CurrentTags, _document);
+                    });
 
                 }
 
@@ -403,7 +423,7 @@ internal static class NativeIsoDialogEnhancer
             _overlay.Show();
 
             ProjectFolderLinePicker.Attach(dialog, _document);
-            NativeIsoLineSelectOverlay.Attach(dialog, _document);
+            NativeIsoLineSelectOverlay.Attach(dialog);
             // REV20: avoid REV18's eager scan. Folder metadata/line numbers
             // are queried only AFTER the user chooses a folder.
             // Widen native Display lines through a draggable splitter when
