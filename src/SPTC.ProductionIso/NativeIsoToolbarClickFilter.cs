@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Drawing;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
@@ -70,6 +71,97 @@ internal sealed class NativeIsoToolbarClickFilter : IMessageFilter
     {
         if (_active is { _disposed: false } current && current._dialog == dialog)
             current._showingActive = false;
+    }
+
+    // REV38: The old SPTC top-toolbar mouse filter deliberately intercepts
+    // Drawing/Project/Filter clicks and turns all three into Active/All.
+    // After native exact filtering, the original Autodesk checklist may
+    // remain scoped to only the last matching two rows. The folder picker
+    // cannot show 183 verified tags if it can see only those two rows.
+    //
+    // Restore Autodesk's actual PROJECT-wide source by invoking its existing
+    // SECOND (Project) toolbar action directly, not by sending synthetic
+    // mouse messages. We verify the toolbar's geometry before invocation.
+    // Never fabricate route items or force-enable Create.
+    public static bool TryRefreshNativeProjectList(IntPtr dialog)
+    {
+        if (dialog == IntPtr.Zero) return false;
+        IntPtr group = IntPtr.Zero;
+        RECT groupRect = default;
+        EnumChildWindows(dialog, (hwnd, _) =>
+        {
+            if (Control.FromHandle(hwnd) is GroupBox g &&
+                g.Text.Trim().Equals("Display lines",
+                    StringComparison.OrdinalIgnoreCase) &&
+                GetWindowRect(hwnd, out RECT rect))
+            {
+                group = hwnd;
+                groupRect = rect;
+                return false;
+            }
+            return true;
+        }, IntPtr.Zero);
+        if (group == IntPtr.Zero) return false;
+
+        // Prefer native ToolStrip: its original Click handler can repopulate
+        // the project-wide checklist without our mouse-message filter.
+        ToolStrip? nativeStrip = null;
+        var buttons = new List<(Button Control, int X)>();
+        EnumChildWindows(group, (hwnd, _) =>
+        {
+            if (!GetWindowRect(hwnd, out RECT rect)) return true;
+            int cy = (rect.Top + rect.Bottom) / 2;
+            int cx = (rect.Left + rect.Right) / 2;
+            if (cy < groupRect.Top + 8 || cy > groupRect.Top + 52 ||
+                cx < groupRect.Left + 50 || cx > groupRect.Right - 4)
+                return true;
+
+            Control? c = Control.FromHandle(hwnd);
+            if (c is ToolStrip strip &&
+                strip.Items.OfType<ToolStripItem>().Count(i => i.Available) >= 3)
+            {
+                nativeStrip = strip;
+                return false;
+            }
+            if (c is Button button && button.Visible && button.Enabled &&
+                rect.Width >= 16 && rect.Width <= 45 &&
+                rect.Height >= 16 && rect.Height <= 43)
+                buttons.Add((button, cx));
+            return true;
+        }, IntPtr.Zero);
+
+        try
+        {
+            if (nativeStrip is { IsDisposed: false } strip)
+            {
+                var icons = strip.Items.OfType<ToolStripItem>()
+                    .Where(i => i.Available && i.Enabled &&
+                                i is ToolStripButton).ToList();
+                if (icons.Count >= 3)
+                {
+                    icons[1].PerformClick();
+                    MarkAllLinesRestored(dialog);
+                    return true;
+                }
+            }
+
+            // Some versions expose three ordinary WinForms icon Buttons.
+            // Only use a geometrically coherent row of exactly three.
+            var ordered = buttons.OrderBy(x => x.X).ToList();
+            if (ordered.Count == 3 &&
+                ordered[2].X - ordered[0].X < 125)
+            {
+                ordered[1].Control.PerformClick();
+                MarkAllLinesRestored(dialog);
+                return true;
+            }
+        }
+        catch (Exception)
+        {
+            // Leave the original line list as-is on unsupported dialogs.
+            // The caller will validate coverage before offering an ISO.
+        }
+        return false;
     }
 
     public bool PreFilterMessage(ref Message message)
