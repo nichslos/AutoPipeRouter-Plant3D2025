@@ -509,8 +509,9 @@ internal static class ProjectFolderLinePicker
             _choiceList.BeginUpdate();
             try
             {
-                // Only top-level children under Plant 3D Drawings. Registered
-                // PnP membership is validated when a folder is actually used.
+                // REV32: only top-level folders represented by registered
+                // Piping DWG paths under the Plant 3D Drawings project tree.
+                // PnP membership is validated when a folder is selected.
                 while (_choiceList.Items.Count > 1)
                     _choiceList.Items.RemoveAt(1);
 
@@ -519,8 +520,11 @@ internal static class ProjectFolderLinePicker
 
                 if (names.Count == 0)
                     _choiceList.Items.Add(new FolderMenuChoice(
-                        "(No subfolders in Plant 3D Drawings)", null));
+                        "(No registered drawing subfolders)", null));
                 _choiceList.ClearSelected();
+                _document?.Editor.WriteMessage(
+                    "\nSPTC REV32: Folder menu loaded " + names.Count +
+                    " top-level folder(s) from registered Plant 3D Piping DWGs.");
             }
             finally { _choiceList.EndUpdate(); }
         }
@@ -535,7 +539,7 @@ internal static class ProjectFolderLinePicker
             _choiceList.Items.Add(new FolderMenuChoice(
                 "Folder list unavailable — see F2 log", null));
             _document?.Editor.WriteMessage(
-                "\nSPTC REV25: Quick folder list: " +
+                "\nSPTC REV32: Registered drawing folder list failed: " +
                 ex.GetBaseException().Message);
         }
     }
