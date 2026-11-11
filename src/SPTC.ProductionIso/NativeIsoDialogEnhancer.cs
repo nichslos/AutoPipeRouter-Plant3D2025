@@ -176,6 +176,7 @@ internal static class NativeIsoDialogEnhancer
 
                     NativeIsoToolbarClickFilter.Attach(native, showActive =>
                     {
+                        CancelFilterVerification();
                         // REV27: Do not put a second CheckedListBox on top of
                         // Autodesk's original. It was selectable visually but
                         // the native Create button still saw no valid choice.
@@ -286,17 +287,18 @@ internal static class NativeIsoDialogEnhancer
 
             if (!ProjectFolderLinePicker.VerifyNativeExactLineFilter(tag, out string note))
             {
-                ActiveDwgTags.ClearOneTag(dialog, _document);
-                NativeIsoToolbarClickFilter.MarkAllLinesRestored(dialog);
+                // Do NOT clear the user's native filter automatically here.
+                // Autodesk may still be loading entries after the first
+                // repaint; clearing would cause the old routes to reappear
+                // even though the user is actively trying to select a line.
                 _document?.Editor.WriteMessage(
-                    "\nSPTC REV27: Native active filter did not yield exactly " +
-                    "the current route. Restored All lines; do not generate " +
-                    "an unintended route. Details: " + note);
+                    "\nSPTC REV27: Active filter verification inconclusive: " +
+                    note + " Inspect the native line list before creating an ISO.");
             }
             else
                 _document?.Editor.WriteMessage(
                     "\nSPTC REV27: Native active route " + tag +
-                    " visible and selectable in original Autodesk checklist.");
+                    " displayed in the original selectable Autodesk checklist.");
             NativeIsoLineSelectOverlay.UpdateDisplayedCount();
         };
         timer.Start();
