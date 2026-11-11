@@ -174,31 +174,53 @@ internal static class NativeIsoDialogEnhancer
                     // to enumerate desktop HWNDs 6 times/second thereafter.
                     if (_watch != null) _watch.Interval = 1000;
 
-                    // REV29: Restore the REV24 behavior of all three top
-                    // buttons. Each click alternates All Project ↔ exact
-                    // current DWG line tags using the original REV24 handler.
-                    // This deliberately bypasses Autodesk's separate
-                    // Drawing/Project/Selection buttons inside SPTC.
+                    // REV30: Keep the REV24 three-button Active/All toggle
+                    // but STOP showing a second CheckedListBox for Active DWG.
+                    // A proxy checkbox cannot reliably enable Autodesk's
+                    // native Create button. Instead filter the ORIGINAL
+                    // Autodesk line list using its own Filter textbox.
+                    // The native row stays click/checkbox/validation-capable.
                     NativeIsoToolbarClickFilter.Attach(native, showActive =>
                     {
+                        if (_document is null) return false;
+
+                        // A previous folder projection may still be present.
+                        // Remove it so the user's pointer reaches Autodesk's
+                        // genuine line list, never an overlaid WinForms copy.
+                        ProjectFolderLinePicker.ClearVisibleProjection();
+
                         if (!showActive)
                         {
-                            ProjectFolderLinePicker.ClearVisibleProjection();
-                            return true;
+                            bool cleared = ActiveDwgTags.ClearOneTag(native, _document);
+                            if (cleared)
+                                NativeIsoLineSelectOverlay.UpdateDisplayedCount();
+                            return cleared;
                         }
 
-                        if (_document is null) return false;
                         if (!ActiveDwgTags.HasScanned)
                             ActiveDwgTags.Scan(_document);
-                        if (ActiveDwgTags.Count == 0)
+
+                        if (ActiveDwgTags.Count != 1)
                         {
                             _document.Editor.WriteMessage(
-                                "\nSPTC REV29: No current physical piping line tags; " +
-                                "the complete native list remains visible.");
+                                "\nSPTC REV30: Native active filtering needs exactly " +
+                                "one verified physical line tag. Found " +
+                                ActiveDwgTags.Count + ". Full list was left unchanged.");
                             return false;
                         }
-                        return ProjectFolderLinePicker.ShowExactActiveDwgTags(
-                            ActiveDwgTags.CurrentTags, _document);
+
+                        bool applied = ActiveDwgTags.ApplyOneTag(native, _document);
+                        if (applied)
+                        {
+                            _document.Editor.WriteMessage(
+                                "\nSPTC REV30: Active line filter uses Autodesk's " +
+                                "ORIGINAL checklist. Click its checkbox directly; " +
+                                "no proxy checkbox and no forced Create.");
+                            // Update the displayed number after Autodesk
+                            // commits TextChanged and its own list refresh.
+                            NativeIsoLineSelectOverlay.UpdateDisplayedCount();
+                        }
+                        return applied;
                     });
 
                 }
