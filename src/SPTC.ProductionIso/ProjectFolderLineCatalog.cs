@@ -57,6 +57,52 @@ internal static class ProjectFolderLineCatalog
         }
     }
 
+    // REV25: The folder DROPDOWN must never synchronously initialize
+    // PnPDataLinks/PnPDrawings; in REV24 that blocked the UI for ~3 seconds
+    // and showed a blank unpainted child menu. Read only the immediate
+    // physical directories below "Plant 3D Drawings" on a worker. No
+    // Autodesk API objects are accessed from the worker thread.
+    // Registered PnP membership is verified on the UI thread ONLY after
+    // a folder is selected.
+    public static Task<IReadOnlyList<string>> ReadDirectFolderNamesAsync(
+        CancellationToken cancellation)
+    {
+        cancellation.ThrowIfCancellationRequested();
+
+        // Reflection access to CurrentProject is UI-thread only. Capture a
+        // plain string before dispatching any directory I/O.
+        Type? plantApp = FindPlantType(
+            "Autodesk.ProcessPower.PlantInstance.PlantApplication");
+        object? project = plantApp?.GetProperty("CurrentProject",
+            BindingFlags.Public | BindingFlags.Static)?.GetValue(null);
+        string projectRoot =
+            Convert.ToString(GetProperty(project, "ProjectFolderPath")) ?? "";
+        if (string.IsNullOrWhiteSpace(projectRoot))
+            throw new InvalidOperationException(
+                "Current Plant 3D project folder is unavailable.");
+
+        string drawingsRoot = Path.Combine(projectRoot, "Plant 3D Drawings");
+        return Task.Run<IReadOnlyList<string>>(() =>
+        {
+            cancellation.ThrowIfCancellationRequested();
+            if (!Directory.Exists(drawingsRoot))
+                throw new DirectoryNotFoundException(
+                    "Plant 3D Drawings physical folder not found in the " +
+                    "current project root. No unrelated folders were listed.");
+
+            // Enumerate only first-level directories, never recurse through
+            // network DWGs or parse project DB when merely opening the menu.
+            return (IReadOnlyList<string>)Directory.EnumerateDirectories(
+                    drawingsRoot, "*", SearchOption.TopDirectoryOnly)
+                .Select(Path.GetFileName)
+                .Where(name => !string.IsNullOrWhiteSpace(name))
+                .Select(name => name!)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+        }, cancellation);
+    }
+
     public static void Reset()
     {
         Registered.Clear();
