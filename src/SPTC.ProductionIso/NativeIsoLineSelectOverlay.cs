@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Reflection;
 using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
 using System.Drawing;
 using System.Runtime.InteropServices;
@@ -297,10 +296,22 @@ internal static class NativeIsoLineSelectOverlay
                     int expectedCount = native.Items.Count;
                     try
                     {
-                        // If Autodesk supplies a real "Select all lines" or
-                        // "Clear all lines" context-menu command, invoke its
-                        // own handler first. That updates Autodesk's internal
-                        // selection model rather than only drawing checkmarks.
+                        // REV37: prepare native selection BEFORE changing any
+                        // checkbox. Autodesk's Create eligibility logic expects
+                        // an actual selected row while ItemCheck is firing.
+                        // REV36 raised Control.OnClick AFTER checking every
+                        // row; that extra click unchecked the FIRST line again.
+                        // Do NOT raise OnClick or synthesize mouse messages.
+                        if (selected && expectedCount > 0)
+                        {
+                            if (native.SelectedIndex == 0)
+                                native.ClearSelected();
+                            native.SelectedIndex = 0;
+                        }
+
+                        // Preserve REV36's native context-menu command when
+                        // Autodesk provides one. Otherwise keep the working
+                        // native SetItemChecked path (not a proxy list).
                         bool usedNativeMenu = TryNativeSelectAllMenu(native, selected);
 
                         if (!usedNativeMenu)
@@ -316,6 +327,10 @@ internal static class NativeIsoLineSelectOverlay
                             finally { native.EndUpdate(); }
                         }
 
+                        // Count/check states only AFTER all native events.
+                        // In REV36 count was calculated BEFORE the extra
+                        // OnClick, so the log could incorrectly say all
+                        // checked even after the first line became unchecked.
                         int checkedCount = 0;
                         int firstChecked = -1;
                         for (int i = 0; i < native.Items.Count; i++)
@@ -325,34 +340,12 @@ internal static class NativeIsoLineSelectOverlay
                             if (firstChecked < 0) firstChecked = i;
                         }
 
-                        // A native manual row click both checks AND selects a
-                        // line. Programmatic SetItemChecked does not select.
-                        // Explicitly raise native ListBox selection and the
-                        // existing native Click event ONCE, not N times.
-                        bool raisedClick = false;
-                        if (selected && firstChecked >= 0)
-                        {
-                            if (native.SelectedIndex == firstChecked)
-                                native.ClearSelected();
+                        // Native selection-change notification is enough;
+                        // never invoke Control.OnClick, which can invert the
+                        // first checked item in the Autodesk control.
+                        if (selected && firstChecked >= 0 &&
+                            native.SelectedIndex != firstChecked)
                             native.SelectedIndex = firstChecked;
-                            native.Focus();
-                            try
-                            {
-                                MethodInfo? click = typeof(Control).GetMethod(
-                                    "OnClick", BindingFlags.Instance |
-                                               BindingFlags.NonPublic);
-                                if (click != null)
-                                {
-                                    click.Invoke(native, new object[] { EventArgs.Empty });
-                                    raisedClick = true;
-                                }
-                            }
-                            catch (Exception ex)
-                            {
-                                WriteDiagnostic("REV36 native Click handler: " +
-                                    ex.GetBaseException().Message);
-                            }
-                        }
 
                         // The overlay tick follows the *real* line states.
                         // It must not claim success when Autodesk ignored
@@ -368,12 +361,11 @@ internal static class NativeIsoLineSelectOverlay
                         }
 
                         Button? create = FindNativeCreateButton(parent);
-                        WriteDiagnostic("REV36 Select All: desired=" + selected +
+                        WriteDiagnostic("REV37 Select All: desired=" + selected +
                             ", checked=" + checkedCount + "/" + native.Items.Count +
-                            ", listEnabled=" + native.Enabled +
-                            ", checkOnClick=" + native.CheckOnClick +
+                            ", firstRowChecked=" + native.GetItemChecked(0) +
+                            ", selectedIndex=" + native.SelectedIndex +
                             ", nativeContextMenu=" + usedNativeMenu +
-                            ", nativeClick=" + raisedClick +
                             ", CreateEnabled=" +
                             (create == null ? "unknown" : create.Enabled.ToString()));
                     }
