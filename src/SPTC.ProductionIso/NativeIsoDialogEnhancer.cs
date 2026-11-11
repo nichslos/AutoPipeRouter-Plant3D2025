@@ -213,7 +213,18 @@ internal static class NativeIsoDialogEnhancer
                             NativeIsoExactLineFilter.End(restore: true);
                             bool cleared = ActiveDwgTags.ClearOneTag(native, _document);
                             if (cleared)
+                            {
+                                // REV38: original Autodesk Project action
+                                // restores its authoritative full line list.
+                                // A textbox clear alone can leave the last
+                                // narrow matching set (e.g. A-008/A-08).
+                                bool refreshed =
+                                    NativeIsoToolbarClickFilter.TryRefreshNativeProjectList(native);
+                                _document.Editor.WriteMessage(
+                                    "\nSPTC REV38: All Project native refresh=" +
+                                    refreshed + "; line filter cleared.");
                                 NativeIsoLineSelectOverlay.UpdateDisplayedCount();
+                            }
                             return cleared;
                         }
 
