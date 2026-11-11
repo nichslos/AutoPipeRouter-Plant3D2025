@@ -854,6 +854,41 @@ internal static class ProjectFolderLinePicker
         return false;
     }
 
+    // REV27: verify the ORIGINAL Autodesk checklist only. Active DWG mode
+    // no longer uses the visual copy; selecting a native row must be enough
+    // to enable native Create when the underlying ISO validation permits it.
+    public static bool VerifyNativeExactLineFilter(string expectedTag, out string note)
+    {
+        note = "";
+        if (_dialog == IntPtr.Zero)
+        {
+            note = "Production Iso dialog no longer exists.";
+            return false;
+        }
+
+        if (!TryBindNativeList(_dialog, out List<NativeEntry> entries))
+        {
+            note = "Original Autodesk checklist not available yet.";
+            return false;
+        }
+
+        if (entries.Count == 0)
+        {
+            note = "Original Autodesk checklist shows zero routes.";
+            return false;
+        }
+
+        string[] mismatched = entries.Where(x =>
+            !x.Tag.Equals(expectedTag, StringComparison.OrdinalIgnoreCase))
+            .Select(x => x.Tag).Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(5).ToArray();
+        note = $"Native entries: {entries.Count}; expected: {expectedTag}.";
+        if (mismatched.Length > 0)
+            note += " Other entries: " + string.Join(", ", mismatched);
+        return mismatched.Length == 0 &&
+            entries.Any(x => x.Tag.Equals(expectedTag, StringComparison.OrdinalIgnoreCase));
+    }
+
     /// <summary>
     /// REV22: exact-match current-DWG view. Never search by substring:
     /// line tags such as ...-6 and ...-66666 must not match each other.
