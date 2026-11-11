@@ -288,7 +288,7 @@ internal static class NativeIsoLineSelectOverlay
             IntPtr parent = _dialog;
             try
             {
-                native.BeginInvoke((MethodInvoker)(() =>
+                native.BeginInvoke((System.Windows.Forms.MethodInvoker)(() =>
                 {
                     if (_generation != generation || _dialog != parent ||
                         native.IsDisposed || native.Items.Count == 0)
