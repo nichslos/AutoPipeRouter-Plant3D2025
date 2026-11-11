@@ -273,6 +273,13 @@ internal static class NativeIsoLineSelectOverlay
             _toggle.IsDisposed || _host is null || _host.IsDisposed)
             return;
 
+        // Autodesk's own Drawing/Project buttons are authoritative in
+        // REV28. If they or the user change/clear the Filter textbox, reflect
+        // it in the supplemental DWG checkbox without restoring stale modes.
+        if (_activeDwgOnly is { Checked: true, Enabled: true } &&
+            !ActiveDwgTags.IsNativeFilterCurrent(_dialog))
+            ResetActiveDwgOnly();
+
         int? count = ProjectFolderLinePicker.VisibleLineCount ??
                      ReadNativeLineCount(_dialog);
         string caption = count.HasValue
