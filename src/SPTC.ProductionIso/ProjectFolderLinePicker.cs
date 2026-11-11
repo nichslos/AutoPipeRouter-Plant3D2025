@@ -57,6 +57,10 @@ internal static class ProjectFolderLinePicker
     private static UserControl? _choicesHost;
     private static Control? _folderAnchor;
     private static ListBox? _choiceList;
+    // REV25: filesystem-only, asynchronous first-level folder enumeration.
+    // Opening the menu does NOT initialize PnPDrawings or read line groups.
+    private static CancellationTokenSource? _menuLoadCancel;
+    private static int _menuLoadVersion;
     private static UserControl? _lineHost;
     private static CheckedListBox? _folderLineList;
     private static CheckedListBox? _nativeChecked;
@@ -475,40 +479,59 @@ internal static class ProjectFolderLinePicker
         _choicesHost.Show();
         _choicesHost.BringToFront();
 
-        Cursor.Current = Cursors.WaitCursor;
+        // Do not block the CAD UI on PnP database indexing here.
+        // Paint a populated/usable menu instantly; only the physical direct
+        // directory names are read on a worker (no Autodesk API off-thread).
+        _choiceList.Items.Add(new FolderMenuChoice("Loading folders...", null));
+        _menuLoadCancel = new CancellationTokenSource();
+        int loadVersion = ++_menuLoadVersion;
+        _ = FillFolderNamesAsync(_menuLoadCancel.Token, loadVersion);
+    }
+
+    private static async Task FillFolderNamesAsync(
+        CancellationToken token, int loadVersion)
+    {
         try
         {
-            if (!ProjectFolderLineCatalog.Ready)
-                ProjectFolderLineCatalog.Initialize(_document);
+            IReadOnlyList<string> names =
+                await ProjectFolderLineCatalog.ReadDirectFolderNamesAsync(token);
 
-            if (_choiceList is null || _choiceList.IsDisposed) return;
-            if (!ProjectFolderLineCatalog.Ready)
+            if (token.IsCancellationRequested || loadVersion != _menuLoadVersion ||
+                _choiceList is null || _choiceList.IsDisposed)
+                return;
+
+            _choiceList.BeginUpdate();
+            try
             {
-                _choiceList.Items.Add(new FolderMenuChoice(
-                    "Folder data unavailable — run SPTC_FOLDERDIAG", null));
-                _document.Editor.WriteMessage(
-                    "\nSPTC REV14 folder lookup: " + ProjectFolderLineCatalog.Diagnostic);
+                // Only top-level children under Plant 3D Drawings. Registered
+                // PnP membership is validated when a folder is actually used.
+                while (_choiceList.Items.Count > 1)
+                    _choiceList.Items.RemoveAt(1);
+
+                foreach (string name in names)
+                    _choiceList.Items.Add(new FolderMenuChoice(name, name));
+
+                if (names.Count == 0)
+                    _choiceList.Items.Add(new FolderMenuChoice(
+                        "(No subfolders in Plant 3D Drawings)", null));
+                _choiceList.ClearSelected();
             }
-            else
-            {
-                foreach (var choice in ProjectFolderLineCatalog.Folders)
-                {
-                    // REV15: show exactly the immediate Project Manager
-                    // folder name; no nested paths and no extra DWG count suffix.
-                    _choiceList.Items.Add(new FolderMenuChoice(choice.Caption, choice.Key));
-                }
-                if (ProjectFolderLineCatalog.Folders.Count == 0)
-                    _choiceList.Items.Add(new FolderMenuChoice("(No registered folders found)", null));
-            }
-            _choiceList.ClearSelected();
+            finally { _choiceList.EndUpdate(); }
         }
+        catch (OperationCanceledException) { }
         catch (Exception ex)
         {
-            _document.Editor.WriteMessage("\nSPTC REV14 folder menu: " + ex.GetBaseException().Message);
-            if (_choiceList is { IsDisposed: false })
-                _choiceList.Items.Add(new FolderMenuChoice("Unable to read folders — SPTC_FOLDERDIAG", null));
+            if (token.IsCancellationRequested || loadVersion != _menuLoadVersion ||
+                _choiceList is null || _choiceList.IsDisposed)
+                return;
+            while (_choiceList.Items.Count > 1)
+                _choiceList.Items.RemoveAt(1);
+            _choiceList.Items.Add(new FolderMenuChoice(
+                "Folder list unavailable — see F2 log", null));
+            _document?.Editor.WriteMessage(
+                "\nSPTC REV25: Quick folder list: " +
+                ex.GetBaseException().Message);
         }
-        finally { Cursor.Current = Cursors.Default; }
     }
 
     private static void PositionMenu()
@@ -539,6 +562,10 @@ internal static class ProjectFolderLinePicker
 
     private static void HideFolderMenu()
     {
+        _menuLoadVersion++;
+        try { _menuLoadCancel?.Cancel(); } catch (ObjectDisposedException) { }
+        _menuLoadCancel?.Dispose();
+        _menuLoadCancel = null;
         UserControl? old = _choicesHost;
         _choicesHost = null;
         _choiceList = null;
