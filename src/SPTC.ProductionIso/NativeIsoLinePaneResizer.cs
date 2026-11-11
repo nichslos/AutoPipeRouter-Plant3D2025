@@ -49,6 +49,9 @@ internal static class NativeIsoLinePaneResizer
     private static int _initialRightMargin;
     private static int _initialLeftHeight;
     private static int _lastParentWidth;
+    private static int _lastGripX = int.MinValue;
+    private static int _lastGripY = int.MinValue;
+    private static int _lastGripHeight = -1;
     private static bool _adjusting;
     private static Action? _onDragRelayout;
     private static int _leftColumn = -1;
@@ -578,19 +581,38 @@ internal static class NativeIsoLinePaneResizer
         return depth;
     }
 
+    // REV25: follow the CURRENT native Display lines GroupBox geometry.
+    // REV20 incorrectly captured its height once when opened; this left
+    // a short/overhanging drag bar after vertically resizing the dialog.
     private static void PositionHandle()
     {
         if (_handle == null || _handle.IsDisposed ||
-            _left == null || !GetWindowRect(_left.Handle, out RECT screen))
+            _left == null || _left.IsDisposed ||
+            _dialog == IntPtr.Zero ||
+            !GetWindowRect(_left.Handle, out RECT group) ||
+            !GetClientRect(_dialog, out RECT dialogRect))
             return;
-        POINT top = new() { X = screen.Right, Y = screen.Top };
-        if (!ScreenToClient(_dialog, ref top)) return;
+
+        POINT top = new() { X = group.Right, Y = group.Top };
+        POINT bottom = new() { X = group.Right, Y = group.Bottom };
+        if (!ScreenToClient(_dialog, ref top) ||
+            !ScreenToClient(_dialog, ref bottom))
+            return;
+
         int x = top.X - 3;
         int y = top.Y + 21;
-        int h = Math.Max(80, _initialLeftHeight - 36);
+        // Follow the bottom of the actual Display lines section, leaving
+        // a modest margin inside its border. Never cover dialog buttons.
+        int safeBottom = Math.Min(bottom.Y - 12, dialogRect.Bottom - 55);
+        int h = Math.Max(24, safeBottom - y);
+        if (x == _lastGripX && y == _lastGripY && h == _lastGripHeight)
+            return; // No repaint/Win32 layout work when nothing changed.
+
         SetWindowPos(_handle.Handle, IntPtr.Zero,
             x, y, 8, h, SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
-        _handle.BringToFront();
+        _lastGripX = x;
+        _lastGripY = y;
+        _lastGripHeight = h;
     }
 
     public static void Refresh()
@@ -611,6 +633,9 @@ internal static class NativeIsoLinePaneResizer
     public static void Hide()
     {
         _dragging = false;
+        _lastGripX = int.MinValue;
+        _lastGripY = int.MinValue;
+        _lastGripHeight = -1;
         try { _toolTip?.Dispose(); } catch { }
         try { _handle?.Dispose(); } catch { }
         _toolTip = null;
