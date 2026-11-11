@@ -67,6 +67,11 @@ internal static class ProjectFolderLinePicker
     private static ListView? _nativeView;
     private static readonly List<NativeEntry> VisibleEntries = new();
     private static bool _updating;
+    // REV26: ItemCheck fires before a CheckedListBox commits its own state.
+    // Do NOT re-enter the Autodesk checklist from inside that event.
+    // Every posted relay captures its projection generation so stale async
+    // callbacks cannot change native rows after an Active/All toggle.
+    private static long _projectionGeneration;
     private static System.Windows.Forms.Timer? _nativeCommitTimer;
     private static bool _committingNative;
     private static string _folder = "";
@@ -1170,15 +1175,63 @@ internal static class ProjectFolderLinePicker
         }
         finally { _updating = false; }
 
+        // REV26: Let the projected checkbox commit its click first. The
+        // REV24 synchronous call could re-enter native ItemCheck while this
+        // proxy ItemCheck was still pending; its false return canceled the
+        // visible checkbox, leaving the selected line highlighted in blue
+        // but impossible to check (Create remained disabled).
         _folderLineList.ItemCheck += (_, e) =>
         {
-            if (_updating || e.Index < 0 || e.Index >= VisibleEntries.Count) return;
-            bool requested = e.NewValue == CheckState.Checked;
-            if (!SetNativeChecked(VisibleEntries[e.Index], requested, userAction: true))
+            if (_updating || e.Index < 0 || e.Index >= VisibleEntries.Count ||
+                _folderLineList == null || _folderLineList.IsDisposed)
+                return;
+
+            CheckedListBox displayed = _folderLineList;
+            int displayIndex = e.Index;
+            NativeEntry nativeRow = VisibleEntries[displayIndex];
+            bool desired = e.NewValue == CheckState.Checked;
+            long generation = _projectionGeneration;
+
+            try
             {
-                e.NewValue = e.CurrentValue;
-                _document?.Editor.WriteMessage(
-                    "\nSPTC REV13: Native line list changed; close folder filter and reopen it.");
+                displayed.BeginInvoke((MethodInvoker)(() =>
+                {
+                    if (generation != _projectionGeneration ||
+                        displayed.IsDisposed ||
+                        !ReferenceEquals(displayed, _folderLineList) ||
+                        displayIndex >= displayed.Items.Count ||
+                        displayIndex >= VisibleEntries.Count ||
+                        !VisibleEntries[displayIndex].Equals(nativeRow))
+                        return;
+
+                    // Another user click may have superseded this request
+                    // before its deferred dispatch ran.
+                    if (displayed.GetItemChecked(displayIndex) != desired)
+                        return;
+
+                    if (SetNativeChecked(nativeRow, desired, userAction: true))
+                    {
+                        ScheduleNativeSelectionCommit();
+                        return;
+                    }
+
+                    // Never show a false checked state that Create will not
+                    // honor. Revert the visible checkbox to the actual native
+                    // state and write a diagnostic rather than faking Create.
+                    bool actual = GetNativeChecked(nativeRow);
+                    _updating = true;
+                    try { displayed.SetItemChecked(displayIndex, actual); }
+                    finally { _updating = false; }
+                    _document?.Editor.WriteMessage(
+                        "\nSPTC REV26: Could not synchronize native line " +
+                        nativeRow.Tag + " (requested=" + desired +
+                        ", actual=" + actual + "). Original Create was not overridden.");
+                }));
+            }
+            catch (InvalidOperationException)
+            {
+                // The native dialog closed while the event was being queued.
+                // Do not mutate Autodesk controls from an invalid handle.
             }
         };
         _lineHost.Controls.Add(_folderLineList);
@@ -1229,24 +1282,71 @@ internal static class ProjectFolderLinePicker
         if (!HasVisibleProjection || _folderLineList is null || _folderLineList.IsDisposed)
             return false;
 
+        CheckedListBox displayed = _folderLineList;
+        long generation = _projectionGeneration;
+        NativeEntry[] targetRows = VisibleEntries.ToArray();
+
         _updating = true;
         try
         {
-            for (int i = 0; i < VisibleEntries.Count; i++)
-            {
-                // Bulk updates keep the native programmatic ItemCheck event.
-                // The final row also receives the full native mouse-click
-                // sequence to refresh Autodesk's Create availability.
-                bool clickNative = i == VisibleEntries.Count - 1;
-                bool success = SetNativeChecked(VisibleEntries[i], value,
-                    userAction: clickNative);
-                if (!success) return false;
-                _folderLineList.SetItemChecked(i, value);
-            }
-            if (VisibleEntries.Count > 0) ScheduleNativeSelectionCommit();
-            return true;
+            for (int i = 0; i < targetRows.Length; i++)
+                displayed.SetItemChecked(i, value);
         }
         finally { _updating = false; }
+
+        // REV26: Same deferred native event path for Select All as for a
+        // single row click; never send native mouse messages recursively from
+        // the proxy's CheckedChanged/ItemCheck event stack.
+        try
+        {
+            displayed.BeginInvoke((MethodInvoker)(() =>
+            {
+                if (generation != _projectionGeneration ||
+                    displayed.IsDisposed ||
+                    !ReferenceEquals(displayed, _folderLineList))
+                    return;
+
+                bool allSucceeded = true;
+                for (int i = 0; i < targetRows.Length; i++)
+                {
+                    if (i >= displayed.Items.Count ||
+                        i >= VisibleEntries.Count ||
+                        !VisibleEntries[i].Equals(targetRows[i]))
+                    {
+                        allSucceeded = false;
+                        break;
+                    }
+                    bool clickNative = i == targetRows.Length - 1;
+                    if (!SetNativeChecked(targetRows[i], value,
+                        userAction: clickNative))
+                    {
+                        allSucceeded = false;
+                        break;
+                    }
+                }
+
+                // Always mirror actual native check states to the UI. This
+                // prevents apparent selection when Autodesk cannot accept it.
+                _updating = true;
+                try
+                {
+                    for (int i = 0; i < targetRows.Length &&
+                         i < displayed.Items.Count; i++)
+                        displayed.SetItemChecked(i, GetNativeChecked(targetRows[i]));
+                }
+                finally { _updating = false; }
+
+                if (!allSucceeded)
+                    _document?.Editor.WriteMessage(
+                        "\nSPTC REV26: Select All could not commit all native " +
+                        "ISO checkboxes; the visible list was restored to the " +
+                        "actual original selection.");
+                else
+                    ScheduleNativeSelectionCommit();
+            }));
+            return true;
+        }
+        catch (InvalidOperationException) { return false; }
     }
 
     public static void ClearFolder()
@@ -1260,6 +1360,7 @@ internal static class ProjectFolderLinePicker
 
     private static void DestroyProjection()
     {
+        _projectionGeneration++;
         VisibleEntries.Clear();
         _nativeChecked = null;
         _nativeView = null;
