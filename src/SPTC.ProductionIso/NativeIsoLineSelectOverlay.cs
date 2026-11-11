@@ -370,6 +370,8 @@ internal static class NativeIsoLineSelectOverlay
                         Button? create = FindNativeCreateButton(parent);
                         WriteDiagnostic("REV36 Select All: desired=" + selected +
                             ", checked=" + checkedCount + "/" + native.Items.Count +
+                            ", listEnabled=" + native.Enabled +
+                            ", checkOnClick=" + native.CheckOnClick +
                             ", nativeContextMenu=" + usedNativeMenu +
                             ", nativeClick=" + raisedClick +
                             ", CreateEnabled=" +
@@ -481,7 +483,7 @@ internal static class NativeIsoLineSelectOverlay
     private static void WriteDiagnostic(string message)
     {
         AcadApp.DocumentManager.MdiActiveDocument?.Editor.WriteMessage(
-            "\\nSPTC " + message);
+            "\nSPTC " + message);
     }
 
     private static void SetTreeChecked(TreeNode node, bool selected)
