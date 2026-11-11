@@ -22,6 +22,8 @@ internal static class NativeIsoLinePaneResizer
         IntPtr hwnd, IntPtr after, int x, int y, int w, int h, uint flags);
     [DllImport("user32.dll")] private static extern bool GetWindowRect(
         IntPtr hwnd, out RECT bounds);
+    [DllImport("user32.dll")] private static extern bool GetClientRect(
+        IntPtr hwnd, out RECT bounds);
     [DllImport("user32.dll")] private static extern bool ScreenToClient(
         IntPtr hwnd, ref POINT p);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetClassName(
