@@ -213,6 +213,13 @@ internal static class NativeIsoLineSelectOverlay
                 throw new InvalidOperationException(
                     "The visible line selection is no longer available.");
             }
+            // REV40: with exactly ONE native Active-DWG route, do not pass
+            // Select All through the bulk SetItemChecked/first-row retry.
+            // Use the native checkbox's own manual-click event path instead.
+            if (!ProjectFolderLinePicker.HasVisibleProjection &&
+                ActiveDwgTags.IsNativeFilterCurrent(_dialog) &&
+                TrySelectExactActiveSingle(_dialog, selected))
+                return;
             if (ApplySelection(_dialog, selected))
                 return;
         }
@@ -233,6 +240,151 @@ internal static class NativeIsoLineSelectOverlay
             "You can right-click inside Line Numbers and choose Select all lines " +
             "or Clear all lines. Please send a screenshot so the checkbox can be connected.",
             "SPTC Production Iso", MessageBoxButtons.OK, MessageBoxIcon.Information);
+    }
+
+    // REV40: the user's manual click works for the exact one-route Active
+    // filter, whereas REV39's programmatic check + extra mouse retry could
+    // cancel the first row and disable Create. Apply only to one verified
+    // native Autodesk item, never to folder projections or Project-wide rows.
+    private static bool TrySelectExactActiveSingle(IntPtr dialog, bool selected)
+    {
+        CheckedListBox? single = null;
+        EnumChildWindows(dialog, (hwnd, _) =>
+        {
+            if (!IsLeftLineList(dialog, hwnd)) return true;
+            if (Control.FromHandle(hwnd) is CheckedListBox list &&
+                !list.IsDisposed && list.Items.Count == 1)
+            {
+                single = list;
+                return false;
+            }
+            return true;
+        }, IntPtr.Zero);
+
+        if (single is null || single.IsDisposed ||
+            ActiveDwgTags.CurrentTags.Count != 1 ||
+            !single.GetItemText(single.Items[0]).Trim().Equals(
+                ActiveDwgTags.CurrentTags[0], StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        CheckedListBox native = single;
+        int generation = _generation;
+        try
+        {
+            native.BeginInvoke((System.Windows.Forms.MethodInvoker)(() =>
+            {
+                if (_generation != generation || _dialog != dialog ||
+                    native.IsDisposed || native.Items.Count != 1 ||
+                    !ActiveDwgTags.IsNativeFilterCurrent(dialog) ||
+                    ActiveDwgTags.CurrentTags.Count != 1 ||
+                    !native.GetItemText(native.Items[0]).Trim().Equals(
+                        ActiveDwgTags.CurrentTags[0],
+                        StringComparison.OrdinalIgnoreCase) ||
+                    _toggle is null || _toggle.IsDisposed ||
+                    _toggle.Checked != selected)
+                    return;
+
+                if (!selected)
+                {
+                    if (native.GetItemChecked(0))
+                        native.SetItemChecked(0, false);
+                    VerifyExactActiveSelection(native, dialog, generation, false);
+                    return;
+                }
+
+                Button? create = FindNativeCreateButton(dialog);
+                if (native.GetItemChecked(0) && create?.Enabled != false)
+                {
+                    VerifyExactActiveSelection(native, dialog, generation, true);
+                    return;
+                }
+
+                // A pre-checked icon with Create disabled needs a fresh
+                // native ItemCheck/Click event, like the user's manual click.
+                // Uncheck first; post the click to ANOTHER UI turn so we
+                // never click an already-checked row and toggle it off.
+                if (native.GetItemChecked(0))
+                    native.SetItemChecked(0, false);
+
+                native.BeginInvoke((System.Windows.Forms.MethodInvoker)(() =>
+                {
+                    if (_generation != generation || _dialog != dialog ||
+                        native.IsDisposed || native.Items.Count != 1 ||
+                        !ActiveDwgTags.IsNativeFilterCurrent(dialog) ||
+                        _toggle is null || _toggle.IsDisposed ||
+                        !_toggle.Checked)
+                        return;
+
+                    if (!native.GetItemChecked(0))
+                        ClickExactActiveRow(native);
+
+                    // Re-check the final native state on the NEXT UI turn.
+                    // Do not force Autodesk's Create button enabled.
+                    native.BeginInvoke((System.Windows.Forms.MethodInvoker)(() =>
+                        VerifyExactActiveSelection(native, dialog, generation, true)));
+                }));
+            }));
+            return true;
+        }
+        catch (InvalidOperationException) { return false; }
+    }
+
+    private static void ClickExactActiveRow(CheckedListBox native)
+    {
+        if (native.IsDisposed || !native.IsHandleCreated ||
+            native.Items.Count != 1 || native.GetItemChecked(0))
+            return;
+
+        int savedTop = native.TopIndex;
+        try
+        {
+            native.TopIndex = 0;
+            Rectangle r = native.GetItemRectangle(0);
+            if (r.Height <= 0 || native.ClientSize.Width < 22)
+                return;
+            int x = Math.Clamp(r.Left + 10, 5, native.ClientSize.Width - 6);
+            int y = r.Top + r.Height / 2;
+            if (y < 0 || y >= native.ClientSize.Height)
+                return;
+            IntPtr point = new(((y & 0xFFFF) << 16) | (x & 0xFFFF));
+
+            // CheckedListBox.CheckOnClick may be false: one click selects,
+            // the second checks. Stop the moment the native item is checked.
+            for (int i = 0; i < 2 && !native.GetItemChecked(0); i++)
+            {
+                SendMessage(native.Handle, WM_LBUTTONDOWN,
+                    new IntPtr(MK_LBUTTON), point);
+                SendMessage(native.Handle, WM_LBUTTONUP,
+                    IntPtr.Zero, point);
+            }
+        }
+        finally
+        {
+            if (!native.IsDisposed && native.Items.Count > 0)
+                native.TopIndex = Math.Clamp(savedTop, 0, native.Items.Count - 1);
+        }
+    }
+
+    private static void VerifyExactActiveSelection(
+        CheckedListBox native, IntPtr dialog, int generation, bool desired)
+    {
+        if (_generation != generation || _dialog != dialog ||
+            native.IsDisposed || native.Items.Count != 1 ||
+            !ActiveDwgTags.IsNativeFilterCurrent(dialog))
+            return;
+
+        bool checkedNow = native.GetItemChecked(0);
+        if (_toggle is { IsDisposed: false } toggle)
+        {
+            _setting = true;
+            try { toggle.Checked = checkedNow; }
+            finally { _setting = false; }
+        }
+        Button? create = FindNativeCreateButton(dialog);
+        WriteDiagnostic("REV40 Active single Select All: desired=" + desired +
+            ", nativeChecked=" + checkedNow +
+            ", CreateEnabled=" +
+            (create is null ? "unknown" : create.Enabled.ToString()));
     }
 
     private static bool ApplySelection(IntPtr dialog, bool selected)
@@ -466,18 +618,6 @@ internal static class NativeIsoLineSelectOverlay
                 if (native.GetItemChecked(0) != selected)
                     native.SetItemChecked(0, selected);
 
-                // REV39: The exact Active-DWG one-line filter can display
-                // a real checkmark while Autodesk still has Create disabled.
-                // After the checkbox event settles, replay the ORIGINAL
-                // native row's mouse handlers only for that single verified
-                // active route, without affecting working Project-wide mode.
-                Button? createBefore = FindNativeCreateButton(parent);
-                if (selected && native.Items.Count == 1 &&
-                    native.GetItemChecked(0) && createBefore is { Enabled: false } &&
-                    !ProjectFolderLinePicker.HasVisibleProjection &&
-                    ActiveDwgTags.IsNativeFilterCurrent(parent))
-                    RecommitExactActiveRow(native);
-
                 int actual = 0;
                 for (int i = 0; i < native.Items.Count; i++)
                     if (native.GetItemChecked(i)) actual++;
@@ -504,74 +644,6 @@ internal static class NativeIsoLineSelectOverlay
             }
         };
         timer.Start();
-    }
-
-    // REV39: only use a native mouse sequence in single-line Active-DWG mode.
-    // The original checkbox is directly visible (no folder projection).
-    // A checked icon alone may not satisfy Autodesk's own Create action.
-    // Do not forge a button state or fabricate ISO line items.
-    private static void RecommitExactActiveRow(CheckedListBox native)
-    {
-        if (native.IsDisposed || !native.IsHandleCreated ||
-            native.Items.Count != 1 || !native.GetItemChecked(0))
-            return;
-        try
-        {
-            int savedTop = native.TopIndex;
-            native.TopIndex = 0;
-            try
-            {
-                Rectangle rect = native.GetItemRectangle(0);
-                if (rect.Height <= 0 || native.ClientSize.Width < 22)
-                    return;
-
-                int x = Math.Clamp(rect.Left + 11, 5, native.ClientSize.Width - 6);
-                int y = rect.Top + rect.Height / 2;
-                if (y < 0 || y >= native.ClientSize.Height)
-                    return;
-
-                IntPtr location = new(((y & 0xFFFF) << 16) | (x & 0xFFFF));
-
-                // Prepare an actual unchecked-to-checked native event.
-                // REV36's extra click on an already checked row toggled the
-                // FIRST item off; here the pre-click state is unchecked.
-                native.SetItemChecked(0, false);
-                if (native.SelectedIndex == 0)
-                    native.ClearSelected();
-                native.SelectedIndex = 0;
-
-                for (int attempt = 0; attempt < 2 &&
-                     !native.GetItemChecked(0); attempt++)
-                {
-                    SendMessage(native.Handle, WM_LBUTTONDOWN,
-                        new IntPtr(MK_LBUTTON), location);
-                    SendMessage(native.Handle, WM_LBUTTONUP,
-                        IntPtr.Zero, location);
-                }
-                // Never leave a previously selected route unchecked merely
-                // because this native dialog ignored the synthetic event.
-                if (!native.GetItemChecked(0))
-                    native.SetItemChecked(0, true);
-                if (native.SelectedIndex != 0)
-                    native.SelectedIndex = 0;
-
-                WriteDiagnostic("REV39 Active single-line native event: checked=" +
-                    native.GetItemChecked(0));
-            }
-            finally
-            {
-                if (!native.IsDisposed && native.Items.Count > 0)
-                    native.TopIndex = Math.Clamp(savedTop, 0, native.Items.Count - 1);
-            }
-        }
-        catch (Exception ex)
-        {
-            if (!native.IsDisposed && native.Items.Count == 1 &&
-                !native.GetItemChecked(0))
-                native.SetItemChecked(0, true);
-            WriteDiagnostic("REV39 Active single-line event failed: " +
-                ex.GetBaseException().Message);
-        }
     }
 
     // Context menu is an optional native path; only the exact native
