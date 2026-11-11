@@ -32,6 +32,9 @@ internal static class NativeIsoExactLineFilter
         public CheckedListBox? Checked;
         public ListView? View;
         public List<RemovedRow> Removed { get; } = new();
+        // Preserve object identity of remaining native rows so a delayed
+        // Autodesk repaint never receives stale rows from an older list.
+        public List<object> Survivors { get; } = new();
         public int Retained;
     }
 
@@ -127,6 +130,9 @@ internal static class NativeIsoExactLineFilter
                 foreach (var extra in extras)
                     next.Removed.Add(new RemovedRow(
                         extra.Index, extra.Item, extra.Check));
+                next.Survivors.AddRange(rows.Where(r =>
+                    r.Text.Equals(_tag, StringComparison.OrdinalIgnoreCase))
+                    .Select(r => r.Item));
 
                 if (box != null)
                 {
@@ -160,6 +166,7 @@ internal static class NativeIsoExactLineFilter
                 // Native filter was exact already. No items were mutated.
                 _state = new PrunedState { Checked = box, View = view,
                     Retained = rows.Count };
+                _state.Survivors.AddRange(rows.Select(r => r.Item));
             }
 
             _attempts = 0;
@@ -225,7 +232,9 @@ internal static class NativeIsoExactLineFilter
         try
         {
             if (state.Checked is { IsDisposed: false } box &&
-                box.DataSource == null && box.Items.Count == state.Retained)
+                box.DataSource == null && box.Items.Count == state.Retained &&
+                Enumerable.Range(0, box.Items.Count).All(index =>
+                    ReferenceEquals(box.Items[index], state.Survivors[index])))
             {
                 box.BeginUpdate();
                 try
@@ -240,7 +249,10 @@ internal static class NativeIsoExactLineFilter
                 finally { box.EndUpdate(); }
             }
             else if (state.View is { IsDisposed: false, VirtualMode: false } view &&
-                     view.Items.Count == state.Retained)
+                     view.Items.Count == state.Retained &&
+                     Enumerable.Range(0, view.Items.Count).All(index =>
+                         ReferenceEquals(view.Items[index],
+                             state.Survivors[index])))
             {
                 view.BeginUpdate();
                 try
