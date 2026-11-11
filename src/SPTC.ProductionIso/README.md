@@ -1,43 +1,40 @@
-# SPTC Production Iso REV25 — Responsive Folder Dropdown and Vertical Resize Grip
+# SPTC Production Iso REV26 — Active DWG Checkbox Selection Fix
 
-**Baseline:** REV24. All earlier revisions remain untouched.
+**Baseline:** REV25. Prior revision branches and DLL builds remain unchanged.
 
-## Fixed: 3-second blank folder popup
-When the user clicked the folder arrow in REV24, `ToggleFolderMenu` synchronously called `ProjectFolderLineCatalog.Initialize`, which reads Piping project drawing records and PnPDataLinks metadata. On a large/network project, this blocked the CAD UI and temporarily displayed an unpainted blank 248×239 folder popup.
+## Reported defect
+- In **All Project** mode, checking a line-number entry works.
+- In **Active DWG** mode (for example line tag `A-08`), the line name becomes blue-highlighted but its checkbox refuses to stay checked.
+- Autodesk's original **Create** remains disabled even though one active line appears in the temporary list.
 
-REV25 changes the workflow:
-- The dropdown paints `All Project` plus a **Loading folders...** message immediately.
-- Only immediate directory names under the current project's physical **Plant 3D Drawings** folder are enumerated, asynchronously, using a background **filesystem-only** task. No DWG enumeration or database work is done just to open the menu.
-- Folder metadata is loaded from `ProjectFolderPath` on the Plant 3D UI thread, then only a plain directory path string is passed to the worker. **Autodesk project APIs and PnPDataLinks are never called from a worker thread.**
-- Only first-level folder names are shown; no nested subfolders appear. A physical folder that is not registered with Plant 3D will be rejected safely when selected.
-- **PnP registration lookup and live line filtering are deferred until the user selects a particular folder**. The embedded progress panel is displayed before the expensive UI-thread registration call.
-- No automatic startup folder scan is enabled.
+## Root cause and REV26 fix
+REV25's temporary active/folder CheckedListBox forwards its `ItemCheck` event **synchronously** to the underlying Autodesk CheckedListBox. WinForms `ItemCheck` is a **pre-commit** event: the proxy's checkbox has not changed yet. Calling the native checklist from inside that event reenters WinForms/Autodesk selection handlers. If the nested interaction returns failure, the handler sets `e.NewValue = e.CurrentValue` and cancels the user's visible click.
 
-A mapped-drive directory listing may still take time, but it no longer blocks painting or interaction inside the Production Iso dialog. If the physical `Plant 3D Drawings` directory cannot be resolved, the menu reports this via AutoCAD F2 rather than scanning unrelated folders.
+REV26 now:
+- Lets the temporary checkbox complete its own `ItemCheck` first, then posts a **single UI-thread `BeginInvoke`** to synchronize that exact native line item through the REV24 native mouse/selection relay.
+- Verifies the original row's index **and exact tag**, and compares its final native checked state to the user-requested state.
+- Uses a **projection generation guard**, so a queued action cannot alter the original list after the user switches from Active to All or closes the native dialog.
+- When the user clicks repeatedly before a queued update runs, superseded events are skipped.
+- If the original Autodesk list refuses the selection, the visible checkbox is returned to its **actual native state** and a `SPTC REV26:` diagnostic is logged (F2); Create is **never** forced enabled.
+- `Select All (N)` inside Active/folder views uses the same deferred non-reentrant approach and mirrors native checked states back after the batch.
+- The original Autodesk `Create` button remains in charge of enabling ISO generation based on its own validations.
 
-## Fixed: vertical resize-grip height
-REV20–24 positioned the gray Display lines/Output settings draggable divider using `_initialLeftHeight` captured when the native dialog first opened. Consequently the vertical bar became too short or extended beyond the group when the user stretched the dialog vertically.
+## Preserved from REV25
+- Immediate folder menu paint and asynchronous listing of direct children under Plant 3D Drawings; PnP scanning only after folder choice.
+- Adaptive vertical draggable line-number divider, wide route-name list, responsive native filter-row icons.
+- Exact current physical-DWG line-tag filter, Active/All toggle, visible count, Select All.
+- Aligned, stretching Custom Save Location and automatic copying of completed ISO drawings.
+- No changes to Project Manager, PnP records, model geometry, `IsoConfig.xml`, or existing Production ISO outputs.
 
-REV25:
-- Recomputes the bar's top/bottom from the **current** native Display lines GroupBox rectangle.
-- Leaves a margin at the bottom of the section and stops before the native dialog's bottom buttons.
-- Refreshes when the native group box moves or resizes, not only when the outer window width changes.
-- Skips redundant Win32 `SetWindowPos` calls when bar geometry has not changed, reducing needless UI repaint work.
+## Test
+1. Completely close AutoCAD Plant 3D 2025. Restart; `NETLOAD` REV26 `SPTC.ProductionIso.dll`.
+2. Run `SPTC_PRODISO` in the known one-route drawing.
+3. Click the top Active/All button once to show only `A-08`.
+4. **Click the checkbox beside `A-08`** (not just the text). It should remain checked after the deferred native commit; `Create` should become enabled if Autodesk accepts the route.
+5. Uncheck and recheck repeatedly, and try `Select All (1)`; verify both checkmarks and native Create eligibility update.
+6. Switch Active → All → Active, confirming that the correct line list and checked states remain synchronized.
+7. Generate **one** sample Production ISO only when Create is enabled. Verify the custom destination when supplied.
 
-## Preserved
-- REV24 original native checklist selection-event forwarding and Create eligibility checks.
-- REV23 exact active/all line toggle.
-- REV17 Select All (N), REV15 on-filter-row folder arrow, and on-demand REV16 folder scanning.
-- REV19 responsive Revision/Custom Save Location alignment.
-- REV05 automatic copying of completed Production Iso DWGs to the custom location.
-- No changes to native ISO configuration, Project Manager database, existing drawings, or the default ISO output.
+If the visible checkmark still clears or Create stays disabled, press F2 after closing the dialog and share any lines beginning `SPTC REV26:` or `SPTC REV24:`. This will distinguish native selection rejection from another Autodesk Create validation.
 
-## Test REV25
-1. Completely exit Plant 3D 2025. Restart and `NETLOAD` REV25 `SPTC.ProductionIso.dll`.
-2. Open `SPTC_PRODISO`. Click the folder ▾ arrow. The dropdown should show **All Project** and **Loading folders...** immediately, then only direct subfolders; the CAD dialog should remain responsive. No project DB indexing occurs merely from opening the list.
-3. Select one known folder. Only at that point should the existing progress/Cancel view and PnP verification begin.
-4. Stretch the entire window vertically (taller and shorter) and check that the gray draggable divider stays inside the full height of Display lines, ending above the bottom of that group.
-5. Drag the divider horizontally and verify native line-number list/checkmarks, filter/funnel/toolbar positions and the Custom Save Location row remain correctly aligned.
-6. Select one known-good line and generate one test ISO, verifying the resulting DWG arrives in the custom location when supplied.
-
-**Status: Experimental until runtime-tested on the user's specific Plant 3D 2025 project.** A GitHub build verifies C# compilation only; Autodesk native dialogs and network database behavior vary by installation.
+**Note:** GitHub compilation is not a Plant 3D runtime test. Custom native-dialog interception is experimental. Retain REV25 as the fallback until REV26 has been tested.
