@@ -57,6 +57,9 @@ internal static class NativeIsoLineSelectOverlay
     private const uint LVM_GETEXTENDEDLISTVIEWSTYLE = 0x1037;
     private const long LVS_EX_CHECKBOXES = 0x00000004;
     private const uint LVIS_STATEIMAGEMASK = 0xF000;
+    private const uint WM_LBUTTONDOWN = 0x0201;
+    private const uint WM_LBUTTONUP = 0x0202;
+    private const int MK_LBUTTON = 0x0001;
     private const uint SWP_NOZORDER = 0x0004;
     private const uint SWP_NOACTIVATE = 0x0010;
     private const uint SWP_SHOWWINDOW = 0x0040;
@@ -365,11 +368,12 @@ internal static class NativeIsoLineSelectOverlay
                             finally { _setting = false; }
                         }
 
-                        // A native ItemCheck implementation may commit
-                        // the first entry after this callback returns. Retry
-                        // only that entry once on a later UI tick if needed.
-                        if (native.Items.Count > 0 &&
-                            native.GetItemChecked(0) != selected)
+                        // REV39: Autodesk may asynchronously revert row zero
+                        // AFTER this callback exits. An immediate state check
+                        // misses that later native event. Always verify once
+                        // on a deferred UI tick; repair only row zero if it
+                        // actually differs. Do not synthesize clicks or alter Create.
+                        if (native.Items.Count > 0)
                             ScheduleFirstRowRetry(native, parent, generation, selected);
 
                         Button? create = FindNativeCreateButton(parent);
@@ -462,6 +466,18 @@ internal static class NativeIsoLineSelectOverlay
                 if (native.GetItemChecked(0) != selected)
                     native.SetItemChecked(0, selected);
 
+                // REV39: The exact Active-DWG one-line filter can display
+                // a real checkmark while Autodesk still has Create disabled.
+                // After the checkbox event settles, replay the ORIGINAL
+                // native row's mouse handlers only for that single verified
+                // active route, without affecting working Project-wide mode.
+                Button? createBefore = FindNativeCreateButton(parent);
+                if (selected && native.Items.Count == 1 &&
+                    native.GetItemChecked(0) && createBefore is { Enabled: false } &&
+                    !ProjectFolderLinePicker.HasVisibleProjection &&
+                    ActiveDwgTags.IsNativeFilterCurrent(parent))
+                    RecommitExactActiveRow(native);
+
                 int actual = 0;
                 for (int i = 0; i < native.Items.Count; i++)
                     if (native.GetItemChecked(i)) actual++;
@@ -488,6 +504,74 @@ internal static class NativeIsoLineSelectOverlay
             }
         };
         timer.Start();
+    }
+
+    // REV39: only use a native mouse sequence in single-line Active-DWG mode.
+    // The original checkbox is directly visible (no folder projection).
+    // A checked icon alone may not satisfy Autodesk's own Create action.
+    // Do not forge a button state or fabricate ISO line items.
+    private static void RecommitExactActiveRow(CheckedListBox native)
+    {
+        if (native.IsDisposed || !native.IsHandleCreated ||
+            native.Items.Count != 1 || !native.GetItemChecked(0))
+            return;
+        try
+        {
+            int savedTop = native.TopIndex;
+            native.TopIndex = 0;
+            try
+            {
+                Rectangle rect = native.GetItemRectangle(0);
+                if (rect.Height <= 0 || native.ClientSize.Width < 22)
+                    return;
+
+                int x = Math.Clamp(rect.Left + 11, 5, native.ClientSize.Width - 6);
+                int y = rect.Top + rect.Height / 2;
+                if (y < 0 || y >= native.ClientSize.Height)
+                    return;
+
+                IntPtr location = new(((y & 0xFFFF) << 16) | (x & 0xFFFF));
+
+                // Prepare an actual unchecked-to-checked native event.
+                // REV36's extra click on an already checked row toggled the
+                // FIRST item off; here the pre-click state is unchecked.
+                native.SetItemChecked(0, false);
+                if (native.SelectedIndex == 0)
+                    native.ClearSelected();
+                native.SelectedIndex = 0;
+
+                for (int attempt = 0; attempt < 2 &&
+                     !native.GetItemChecked(0); attempt++)
+                {
+                    SendMessage(native.Handle, WM_LBUTTONDOWN,
+                        new IntPtr(MK_LBUTTON), location);
+                    SendMessage(native.Handle, WM_LBUTTONUP,
+                        IntPtr.Zero, location);
+                }
+                // Never leave a previously selected route unchecked merely
+                // because this native dialog ignored the synthetic event.
+                if (!native.GetItemChecked(0))
+                    native.SetItemChecked(0, true);
+                if (native.SelectedIndex != 0)
+                    native.SelectedIndex = 0;
+
+                WriteDiagnostic("REV39 Active single-line native event: checked=" +
+                    native.GetItemChecked(0));
+            }
+            finally
+            {
+                if (!native.IsDisposed && native.Items.Count > 0)
+                    native.TopIndex = Math.Clamp(savedTop, 0, native.Items.Count - 1);
+            }
+        }
+        catch (Exception ex)
+        {
+            if (!native.IsDisposed && native.Items.Count == 1 &&
+                !native.GetItemChecked(0))
+                native.SetItemChecked(0, true);
+            WriteDiagnostic("REV39 Active single-line event failed: " +
+                ex.GetBaseException().Message);
+        }
     }
 
     // Context menu is an optional native path; only the exact native
