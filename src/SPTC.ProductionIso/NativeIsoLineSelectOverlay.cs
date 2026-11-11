@@ -338,16 +338,35 @@ internal static class NativeIsoLineSelectOverlay
 
     private static bool IsLeftLineList(IntPtr dialog, IntPtr candidate)
     {
-        if (!GetWindowRect(dialog, out RECT dlg) ||
-            !GetWindowRect(candidate, out RECT rect)) return false;
-        if (rect.Width < 90 || rect.Height < 80) return false;
+        if (!GetWindowRect(candidate, out RECT rect) ||
+            rect.Width < 90 || rect.Height < 80)
+            return false;
 
-        // Filter out output settings, buttons, dialogs and invisible tiny controls.
+        // REV30: use the actual Display lines group instead of a fixed
+        // percentage of total dialog width. The native line list remains
+        // discoverable after dragging the REV20+ vertical divider right.
+        IntPtr group = IntPtr.Zero;
+        EnumChildWindows(dialog, (hwnd, _) =>
+        {
+            if (Control.FromHandle(hwnd) is GroupBox box &&
+                box.Text.Trim().Equals("Display lines",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                group = hwnd;
+                return false;
+            }
+            return true;
+        }, IntPtr.Zero);
+
+        if (group == IntPtr.Zero || !GetWindowRect(group, out RECT bounds))
+            return false;
+
         int cx = rect.Left + rect.Width / 2;
         int cy = rect.Top + rect.Height / 2;
-        return cx > dlg.Left + 10 &&
-               cx < dlg.Left + dlg.Width * 0.33 &&
-               cy > dlg.Top + 100 && cy < dlg.Bottom - 80;
+        return cx > bounds.Left + 4 &&
+               cx < bounds.Right - 4 &&
+               cy > bounds.Top + 35 &&
+               cy < bounds.Bottom - 12;
     }
 
     private static bool TryFindLineListBounds(IntPtr dialog, out RECT bounds)
