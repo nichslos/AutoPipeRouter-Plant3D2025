@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Reflection;
 using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
 using System.Drawing;
 using System.Runtime.InteropServices;
@@ -60,11 +61,6 @@ internal static class NativeIsoLineSelectOverlay
     private const uint SWP_NOZORDER = 0x0004;
     private const uint SWP_NOACTIVATE = 0x0010;
     private const uint SWP_SHOWWINDOW = 0x0040;
-    // REV34: the native Create eligibility handler may listen to click or
-    // selected-row events, not just CheckedListBox.SetItemChecked(ItemCheck).
-    private const uint WM_LBUTTONDOWN = 0x0201;
-    private const uint WM_LBUTTONUP = 0x0202;
-    private const int MK_LBUTTON = 0x0001;
 
     private static UserControl? _host;
     private static CheckBox? _toggle;
@@ -73,11 +69,8 @@ internal static class NativeIsoLineSelectOverlay
     // REV17: lightweight UI-only count refresh. No PnP/SQL queries and no
     // changes to native checked states, even when the filter changes.
     private static System.Windows.Forms.Timer? _countTimer;
-    private static System.Windows.Forms.Timer? _selectionVerify;
+    // REV36: diagnostics and deferred actual native selection, no fake Win32 clicks.
     private static int _generation;
-    // REV35: cancel outdated deferred native selection when filter or mode changes.
-    private static int _selectionRequest;
-    private static bool _selectionPending;
 
     public static void Attach(IntPtr dialog)
     {
@@ -158,16 +151,6 @@ internal static class NativeIsoLineSelectOverlay
             : "Select All";
         if (!string.Equals(_toggle.Text, caption, StringComparison.Ordinal))
             _toggle.Text = caption;
-
-        // REV35: do not let the Select All tick remain checked when Autodesk
-        // has rejected a programmatic checkbox change or refreshed its list.
-        // While a folder projection is active, its own code owns the checks.
-        if (!ProjectFolderLinePicker.HasVisibleProjection && !_selectionPending)
-        {
-            CheckedListBox? native = FindNativeCheckedList(_dialog);
-            if (native != null)
-                ReflectNativeSelection(native);
-        }
     }
 
     // REV21: read only the actual Autodesk line list to validate an active
@@ -249,153 +232,6 @@ internal static class NativeIsoLineSelectOverlay
             "SPTC Production Iso", MessageBoxButtons.OK, MessageBoxIcon.Information);
     }
 
-    private static CheckedListBox? FindNativeCheckedList(IntPtr dialog)
-    {
-        CheckedListBox? best = null;
-        int count = -1;
-        EnumChildWindows(dialog, (hwnd, _) =>
-        {
-            if (!IsLeftLineList(dialog, hwnd)) return true;
-            if (Control.FromHandle(hwnd) is CheckedListBox list &&
-                !list.IsDisposed && list.Items.Count > count)
-            {
-                best = list;
-                count = list.Items.Count;
-            }
-            return true;
-        }, IntPtr.Zero);
-        return best;
-    }
-
-    private static void ReflectNativeSelection(CheckedListBox native)
-    {
-        if (_toggle == null || _toggle.IsDisposed ||
-            native.IsDisposed || native.Items.Count == 0)
-            return;
-        bool all = true;
-        for (int i = 0; i < native.Items.Count; i++)
-            if (!native.GetItemChecked(i)) { all = false; break; }
-        if (_toggle.Checked != all)
-        {
-            _setting = true;
-            try { _toggle.Checked = all; }
-            finally { _setting = false; }
-        }
-    }
-
-    // REV35: updates MUST use the same native mouse click that manually
-    // enables Autodesk's Create button. A direct SetItemChecked updates
-    // visuals but may be rejected or not commit Autodesk's selection model.
-    // Work in bounded UI-thread batches to keep large projects responsive.
-    private static bool StartNativeSelection(CheckedListBox native, bool desired)
-    {
-        if (native.IsDisposed || !native.IsHandleCreated ||
-            native.Items.Count == 0)
-            return false;
-
-        object[] rows = new object[native.Items.Count];
-        for (int i = 0; i < rows.Length; i++)
-            rows[i] = native.Items[i];
-
-        int generation = _generation;
-        int request = ++_selectionRequest;
-        _selectionPending = true;
-        try
-        {
-            native.BeginInvoke((MethodInvoker)(() =>
-                ApplyNativeClickBatch(native, rows, desired,
-                    generation, request, 0, 0)));
-            return true;
-        }
-        catch (InvalidOperationException)
-        {
-            _selectionPending = false;
-            return false;
-        }
-    }
-
-    private static void ApplyNativeClickBatch(
-        CheckedListBox native, object[] rows, bool desired,
-        int generation, int request, int from, int failures)
-    {
-        if (generation != _generation || request != _selectionRequest ||
-            _dialog == IntPtr.Zero || native.IsDisposed)
-            return;
-
-        // Autodesk can rebuild the native list after the user changes
-        // the filter. Never click a different route with a stale index.
-        if (native.Items.Count != rows.Length)
-        {
-            FinishNativeSelection(native, desired, failures + 1, request);
-            return;
-        }
-
-        int to = Math.Min(rows.Length, from + 24);
-        for (int i = from; i < to; i++)
-        {
-            if (!ReferenceEquals(native.Items[i], rows[i]))
-            {
-                failures++;
-                to = rows.Length; // abandon the stale snapshot
-                break;
-            }
-            if (native.GetItemChecked(i) != desired &&
-                !ClickNativeRow(native, i, desired))
-                failures++;
-        }
-
-        if (to < rows.Length && failures == 0)
-        {
-            try
-            {
-                native.BeginInvoke((MethodInvoker)(() =>
-                    ApplyNativeClickBatch(native, rows, desired,
-                        generation, request, to, failures)));
-                return;
-            }
-            catch (InvalidOperationException) { failures++; }
-        }
-
-        FinishNativeSelection(native, desired, failures, request);
-    }
-
-    private static void FinishNativeSelection(
-        CheckedListBox native, bool desired, int failures, int request)
-    {
-        if (request != _selectionRequest || native.IsDisposed) return;
-        _selectionPending = false;
-
-        int matched = 0;
-        for (int i = 0; i < native.Items.Count; i++)
-            if (native.GetItemChecked(i) == desired)
-                matched++;
-
-        // Highlight the actual selected row, like clicking the line number
-        // manually does. Keep native ISO eligibility validation untouched.
-        if (desired && matched > 0)
-        {
-            int first = FirstCheckedIndex(native);
-            if (first >= 0)
-            {
-                if (native.SelectedIndex == first)
-                    native.ClearSelected();
-                native.SelectedIndex = first;
-                ScheduleNativeSelectionCommit(native);
-            }
-        }
-
-        ReflectNativeSelection(native);
-        if (failures > 0 || matched != native.Items.Count)
-        {
-            AcadApp.DocumentManager.MdiActiveDocument?.Editor.WriteMessage(
-                "\nSPTC REV35: Select All native clicks applied to " +
-                matched + "/" + native.Items.Count +
-                " displayed ISO lines (desired=" + desired +
-                "). Incomplete selection; check the original line list. " +
-                "Native Create was not forced.");
-        }
-    }
-
     private static bool ApplySelection(IntPtr dialog, bool selected)
     {
         // Prefer the actual WinForms control's own CheckedListBox event model.
@@ -443,11 +279,114 @@ internal static class NativeIsoLineSelectOverlay
 
         if (checkedList != null && checkedList.Items.Count > 0)
         {
-            // REV35: the visible Autodesk list is authoritative. The old
-            // SetItemChecked loop could leave Select All ticked while A-08
-            // was UNCHECKED (and Create disabled). Replay the real native
-            // checkbox clicks instead of programmatically setting states.
-            return StartNativeSelection(checkedList, selected);
+            // REV36: return to REV33's native SetItemChecked mechanism so
+            // manual clicks remain functional. Unlike REV34/35, do NOT send
+            // simulated Win32 mouse clicks to the original Autodesk list.
+            // Run after the plugin checkbox event has returned.
+            CheckedListBox native = checkedList;
+            int generation = _generation;
+            IntPtr parent = _dialog;
+            try
+            {
+                native.BeginInvoke((MethodInvoker)(() =>
+                {
+                    if (_generation != generation || _dialog != parent ||
+                        native.IsDisposed || native.Items.Count == 0)
+                        return;
+
+                    int expectedCount = native.Items.Count;
+                    try
+                    {
+                        // If Autodesk supplies a real "Select all lines" or
+                        // "Clear all lines" context-menu command, invoke its
+                        // own handler first. That updates Autodesk's internal
+                        // selection model rather than only drawing checkmarks.
+                        bool usedNativeMenu = TryNativeSelectAllMenu(native, selected);
+
+                        if (!usedNativeMenu)
+                        {
+                            native.BeginUpdate();
+                            try
+                            {
+                                for (int i = 0; i < expectedCount &&
+                                    i < native.Items.Count; i++)
+                                    if (native.GetItemChecked(i) != selected)
+                                        native.SetItemChecked(i, selected);
+                            }
+                            finally { native.EndUpdate(); }
+                        }
+
+                        int checkedCount = 0;
+                        int firstChecked = -1;
+                        for (int i = 0; i < native.Items.Count; i++)
+                        {
+                            if (!native.GetItemChecked(i)) continue;
+                            checkedCount++;
+                            if (firstChecked < 0) firstChecked = i;
+                        }
+
+                        // A native manual row click both checks AND selects a
+                        // line. Programmatic SetItemChecked does not select.
+                        // Explicitly raise native ListBox selection and the
+                        // existing native Click event ONCE, not N times.
+                        bool raisedClick = false;
+                        if (selected && firstChecked >= 0)
+                        {
+                            if (native.SelectedIndex == firstChecked)
+                                native.ClearSelected();
+                            native.SelectedIndex = firstChecked;
+                            native.Focus();
+                            try
+                            {
+                                MethodInfo? click = typeof(Control).GetMethod(
+                                    "OnClick", BindingFlags.Instance |
+                                               BindingFlags.NonPublic);
+                                if (click != null)
+                                {
+                                    click.Invoke(native, new object[] { EventArgs.Empty });
+                                    raisedClick = true;
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                WriteDiagnostic("REV36 native Click handler: " +
+                                    ex.GetBaseException().Message);
+                            }
+                        }
+
+                        // The overlay tick follows the *real* line states.
+                        // It must not claim success when Autodesk ignored
+                        // the selection. Never override Create.Enabled.
+                        bool allChecked = native.Items.Count > 0 &&
+                            checkedCount == native.Items.Count;
+                        if (_toggle != null && !_toggle.IsDisposed &&
+                            _toggle.Checked != allChecked)
+                        {
+                            _setting = true;
+                            try { _toggle.Checked = allChecked; }
+                            finally { _setting = false; }
+                        }
+
+                        Button? create = FindNativeCreateButton(parent);
+                        WriteDiagnostic("REV36 Select All: desired=" + selected +
+                            ", checked=" + checkedCount + "/" + native.Items.Count +
+                            ", nativeContextMenu=" + usedNativeMenu +
+                            ", nativeClick=" + raisedClick +
+                            ", CreateEnabled=" +
+                            (create == null ? "unknown" : create.Enabled.ToString()));
+                    }
+                    catch (Exception ex)
+                    {
+                        WriteDiagnostic("REV36 select-all failed: " +
+                            ex.GetBaseException().Message);
+                    }
+                }));
+                return true;
+            }
+            catch (InvalidOperationException)
+            {
+                return false;
+            }
         }
 
         if (listView != null && listView.Items.Count > 0)
@@ -458,16 +397,6 @@ internal static class NativeIsoLineSelectOverlay
                 foreach (ListViewItem item in listView.Items) item.Checked = selected;
             }
             finally { listView.EndUpdate(); }
-            if (selected)
-            {
-                foreach (ListViewItem item in listView.Items)
-                {
-                    if (!item.Checked) continue;
-                    if (item.Selected) item.Selected = false;
-                    item.Selected = true;
-                    break;
-                }
-            }
             return true;
         }
 
@@ -504,83 +433,33 @@ internal static class NativeIsoLineSelectOverlay
         return false;
     }
 
-    // REV34: this is the SAME original Autodesk CheckedListBox. A scripted
-    // state change raises ItemCheck, but does not produce all of the native
-    // selection/mouse events that the Create eligibility handler may require.
-    // Only intervene when Autodesk's Create is still disabled and we have a
-    // verified checked row. Never bypass the original button validation.
-    private static void ScheduleNativeSelectionCommit(CheckedListBox list)
+    // Context menu is an optional native path; only the exact native
+    // select/clear commands are eligible. Do NOT fabricate or force actions.
+    private static bool TryNativeSelectAllMenu(
+        CheckedListBox native, bool selected)
     {
-        if (_dialog == IntPtr.Zero || list.IsDisposed || !list.IsHandleCreated)
-            return;
-
-        int generation = _generation;
-        IntPtr dialog = _dialog;
-        try
+        ContextMenuStrip? menu = native.ContextMenuStrip;
+        if (menu == null) return false;
+        foreach (ToolStripItem item in menu.Items)
         {
-            list.BeginInvoke((MethodInvoker)(() =>
-            {
-                if (_generation != generation || _dialog != dialog ||
-                    list.IsDisposed || !list.IsHandleCreated)
-                    return;
-
-                Button? create = FindNativeCreateButton(dialog);
-                if (create is null || create.Enabled) return;
-                int first = FirstCheckedIndex(list);
-                if (first < 0) return;
-
-                // Mouse-clicking the native line selects its row in addition
-                // to checking it. Setting the checked state alone does not.
-                if (list.SelectedIndex == first)
-                    list.ClearSelected();
-                list.SelectedIndex = first;
-                if (create.Enabled) return;
-
-                // Let Autodesk finish any deferred validation callback
-                // before trying the native mouse-event fallback.
-                try { _selectionVerify?.Stop(); _selectionVerify?.Dispose(); }
-                catch { }
-                var timer = new System.Windows.Forms.Timer { Interval = 180 };
-                _selectionVerify = timer;
-                timer.Tick += (_, _) =>
-                {
-                    timer.Stop();
-                    if (ReferenceEquals(_selectionVerify, timer))
-                        _selectionVerify = null;
-                    timer.Dispose();
-
-                    if (_generation != generation || _dialog != dialog ||
-                        list.IsDisposed || !list.IsHandleCreated)
-                        return;
-
-                    Button? nativeCreate = FindNativeCreateButton(dialog);
-                    if (nativeCreate is null || nativeCreate.Enabled)
-                        return;
-
-                    int checkedRow = FirstCheckedIndex(list);
-                    if (checkedRow < 0) return;
-
-                    // Autodesk's manual checkbox click works, even where
-                    // programmatic SetItemChecked left Create disabled.
-                    // Replay OFF then ON on only one already-checked row.
-                    // Every other checked line is left untouched.
-                    if (ClickNativeRow(list, checkedRow, false))
-                        ClickNativeRow(list, checkedRow, true);
-                };
-                timer.Start();
-            }));
+            string caption = item.Text.Replace("&", "").Trim();
+            string normalized = caption.ToLowerInvariant();
+            bool match = selected
+                ? normalized == "select all" ||
+                  normalized == "select all lines" ||
+                  normalized == "check all" ||
+                  normalized == "check all lines"
+                : normalized == "clear all" ||
+                  normalized == "clear all lines" ||
+                  normalized == "deselect all" ||
+                  normalized == "uncheck all" ||
+                  normalized == "uncheck all lines";
+            if (!match || !item.Enabled || !item.Available)
+                continue;
+            item.PerformClick();
+            return true;
         }
-        catch (InvalidOperationException)
-        {
-            // Native window closed between Select All and deferred commit.
-        }
-    }
-
-    private static int FirstCheckedIndex(CheckedListBox list)
-    {
-        for (int i = 0; i < list.Items.Count; i++)
-            if (list.GetItemChecked(i)) return i;
-        return -1;
+        return false;
     }
 
     private static Button? FindNativeCreateButton(IntPtr dialog)
@@ -599,56 +478,10 @@ internal static class NativeIsoLineSelectOverlay
         return create;
     }
 
-    // The same original native-list click mechanism already used by the
-    // REV26 folder projection; it produces the application's normal WinForms
-    // mouse/check/selection callbacks and verifies the desired final state.
-    private static bool ClickNativeRow(CheckedListBox list, int index, bool desired)
+    private static void WriteDiagnostic(string message)
     {
-        if (list.IsDisposed || !list.IsHandleCreated ||
-            index < 0 || index >= list.Items.Count)
-            return false;
-
-        int previousTop = list.TopIndex;
-        try
-        {
-            list.TopIndex = index;
-            Rectangle r = list.GetItemRectangle(index);
-            if (r.Height <= 0) return false;
-            int x = Math.Clamp(r.Left + 12, 5,
-                Math.Max(5, list.ClientSize.Width - 6));
-            int y = r.Top + r.Height / 2;
-            if (y < 0 || y >= list.ClientSize.Height)
-                return false;
-
-            IntPtr point = new IntPtr(((y & 0xffff) << 16) |
-                                       (x & 0xffff));
-            for (int attempt = 0; attempt < 2 &&
-                 list.GetItemChecked(index) != desired; attempt++)
-            {
-                SendMessage(list.Handle, WM_LBUTTONDOWN,
-                    new IntPtr(MK_LBUTTON), point);
-                SendMessage(list.Handle, WM_LBUTTONUP,
-                    IntPtr.Zero, point);
-            }
-
-            // REV35: DO NOT fall back to SetItemChecked. That is precisely
-            // what left Select All visually selected while the native line
-            // remained unchecked in REV34. Report failure and let the user
-            // click manually if the native window rejects the click.
-
-            if (desired && list.GetItemChecked(index))
-                list.SelectedIndex = index;
-            return list.GetItemChecked(index) == desired;
-        }
-        catch (Exception)
-        {
-            return false;
-        }
-        finally
-        {
-            if (!list.IsDisposed && list.Items.Count > 0)
-                list.TopIndex = Math.Clamp(previousTop, 0, list.Items.Count - 1);
-        }
+        AcadApp.DocumentManager.MdiActiveDocument?.Editor.WriteMessage(
+            "\\nSPTC " + message);
     }
 
     private static void SetTreeChecked(TreeNode node, bool selected)
@@ -744,11 +577,6 @@ internal static class NativeIsoLineSelectOverlay
     public static void Hide()
     {
         _generation++;
-        _selectionRequest++;
-        _selectionPending = false;
-        try { _selectionVerify?.Stop(); _selectionVerify?.Dispose(); }
-        catch { }
-        _selectionVerify = null;
         _dialog = IntPtr.Zero;
         try { _countTimer?.Stop(); } catch { }
         try { _countTimer?.Dispose(); } catch { }
