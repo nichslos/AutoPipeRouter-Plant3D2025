@@ -1,38 +1,39 @@
-# SPTC Production Iso REV32 — Restore Folder Dropdown
+# SPTC Production Iso REV33 — Faster Custom Save Location Copy
 
-**Baseline:** REV31. All older revision branches, DLLs, and features remain unchanged.
+**Approved baseline:** REV32 (preserved unchanged). REV33 changes only `NativeIsoDialogEnhancer.cs`, specifically its background completed-ISO DWG copier and per-file F2 progress reporting.
 
-## Problem from user screenshot
-Clicking the folder dropdown next to the Line Numbers filter showed:
+## Problem
+The user reports that ISO generation completes, but the completed `.dwg` appears in **Custom Save Location** only several seconds later.
 
-```
-Plant 3D Drawings folders
-All Project (no folder filter)
-Folder list unavailable — see F2 log
-```
+In REV32 the copy worker scans every **2.5 seconds** and waits at least **3 seconds** of unchanged source size/timestamp before attempting a copy. This imposes several seconds of delay even when Autodesk has finished and released the file.
 
-In REV25–31, the quick folder list **assumed** that Project Manager's `Plant 3D Drawings` node must correspond to a real physical directory at `<ProjectFolderPath>\Plant 3D Drawings`. In Plant 3D, project drawing hierarchy and the directory layout are not necessarily identical. If that directory does not exist, `Directory.Exists` fails even when registered project folders and DWGs exist.
+## REV33 behavior
+- Start copying on the existing trigger: when Autodesk's native Production Iso dialog closes and the background watcher is started. Do not depend on manually opening or closing the Isometric Creation Results window.
+- Use a **FileSystemWatcher** on the native `ProdIsos\Drawings` source directory to wake the worker when a `.dwg` is created, changed, or renamed.
+- Keep a **650 ms fallback polling** interval. This is critical for network/shared drives (mapped `L:` paths), where filesystem notifications may be unavailable, delayed, or missed.
+- Reduce the observed stable-size/LastWriteTime window from 3 seconds to **650 ms**, but require an **exclusive read FileStream lock over the ENTIRE transfer**. If Autodesk is still writing/holding the file, copying waits and retries. A zero-byte or changing file is not copied.
+- Write into a `.sptc-part` file in the destination directory, flush it, then rename it to `.dwg`. The user only sees the finished destination DWG, never a partial one.
+- Preserve the REV32 collision-safe filename strategy: existing files are not overwritten; use `_copy1`, `_copy2`, etc.
+- Preserve the REV32 multi-DWG batch window (up to ten minutes, ending after 25 seconds of inactivity following the last successful copy).
+- Queue a success message for **each completed output** and print on Plant 3D's UI thread:
+  `SPTC REV33: Custom ISO ready: Z:\...\sample.dwg`
+- All filesystem watching/reading/writing runs in the existing background worker. No PnP database scans, ISO configuration changes, Project Manager operations, or new WinForms window overlays.
 
-## REV32 changes (folder discovery only)
-- Replace the incorrect physical-directory assumption with the **current project's registered Piping drawing metadata**.
-- Call `Piping.GetPnPDrawingFiles` to obtain registered DWG paths, then reuse the existing `FolderOf` hierarchy parser to extract only the **first-level folder under Plant 3D Drawings**. Nested subfolders are not shown independently. Root DWGs do not introduce a fake folder.
-- Enumerate names **on demand when the user opens the dropdown**. No project-wide PnPDrawings SQL join, DWG opening, geometry scan, or file-system directory walk occurs merely to populate the folder menu.
-- All Plant 3D API/reflection access stays on the CAD UI thread; the code yields to the WinForms message pump every 32 paths (when a synchronization context exists). **No Task.Run with Autodesk objects.**
-- If the folder index from a previous user selection is already available, reuse its registered folder names immediately.
-- Add `SPTC REV32: Folder menu loaded N top-level folder(s) from registered Plant 3D Piping DWGs.` to AutoCAD F2 output.
-- On failure, show `Folder list unavailable — see F2 log` with a more specific `SPTC REV32: Registered drawing folder list failed: ...` diagnostic. No unexpected Windows folders are offered as a fallback.
-
-## Unchanged
-- Folder-specific line verification starts **only after choosing a folder** and uses the prior PnP read-only verification and progress/Cancel workflow. No registration/PNP data writes.
-- REV31 native exact active-DWG line number view, original checkbox, Select All (N), three top buttons.
-- REV25 adaptive resizable line-number pane/vertical grip, REV19 Custom Save Location, automatic copying of completed ISO DWGs.
-- No changes to startup lag, Autodesk ISO generation, project file/drawing names, default ISO style/configuration, `IsoConfig.xml` or Project Manager.
+## Expected improvement
+After Autodesk finishes writing a source DWG and releases its file lock, the destination copy should typically start within roughly a second, instead of waiting for REV32's 2.5-second polling plus 3-second stability delay. Actual latency still depends on source and destination drive/network throughput, Autodesk file sharing, and file size. **No promise of zero delay**.
 
 ## Test
-1. Restart Plant 3D 2025 and `NETLOAD` REV32 `SPTC.ProductionIso.dll`; run `SPTC_PRODISO`.
-2. Click the folder arrow in the Line Numbers filter row. You should see **All Project** and only the registered *direct child* folders visible under Project Manager → Plant 3D Drawings, not unrelated system directories.
-3. After folder names load, F2 should report `SPTC REV32: Folder menu loaded ...`.
-4. Select a small folder and confirm line-tag verification runs only for that selection. Check `Select All (N)` reflects the list.
-5. Return to All Project and confirm no change to original drawing/project data. Test one known-good ISO separately before any production batch.
+1. Close/restart Plant 3D 2025. NETLOAD the REV33 `SPTC.ProductionIso.dll` and run `SPTC_PRODISO`.
+2. Select one valid current line number; choose a **custom folder outside the default native ISO output folder**, preferably an empty folder.
+3. Click native **Create**. Do not open the Isometric Creation Results dialog manually.
+4. When the ISO completion notification appears, inspect the custom location in Explorer. The copied `.dwg` should appear promptly if the source DWG is stable and released.
+5. Press **F2** and look for `SPTC REV33: Custom ISO ready: ...`; optionally run `SPTC_ISOSTATUS` for source/destination state.
+6. Open the copied drawing and compare it with the original output. The original project DWG is retained.
+7. For a batch test with more than one ISO, confirm every expected output is copied (the worker stays alive for the batch quiet window).
 
-**Runtime caveat:** GitHub Actions compilation verifies C# compatibility, not the actual structure of the user's Plant 3D project hierarchy. If the dropdown still cannot list folders, share the complete `SPTC REV32:` line from F2; the exception text will distinguish missing project metadata from missing registered Piping DWG paths.
+## Safety and limitations
+- Custom Save Location empty: native default location is used; no copy is attempted.
+- Output target must be outside the native source tree; unchanged validation.
+- Existing target files remain untouched.
+- Copy is dependent on Autodesk writing a complete, unlocked DWG. A locked source, unavailable share, or slow network can still cause retries and additional delay. Failed attempt counters may increment during retries, as in REV32.
+- **REV32 remains the approved fallback.** Compilation verifies build compatibility, not observed timing on the user's network.
