@@ -418,14 +418,20 @@ internal static class NativeIsoDialogEnhancer
             // collect the rest of a multi-line Production Iso job.
             while (_copyProgress.TryDequeue(out string? savedName))
             {
-                // REV48: user-clickable DWG link appears inside the ORIGINAL
-                // Isometric Creation Results dialog only after copy exists.
-                NativeIsoResultsOverlay.ReportCopied(
-                    Path.Combine(_destination, savedName));
-                _copyState = "Copied " + savedName + "; monitoring remaining ISOs";
+                // REV57: include an existing destination skipped by the
+                // safe no-overwrite policy, without claiming it was copied.
+                bool existing = savedName.StartsWith(
+                    "existing:", StringComparison.OrdinalIgnoreCase);
+                string actualName = existing
+                    ? savedName.Substring("existing:".Length)
+                    : savedName;
+                string resultPath = Path.Combine(_destination, actualName);
+                NativeIsoResultsOverlay.ReportCopied(resultPath, existing);
+                _copyState = (existing ? "Existing " : "Copied ") +
+                    actualName + "; monitoring remaining ISOs";
                 _document?.Editor.WriteMessage(
-                    "\nSPTC REV33: Custom ISO ready: " +
-                    Path.Combine(_destination, savedName));
+                    "\nSPTC REV57: Custom ISO " +
+                    (existing ? "already exists: " : "copied: ") + resultPath);
             }
 
             if (_copyTask is not null && _copyTask.IsCompleted)
@@ -1286,6 +1292,11 @@ internal static class NativeIsoDialogEnhancer
                                 processedFiles.Add(file);
                                 skipped++;
                                 lastProcessed = now;
+                                // REV57: a safe skipped output still exists
+                                // in the custom folder. Report it as an
+                                // EXISTING clickable result, not a new copy.
+                                _copyProgress.Enqueue(
+                                    "existing:" + Path.GetFileName(destination));
                                 continue;
                             }
 
