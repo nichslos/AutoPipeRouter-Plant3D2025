@@ -385,88 +385,117 @@ internal static class NativeIsoResultsOverlay
         Position();
     }
 
+
+    // REV54: detect the original large, scrollable white native Results pane
+    // using bounds, not the variable Y of the last child/PCF. Its height is
+    // reserved for a separate custom scroll section underneath it.
+    private static bool CaptureNativeResultsPane(IntPtr dialog)
+    {
+        if (!GetClientRect(dialog, out RECT client))
+            return false;
+
+        double best = double.MaxValue;
+        IntPtr selected = IntPtr.Zero;
+        int left = 0, top = 0, right = 0, bottom = 0;
+
+        EnumChildWindows(dialog, (hwnd, _) =>
+        {
+            if (!GetWindowRect(hwnd, out RECT screen))
+                return true;
+
+            POINT a = new() { X = screen.Left, Y = screen.Top };
+            POINT b = new() { X = screen.Right, Y = screen.Bottom };
+            if (!ScreenToClient(dialog, ref a) ||
+                !ScreenToClient(dialog, ref b))
+                return true;
+
+            int w = b.X - a.X, h = b.Y - a.Y;
+            if (w < client.Width * 0.65 ||
+                h < client.Height * 0.48 ||
+                a.Y < 48 || a.Y > client.Height * 0.28 ||
+                a.X < 5 || a.X > client.Width * 0.20 ||
+                b.Y > client.Height - 25)
+                return true;
+
+            // The original results region is near 20px left, 75px top,
+            // filling the white interior above the bottom command buttons.
+            double score =
+                Math.Abs(a.X - 24) * 1.5 +
+                Math.Abs(a.Y - 78) * 1.8 +
+                Math.Abs(b.X - (client.Width - 23)) +
+                Math.Abs(b.Y - (client.Height - 60)) * 0.8;
+            Control? managed = Control.FromHandle(hwnd);
+            if (managed is TreeView || managed is ListView)
+                score -= 30;
+
+            if (score < best)
+            {
+                best = score;
+                selected = hwnd;
+                left = a.X; top = a.Y;
+                right = client.Width - b.X;
+                bottom = client.Height - b.Y;
+            }
+            return true;
+        }, IntPtr.Zero);
+
+        if (selected == IntPtr.Zero)
+            return false; // safe: do not cover the original native links
+
+        _nativeResultsPane = selected;
+        _nativePaneParent = GetParent(selected);
+        _nativeLeft = left;
+        _nativeTop = top;
+        _nativeRightMargin = right;
+        _nativeBottomMargin = bottom;
+        return _nativePaneParent != IntPtr.Zero;
+    }
+
     private static void Position()
     {
         if (_panel is not { IsDisposed: false } panel ||
             _dialog == IntPtr.Zero ||
-            !GetClientRect(_dialog, out RECT rect))
+            _nativeResultsPane == IntPtr.Zero ||
+            _nativePaneParent == IntPtr.Zero ||
+            !IsWindow(_nativeResultsPane) ||
+            !GetClientRect(_dialog, out RECT client))
             return;
 
-        int width = Math.Max(180, rect.Width - 105);
-        int height = Math.Min(
-            170, 24 + (Math.Max(1, CopiedPaths.Count) * 23) + 27);
-
-        // Anchor immediately below the visible original output-tree text
-        // whenever the standard WinForms TreeView is available. Otherwise,
-        // place the links in the large white results area of the SAME form.
-        int top = Math.Min(337, Math.Max(220, rect.Height - 188));
-        int treeBottom = FindLastNativeResultRowBottom();
-        if (treeBottom > 0 && treeBottom + 8 + height < rect.Height - 62)
-            top = treeBottom + 8;
-        top = Math.Min(top, Math.Max(110, rect.Height - height - 63));
-
-        // Leave the original native results text untouched. Our small
-        // white panel sits below it, never over the bottom control buttons.
-        SetWindowPos(panel.Handle, IntPtr.Zero,
-            74, top, width, height,
-            SWP_NOACTIVATE | SWP_NOZORDER | SWP_SHOWWINDOW);
-        panel.BringToFront();
-
-        if (_title != null && !_title.IsDisposed)
-            _title.Width = Math.Max(100, width - 16);
-        if (_folderLink != null && !_folderLink.IsDisposed)
-            _folderLink.Width = Math.Max(100, width - 16);
-        foreach (Control control in panel.Controls)
-            control.Width = Math.Max(100, width - 16);
-    }
-
-    private static int FindLastNativeResultRowBottom()
-    {
-        int bestBottom = -1;
-        EnumChildWindows(_dialog, (hwnd, _) =>
+        int fullHeight = Math.Max(0,
+            client.Height - _nativeTop - _nativeBottomMargin);
+        int width = Math.Max(0,
+            client.Width - _nativeLeft - _nativeRightMargin);
+        if (fullHeight < 220 || width < 300)
         {
-            if (Control.FromHandle(hwnd) is not TreeView tree ||
-                tree.IsDisposed || tree.Nodes.Count == 0)
-                return true;
-
-            // Exclude unrelated small TreeViews and toolbar controls.
-            if (!GetWindowRect(hwnd, out RECT bounds) ||
-                bounds.Height < 100 || bounds.Width < 300)
-                return true;
-
-            try
-            {
-                foreach (TreeNode node in VisibleNodes(tree.Nodes))
-                {
-                    if (!node.IsVisible || node.Bounds.IsEmpty)
-                        continue;
-                    POINT point = new()
-                    {
-                        X = 0,
-                        Y = tree.PointToScreen(
-                            new Point(0, node.Bounds.Bottom)).Y
-                    };
-                    // Convert screen Y to the native dialog client Y.
-                    point.X = bounds.Left;
-                    if (ScreenToClient(_dialog, ref point))
-                        bestBottom = Math.Max(bestBottom, point.Y);
-                }
-            }
-            catch (Exception) { }
-            return true;
-        }, IntPtr.Zero);
-        return bestBottom;
-    }
-
-    private static IEnumerable<TreeNode> VisibleNodes(TreeNodeCollection roots)
-    {
-        foreach (TreeNode root in roots)
-        {
-            yield return root;
-            if (root.IsExpanded)
-                foreach (TreeNode item in VisibleNodes(root.Nodes))
-                    yield return item;
+            panel.Hide();
+            return;
         }
+
+        // The native results list receives its own shorter viewport,
+        // with scrollbars still managed by Autodesk. The custom list gets
+        // the reserved bottom strip, so six or sixty original results will
+        // NEVER be covered by custom links.
+        int reserve = Math.Min(155, fullHeight / 3);
+        int nativeHeight = fullHeight - reserve - 5;
+
+        if (GetWindowRect(_nativeResultsPane, out RECT originalScreen))
+        {
+            POINT relative = new() {
+                X = originalScreen.Left, Y = originalScreen.Top };
+            if (ScreenToClient(_nativePaneParent, ref relative))
+                SetWindowPos(_nativeResultsPane, IntPtr.Zero,
+                    relative.X, relative.Y, width, nativeHeight,
+                    SWP_NOACTIVATE | SWP_NOZORDER);
+        }
+
+        SetWindowPos(panel.Handle, IntPtr.Zero,
+            _nativeLeft, _nativeTop + nativeHeight + 5,
+            width, reserve - 5,
+            SWP_NOACTIVATE | SWP_NOZORDER | SWP_SHOWWINDOW);
+        panel.Show();
+        panel.BringToFront();
+        foreach (Control item in panel.Controls)
+            item.Width = Math.Max(150, width - 22);
     }
 
     // REV49: just like Autodesk's original DWG result link, close the
