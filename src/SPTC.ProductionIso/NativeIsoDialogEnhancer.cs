@@ -480,6 +480,9 @@ internal static class NativeIsoDialogEnhancer
 
             ProjectFolderLinePicker.Attach(dialog, _document);
             NativeIsoLineSelectOverlay.Attach(dialog);
+            // REV44: remove Autodesk's startup search hint without clearing
+            // actual line filters or user-entered search text.
+            ActiveDwgTags.ClearInitialSearchHint(dialog);
             // REV20: avoid REV18's eager scan. Folder metadata/line numbers
             // are queried only AFTER the user chooses a folder.
             // Widen native Display lines through a draggable splitter when
@@ -505,6 +508,10 @@ internal static class NativeIsoDialogEnhancer
                         _lastDialogClientSize = size;
                         NativeIsoLinePaneResizer.Refresh();
                         PositionOverlay(dialog);
+                        // Native controls may finalize the cue banner after
+                        // initial attachment. Recheck only the known default
+                        // prompt on the first layout/update; user text is safe.
+                        ActiveDwgTags.ClearInitialSearchHint(dialog);
                     }
                 }
             };
