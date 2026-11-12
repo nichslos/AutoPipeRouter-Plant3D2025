@@ -31,6 +31,8 @@ internal static class NativeIsoResultsOverlay
     [DllImport("user32.dll")]
     private static extern bool GetWindowRect(IntPtr hwnd, out RECT rect);
     [DllImport("user32.dll")]
+    private static extern bool GetClientRect(IntPtr hwnd, out RECT rect);
+    [DllImport("user32.dll")]
     private static extern bool ScreenToClient(IntPtr hwnd, ref POINT point);
     [DllImport("user32.dll")]
     private static extern bool IsWindow(IntPtr hwnd);
@@ -42,11 +44,19 @@ internal static class NativeIsoResultsOverlay
     private static extern IntPtr SendNative(IntPtr hwnd, uint msg, IntPtr wp, IntPtr lp);
 
     private const uint WM_CLOSE = 0x0010;
+    private const uint WM_PAINT = 0x000F;
+    private const uint WM_PRINTCLIENT = 0x0318;
+    private const uint WM_VSCROLL = 0x0115;
+    private const uint WM_HSCROLL = 0x0114;
+    private const uint WM_MOUSEWHEEL = 0x020A;
+    private const uint WM_SIZE = 0x0005;
+    private const uint WM_KEYUP = 0x0101;
     private const uint WM_LBUTTONDOWN = 0x0201;
     private const uint WM_LBUTTONUP = 0x0202;
     private const uint WM_LBUTTONDBLCLK = 0x0203;
     private const uint TVM_GETNEXTITEM = 0x110A;
     private const uint TVM_GETITEMW = 0x113E;
+    private const uint TVM_GETITEMRECT = 0x1104;
     private const uint TVM_INSERTITEMW = 0x1132;
     private const uint TVM_DELETEITEM = 0x1101;
     private const uint TVM_HITTEST = 0x1111;
@@ -127,6 +137,24 @@ internal static class NativeIsoResultsOverlay
                 }
             }
             base.WndProc(ref message);
+
+            // REV57: Autodesk's native result tree is owner-drawn on the
+            // affected Plant 3D build. Our REV56 nodes take up a clickable
+            // row but the Autodesk painter leaves that row text BLANK.
+            // Draw only our injected rows after its original paint/scroll.
+            // Never redraw or replace original native ISO result nodes.
+            switch ((uint)message.Msg)
+            {
+                case WM_PAINT:
+                case WM_PRINTCLIENT:
+                case WM_VSCROLL:
+                case WM_HSCROLL:
+                case WM_MOUSEWHEEL:
+                case WM_SIZE:
+                case WM_KEYUP:
+                    DrawNativeCustomLabels(_tree);
+                    break;
+            }
         }
     }
 
@@ -140,6 +168,7 @@ internal static class NativeIsoResultsOverlay
     private static readonly Dictionary<IntPtr, NativeCustomLink> _winLinks = new();
     private static string _displaySignature = "";
     private static bool _missingTreeWarned;
+    private static bool _nativePaintingWarned;
     private static System.Windows.Forms.Timer? _timer;
     private static string _customFolder = "";
     private static readonly List<string> CopiedPaths = new();
@@ -160,6 +189,7 @@ internal static class NativeIsoResultsOverlay
         _pendingOpen = null;
         _pendingCloseTime = default;
         _missingTreeWarned = false;
+        _nativePaintingWarned = false;
     }
 
     public static void BeginSession(string? customFolder)
@@ -629,6 +659,90 @@ internal static class NativeIsoResultsOverlay
         }
     }
 
+    // REV57: The native SysTreeView32 in Plant 3D uses its own rendering
+    // and does not paint texts for foreign inserted nodes. The nodes exist
+    // (the user's screenshot confirms they can be clicked), but appear as
+    // empty rows. Ask the native control for EXACTLY those row rectangles
+    // and paint visible blue text after Autodesk finishes its own WM_PAINT.
+    // Unlike REV48/REV54, this doesn't create a floating panel, scroll
+    // region or cover ANY original row.
+    private static Rectangle? NativeRowRectangle(IntPtr tree, IntPtr item)
+    {
+        if (tree == IntPtr.Zero || item == IntPtr.Zero ||
+            !GetClientRect(tree, out RECT client))
+            return null;
+
+        IntPtr buffer = IntPtr.Zero;
+        try
+        {
+            // For TVM_GETITEMRECT the native API expects HTREEITEM
+            // (pointer-sized) stored in the first bytes of the RECT
+            // buffer, even though RECT.Left itself is only an int.
+            buffer = Marshal.AllocHGlobal(Math.Max(32, IntPtr.Size * 2));
+            Marshal.WriteIntPtr(buffer, item);
+            if (SendNative(tree, TVM_GETITEMRECT, IntPtr.Zero, buffer) ==
+                IntPtr.Zero)
+                return null;
+
+            RECT bounds = Marshal.PtrToStructure<RECT>(buffer);
+            if (bounds.Height < 9 || bounds.Height > 55 ||
+                bounds.Bottom <= 0 || bounds.Top >= client.Height ||
+                bounds.Right <= 0 || bounds.Left >= client.Width)
+                return null;
+
+            int x = Math.Max(0, bounds.Left + 2);
+            int y = Math.Max(0, bounds.Top);
+            int right = Math.Min(client.Width - 4, bounds.Right);
+            int bottom = Math.Min(client.Height, bounds.Bottom);
+            if (right <= x || bottom <= y) return null;
+
+            return new Rectangle(x, y, right - x, bottom - y);
+        }
+        catch (Exception) { return null; }
+        finally
+        {
+            if (buffer != IntPtr.Zero) Marshal.FreeHGlobal(buffer);
+        }
+    }
+
+    private static void DrawNativeCustomLabels(IntPtr tree)
+    {
+        if (tree == IntPtr.Zero || _winLinks.Count == 0 ||
+            !IsWindow(tree)) return;
+
+        // Graphics.FromHwnd sends no new painting messages and is disposed
+        // immediately. Restrict every drawing operation to a verified
+        // injected row; this avoids painting over Autodesk file/folder links.
+        try
+        {
+            using Graphics canvas = Graphics.FromHwnd(tree);
+            foreach (NativeCustomLink link in _winLinks.Values)
+            {
+                Rectangle? row = NativeRowRectangle(tree, link.Item);
+                if (row is null) continue;
+                string caption = "Custom: " + link.Path;
+                TextRenderer.DrawText(canvas, caption,
+                    SystemFonts.MessageBoxFont, row.Value,
+                    Color.Blue,
+                    TextFormatFlags.SingleLine |
+                    TextFormatFlags.VerticalCenter |
+                    TextFormatFlags.EndEllipsis |
+                    TextFormatFlags.NoPadding |
+                    TextFormatFlags.NoPrefix |
+                    TextFormatFlags.PreserveGraphicsClipping);
+            }
+        }
+        catch (Exception ex)
+        {
+            if (!_nativePaintingWarned)
+            {
+                _nativePaintingWarned = true;
+                Diagnostic("native custom-label paint failed: " +
+                    ex.GetBaseException().Message);
+            }
+        }
+    }
+
     private static void RefreshWin32PerLine(IntPtr tree)
     {
         var required = new Dictionary<IntPtr, List<string>>();
@@ -670,6 +784,9 @@ internal static class NativeIsoResultsOverlay
                     _winLinks[created] = new NativeCustomLink(
                         created, parent, path);
             }
+        // Initial paint after inserting a new native item, then native
+        // WndProc redraw handles all subsequent scroll/resize events.
+        DrawNativeCustomLabels(tree);
     }
 
     private static IntPtr HitNativeItem(IntPtr tree, IntPtr location)
