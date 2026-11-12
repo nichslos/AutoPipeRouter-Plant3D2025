@@ -100,7 +100,8 @@ internal static class NativeIsoResultsOverlay
         public uint flags;
         public IntPtr hItem;
     }
-    private sealed record NativeCustomLink(IntPtr Item, IntPtr Parent, string Path);
+    private sealed record NativeCustomLink(
+        IntPtr Item, IntPtr Parent, string Path, bool OpenFolder);
 
     private sealed class NativeTreeHook : NativeWindow
     {
@@ -123,7 +124,15 @@ internal static class NativeIsoResultsOverlay
                     // original result tree item handler.
                     if ((uint)message.Msg == WM_LBUTTONUP)
                     {
-                        try { OpenDrawing(link.Path); }
+                        try
+                        {
+                            if (link.OpenFolder)
+                                OpenFolder(Path.GetDirectoryName(link.Path) ??
+                                    throw new InvalidOperationException(
+                                        "Custom ISO DWG has no destination folder."));
+                            else
+                                OpenDrawing(link.Path);
+                        }
                         catch (Exception ex)
                         {
                             MessageBox.Show(
@@ -180,6 +189,12 @@ internal static class NativeIsoResultsOverlay
     private static string CustomLabel(string path) =>
         (ExistingCustomPaths.Contains(path)
             ? "Custom (existing): " : "Custom: ") + path;
+    private const string CustomFolderLabel =
+        "Open drawing folder in Windows Explorer";
+    private static string NativeLinkLabel(string path, bool openFolder) =>
+        openFolder ? CustomFolderLabel : CustomLabel(path);
+    private static string CustomLinkTarget(string dwg, bool openFolder) =>
+        openFolder ? Path.GetDirectoryName(dwg) ?? "" : dwg;
     private static readonly HashSet<string> ExpectedIsoTags =
         new(StringComparer.OrdinalIgnoreCase);
     private static string? _pendingOpen;
@@ -456,9 +471,11 @@ internal static class NativeIsoResultsOverlay
         }
     }
 
+    // REV60: add two compact, clickable lines under each original result:
+    // Custom: <DWG path> and the same Open drawing folder link as Autodesk.
+    // The native TreeView still owns its ONE original scrollbar.
     private static void RefreshManagedPerLine(TreeView tree)
     {
-        bool errorsOnly = OnlyErrorsSelected(_dialog);
         var desired = new Dictionary<TreeNode, List<string>>();
         foreach (TreeNode parent in AllOriginalNodes(tree.Nodes))
         {
@@ -467,29 +484,44 @@ internal static class NativeIsoResultsOverlay
             List<string> matched = CopiedPaths.Where(p =>
                 File.Exists(p) &&
                 MatchesIsoName(Path.GetFileName(p), tag)).ToList();
-            // Autodesk's Only Errors view removes successful route nodes.
-            // Any remaining "from ...pcf" row is error-related.
+            // View -> Only Errors: Autodesk removes successful result rows.
             if (matched.Count > 0) desired[parent] = matched;
         }
 
-        var remove = _managedCustomLinks.Where(n =>
-            n.TreeView != tree || n.Parent is null ||
-            !desired.TryGetValue(n.Parent, out var paths) ||
-            n.Tag is not CustomResultLink link ||
-            !paths.Contains(link.Path, StringComparer.OrdinalIgnoreCase))
+        bool IsDesired(TreeNode node)
+        {
+            if (node.Parent is null ||
+                !desired.TryGetValue(node.Parent, out var paths) ||
+                node.Tag is not CustomResultLink link)
+                return false;
+            return paths.Any(path => CustomLinkTarget(path, link.OpenFolder)
+                .Equals(link.Path, StringComparison.OrdinalIgnoreCase));
+        }
+
+        bool HasLink(TreeNode parent, string path, bool openFolder)
+        {
+            string target = CustomLinkTarget(path, openFolder);
+            return _managedCustomLinks.Any(node =>
+                ReferenceEquals(node.Parent, parent) &&
+                node.Tag is CustomResultLink link &&
+                link.OpenFolder == openFolder &&
+                link.Path.Equals(target, StringComparison.OrdinalIgnoreCase));
+        }
+
+        List<TreeNode> deleted = _managedCustomLinks
+            .Where(node => node.TreeView != tree || !IsDesired(node))
             .ToList();
-        bool changed = remove.Count > 0 || desired.Any(kv =>
-            kv.Value.Any(path => !_managedCustomLinks.Any(n =>
-                ReferenceEquals(n.Parent, kv.Key) &&
-                n.Tag is CustomResultLink link &&
-                link.Path.Equals(path, StringComparison.OrdinalIgnoreCase))));
+        bool changed = deleted.Count > 0 || desired.Any(kv =>
+            kv.Value.Any(path =>
+                !HasLink(kv.Key, path, false) ||
+                !HasLink(kv.Key, path, true)));
         if (!changed) return;
 
         TreeNode? previousTop = tree.TopNode;
         tree.BeginUpdate();
         try
         {
-            foreach (TreeNode node in remove)
+            foreach (TreeNode node in deleted)
             {
                 if (node.TreeView != null) node.Remove();
                 _managedCustomLinks.Remove(node);
@@ -498,22 +530,22 @@ internal static class NativeIsoResultsOverlay
             {
                 foreach (string path in paths)
                 {
-                    if (_managedCustomLinks.Any(n =>
-                        ReferenceEquals(n.Parent, parent) &&
-                        n.Tag is CustomResultLink link &&
-                        link.Path.Equals(path, StringComparison.OrdinalIgnoreCase)))
-                        continue;
-
-                    // One tightly spaced line, directly after Autodesk's
-                    // original File + Explorer links. No second scroll.
-                    var item = new TreeNode(CustomLabel(path))
+                    // Add in this order, directly beneath the two original
+                    // File/Explorer rows, without extra heading or padding.
+                    foreach (bool openFolder in new[] { false, true })
                     {
-                        ForeColor = Color.Blue,
-                        ToolTipText = path,
-                        Tag = new CustomResultLink(path, false)
-                    };
-                    parent.Nodes.Add(item);
-                    _managedCustomLinks.Add(item);
+                        if (HasLink(parent, path, openFolder)) continue;
+                        string target = CustomLinkTarget(path, openFolder);
+                        var item = new TreeNode(
+                            NativeLinkLabel(path, openFolder))
+                        {
+                            ForeColor = Color.Blue,
+                            ToolTipText = target,
+                            Tag = new CustomResultLink(target, openFolder)
+                        };
+                        parent.Nodes.Add(item);
+                        _managedCustomLinks.Add(item);
+                    }
                     if (!parent.IsExpanded) parent.Expand();
                 }
             }
@@ -643,12 +675,13 @@ internal static class NativeIsoResultsOverlay
     }
 
     private static IntPtr InsertNativeLink(
-        IntPtr tree, IntPtr parent, string path)
+        IntPtr tree, IntPtr parent, string path, bool openFolder)
     {
         IntPtr text = IntPtr.Zero, memory = IntPtr.Zero;
         try
         {
-            text = Marshal.StringToHGlobalUni(CustomLabel(path));
+            text = Marshal.StringToHGlobalUni(
+                NativeLinkLabel(path, openFolder));
             var entry = new TVINSERTSTRUCTW
             {
                 hParent = parent,
@@ -751,7 +784,9 @@ internal static class NativeIsoResultsOverlay
             sibling = WinNext(tree, TVGN_NEXT, sibling);
         }
 
-        x = Math.Max(0, x);
+        // REV60: one text-space (~6 display pixels) to the right of
+        // Autodesk's File: hyperlink, for BOTH custom result lines.
+        x = Math.Max(0, x + 6);
         int y = Math.Max(0, full.Top + textTopOffset);
         int bottom = Math.Min(client.Height,
             Math.Min(full.Bottom, y + Math.Max(1, textHeight)));
@@ -802,7 +837,8 @@ internal static class NativeIsoResultsOverlay
                             area.Height));
                 }
 
-                TextRenderer.DrawText(canvas, CustomLabel(link.Path),
+                TextRenderer.DrawText(canvas,
+                    NativeLinkLabel(link.Path, link.OpenFolder),
                     drawFont, area, Color.Blue,
                     TextFormatFlags.SingleLine |
                     TextFormatFlags.EndEllipsis |
@@ -838,39 +874,51 @@ internal static class NativeIsoResultsOverlay
 
         foreach (NativeCustomLink link in _winLinks.Values.ToList())
         {
-            if (required.TryGetValue(link.Parent, out var paths) &&
-                paths.Contains(link.Path,
-                    StringComparer.OrdinalIgnoreCase) &&
-                NativeItemText(tree, link.Item).StartsWith(
-                    "Custom", StringComparison.Ordinal))
+            string text = NativeItemText(tree, link.Item);
+            bool sameItem = text.Equals(
+                NativeLinkLabel(link.Path, link.OpenFolder),
+                StringComparison.Ordinal);
+
+            if (sameItem &&
+                required.TryGetValue(link.Parent, out var paths) &&
+                paths.Contains(link.Path, StringComparer.OrdinalIgnoreCase))
                 continue;
 
-            if (NativeItemText(tree, link.Item).StartsWith(
-                    "Custom", StringComparison.Ordinal))
+            // Never delete a native Autodesk item if a stale handle has
+            // been reused by the original Results tree.
+            if (sameItem)
                 SendNative(tree, TVM_DELETEITEM, IntPtr.Zero, link.Item);
             _winLinks.Remove(link.Item);
             itemsChanged = true;
         }
 
         foreach (var (parent, paths) in required)
+        {
             foreach (string path in paths)
             {
-                if (_winLinks.Values.Any(link =>
-                    link.Parent == parent &&
-                    link.Path.Equals(path,
-                        StringComparison.OrdinalIgnoreCase)))
-                    continue;
-                IntPtr created = InsertNativeLink(tree, parent, path);
-                if (created != IntPtr.Zero)
+                // REV60: each copied ISO gets both a custom DWG link and
+                // its own Explorer-folder link, directly underneath it.
+                foreach (bool openFolder in new[] { false, true })
                 {
-                    _winLinks[created] = new NativeCustomLink(
-                        created, parent, path);
-                    itemsChanged = true;
+                    if (_winLinks.Values.Any(link =>
+                        link.Parent == parent &&
+                        link.OpenFolder == openFolder &&
+                        link.Path.Equals(path,
+                            StringComparison.OrdinalIgnoreCase)))
+                        continue;
+
+                    IntPtr created = InsertNativeLink(
+                        tree, parent, path, openFolder);
+                    if (created != IntPtr.Zero)
+                    {
+                        _winLinks[created] = new NativeCustomLink(
+                            created, parent, path, openFolder);
+                        itemsChanged = true;
+                    }
                 }
             }
-        // Avoid repainting over the native UI every 550 ms. Draw on
-        // first insertion/removal, then only on real Windows paint/scroll.
-        // This prevents the custom text from looking double-thick.
+        }
+        // Keep REV59's paint optimization: don't overpaint every 550ms.
         if (itemsChanged)
             DrawNativeCustomLabels(tree);
     }
@@ -951,8 +999,9 @@ internal static class NativeIsoResultsOverlay
         if (_winTree != IntPtr.Zero && IsWindow(_winTree))
         {
             foreach (var link in _winLinks.Values.ToList())
-                if (NativeItemText(_winTree, link.Item).StartsWith(
-                    "Custom", StringComparison.Ordinal))
+                if (NativeItemText(_winTree, link.Item).Equals(
+                    NativeLinkLabel(link.Path, link.OpenFolder),
+                    StringComparison.Ordinal))
                     SendNative(_winTree, TVM_DELETEITEM, IntPtr.Zero, link.Item);
         }
         _winLinks.Clear();
