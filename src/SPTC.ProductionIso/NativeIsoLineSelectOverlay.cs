@@ -391,6 +391,10 @@ internal static class NativeIsoLineSelectOverlay
             try { toggle.Checked = actual; }
             finally { _setting = false; }
         }
+        // REV45: Autodesk may keep Create enabled after the last
+        // checked native row was cleared programmatically.
+        if (!desired && !actual)
+            EnsureCreateDisabledForEmptyNativeList(list, dialog, "single-line");
         Button? create = FindNativeCreateButton(dialog);
         WriteDiagnostic("REV42 single-line search Select All: " +
             tag + ", desired=" + desired + ", checked=" + actual +
@@ -517,6 +521,10 @@ internal static class NativeIsoLineSelectOverlay
                         if (selected && firstChecked >= 0 &&
                             native.SelectedIndex != firstChecked)
                             native.SelectedIndex = firstChecked;
+                        else if (!selected && checkedCount == 0 &&
+                                 native.SelectedIndex >= 0)
+                            // REV45: stale selected row should not keep Create active.
+                            native.ClearSelected();
 
                         // The overlay tick follows the *real* line states.
                         // It must not claim success when Autodesk ignored
@@ -635,6 +643,11 @@ internal static class NativeIsoLineSelectOverlay
 
                 bool allChecked = native.Items.Count > 0 &&
                                   actual == native.Items.Count;
+                // REV45: after the deferred native checkbox events have
+                // committed, disable Create if the real list is empty.
+                if (!selected && actual == 0)
+                    EnsureCreateDisabledForEmptyNativeList(
+                        native, parent, "all-project/search");
                 if (_toggle is { IsDisposed: false } toggle)
                 {
                     _setting = true;
@@ -655,6 +668,51 @@ internal static class NativeIsoLineSelectOverlay
             }
         };
         timer.Start();
+    }
+
+    // REV45: safety-only reconciliation for Autodesk's stale Create state
+    // following programmatic Select All -> Clear All (including manual
+    // search and Active-DWG one-line filtering). Original native checklist
+    // is the sole source of truth. Never enable Create here.
+    // Folder projection is excluded because it already works correctly.
+    private static void EnsureCreateDisabledForEmptyNativeList(
+        CheckedListBox native, IntPtr dialog, string source)
+    {
+        if (_dialog != dialog || native.IsDisposed ||
+            ProjectFolderLinePicker.HasVisibleProjection ||
+            native.Items.Count == 0)
+            return;
+
+        for (int i = 0; i < native.Items.Count; i++)
+        {
+            if (native.GetItemChecked(i))
+                return;
+        }
+
+        try
+        {
+            // The original Autodesk handler may already disable Create when
+            // the stale row selection is cleared. Do this before fallback.
+            if (native.SelectedIndex >= 0)
+                native.ClearSelected();
+
+            Button? create = FindNativeCreateButton(dialog);
+            if (create is null || create.IsDisposed)
+                return;
+
+            bool staleEnabled = create.Enabled;
+            if (staleEnabled)
+                create.Enabled = false; // disable-only; never bypass native validation
+
+            WriteDiagnostic("REV45 zero native lines checked (" + source +
+                "); CreateEnabled=" + create.Enabled +
+                "; staleEnabledCorrected=" + staleEnabled);
+        }
+        catch (Exception ex)
+        {
+            WriteDiagnostic("REV45 empty-selection state: " +
+                ex.GetBaseException().Message);
+        }
     }
 
     // Context menu is an optional native path; only the exact native
