@@ -314,7 +314,7 @@ internal static class NativeIsoResultsOverlay
     {
         foreach (TreeNode node in nodes)
         {
-            if (ReferenceEquals(node, _customGroup))
+            if (node.Tag is CustomResultLink)
                 continue;
             yield return node;
             foreach (TreeNode nested in OriginalNodes(node.Nodes))
