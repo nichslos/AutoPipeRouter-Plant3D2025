@@ -1164,6 +1164,31 @@ internal static class NativeIsoDialogEnhancer
             StringComparer.OrdinalIgnoreCase);
         DateTime start = DateTime.UtcNow;
         DateTime lastProcessed = start;
+        // REV58: the 25-second idle shutdown could happen during a long
+        // Autodesk ISO batch, leaving the final route (e.g. 01E) uncopied.
+        // Track actual per-line completion, not an arbitrary gap between
+        // native DWG writes. Only successful copied or intentionally skipped
+        // files count as finished.
+        var expectedTags = new HashSet<string>(
+            selectedTags.Where(tag => !string.IsNullOrWhiteSpace(tag)),
+            StringComparer.OrdinalIgnoreCase);
+        var completedTags = new HashSet<string>(
+            StringComparer.OrdinalIgnoreCase);
+        void MarkRouteFinished(string dwg)
+        {
+            if (expectedTags.Count == 0) return;
+            string stem = Path.GetFileNameWithoutExtension(dwg);
+            // Exact match outranks a possible native split-sheet suffix;
+            // this prevents a tag such as A-011-1 being mistaken for A-011.
+            string? exact = expectedTags.FirstOrDefault(tag =>
+                stem.Equals(tag, StringComparison.OrdinalIgnoreCase));
+            string? matched = exact ?? expectedTags
+                .Where(tag => MatchesCurrentIsoBatch(
+                    dwg, new[] { tag }))
+                .OrderByDescending(tag => tag.Length)
+                .FirstOrDefault();
+            if (matched != null) completedTags.Add(matched);
+        }
         long lastNativeChangeTicks = start.Ticks;
 
         using var wake = new System.Threading.SemaphoreSlim(0, 1);
@@ -1292,6 +1317,7 @@ internal static class NativeIsoDialogEnhancer
                                 processedFiles.Add(file);
                                 skipped++;
                                 lastProcessed = now;
+                                MarkRouteFinished(Path.GetFileName(file));
                                 // REV57: a safe skipped output still exists
                                 // in the custom folder. Report it as an
                                 // EXISTING clickable result, not a new copy.
@@ -1348,6 +1374,7 @@ internal static class NativeIsoDialogEnhancer
                             processedFiles.Add(file);
                             copied++;
                             lastProcessed = DateTime.UtcNow;
+                            MarkRouteFinished(Path.GetFileName(file));
                             // REV51: report the ACTUAL numbered output so
                             // its clickable file link appears in Results.
                             _copyProgress.Enqueue(Path.GetFileName(published));
@@ -1382,8 +1409,19 @@ internal static class NativeIsoDialogEnhancer
                 }
                 catch (UnauthorizedAccessException) { throw; }
 
-                if ((copied > 0 || skipped > 0) &&
-                    (DateTime.UtcNow - lastProcessed).TotalSeconds >= 25)
+                // REV58: Never stop while a selected line is still missing.
+                // Autodesk can have gaps of 25+ seconds between ISO sheets.
+                // Once ALL expected native line groups are processed, allow
+                // a 12-second quiet window for late split sheets. If the
+                // native selection snapshot was unavailable, conservatively
+                // keep watching longer rather than dropping the last DWG.
+                bool allKnownTagsFinished = expectedTags.Count > 0 &&
+                    expectedTags.All(completedTags.Contains);
+                double idleSeconds = (DateTime.UtcNow - lastProcessed)
+                    .TotalSeconds;
+                if ((allKnownTagsFinished && idleSeconds >= 12) ||
+                    (expectedTags.Count == 0 &&
+                     (copied > 0 || skipped > 0) && idleSeconds >= 120))
                     break;
 
                 // FileSystemWatcher is a hint, not a guarantee. SMB drives
