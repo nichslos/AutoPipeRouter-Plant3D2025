@@ -154,6 +154,11 @@ internal static class NativeIsoLineSelectOverlay
             : "Select All";
         if (!string.Equals(_toggle.Text, caption, StringComparison.Ordinal))
             _toggle.Text = caption;
+
+        // REV42: native Active-DWG scope may disable the search edit control
+        // after initial attachment; keep the original input editable during
+        // normal dialog use without changing its search text or route data.
+        ActiveDwgTags.EnsureNativeSearchEditable(_dialog);
     }
 
     // REV21: read only the actual Autodesk line list to validate an active
