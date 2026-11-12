@@ -46,6 +46,10 @@ internal static class NativeIsoExactLineFilter
     private static int _attempts;
     private static bool _working;
     private static bool _diagnosticWritten;
+    // REV46: one bounded alternative text query; still validate and retain
+    // ONLY the exact full line number from Autodesk's original checklist.
+    private static bool _fallbackApplied;
+    private static string _fallbackQuery = "";
 
     public static void Begin(IntPtr dialog, string tag, Document? document)
     {
@@ -55,6 +59,8 @@ internal static class NativeIsoExactLineFilter
         _document = document;
         _attempts = 0;
         _diagnosticWritten = false;
+        _fallbackApplied = false;
+        _fallbackQuery = "";
 
         if (_dialog == IntPtr.Zero || _tag.Length == 0) return;
 
@@ -185,12 +191,53 @@ internal static class NativeIsoExactLineFilter
 
     private static void RetryOrRollback(string reason)
     {
-        if (++_attempts < 4)
+        int tries = ++_attempts;
+        int limit = _fallbackApplied ? 6 : 4;
+        if (tries < limit)
         {
             if (_timer != null) _timer.Interval = 300;
             return;
         }
-        Rollback(reason);
+
+        // REV46: A full native text query such as
+        // CAP_BF_BND_TEE_RTEE+S-011 can temporarily return no Autodesk
+        // rows. Try its distinctive final route suffix once, then compare
+        // the ORIGINAL native row against the FULL name. Never generate
+        // a line item or accept another route's substring match.
+        if (!_fallbackApplied)
+        {
+            _fallbackApplied = true;
+            string candidate = FallbackTerm(_tag);
+            if (candidate.Length >= 4 &&
+                ActiveDwgTags.TryApplyActiveSearchFallback(
+                    _dialog, _tag, candidate, _document))
+            {
+                _fallbackQuery = candidate;
+                _attempts = 0;
+                if (_timer != null) _timer.Interval = 250;
+                return;
+            }
+        }
+
+        string extra = _fallbackQuery.Length > 0
+            ? " The suffix search '" + _fallbackQuery +
+              "' also failed to return the exact registered ISO tag."
+            : " No safe alternate native search was available.";
+        Rollback(reason + extra +
+            " Confirm this full Line Number Tag is registered in " +
+            "Production Iso for the active project.");
+    }
+
+    private static string FallbackTerm(string fullTag)
+    {
+        int split = fullTag.LastIndexOfAny(new[] { '+', '_', '/', '\\' });
+        if (split >= 0 && fullTag.Length - split - 1 >= 4)
+            return fullTag.Substring(split + 1);
+        // For tags without separators, try a short distinctive tail.
+        // Never search on a single digit or broad one/two-character term.
+        if (fullTag.Length >= 10)
+            return fullTag.Substring(fullTag.Length - 8);
+        return "";
     }
 
     private static void Rollback(string reason)
