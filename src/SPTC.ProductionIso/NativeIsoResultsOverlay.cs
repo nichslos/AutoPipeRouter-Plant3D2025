@@ -476,7 +476,22 @@ internal static class NativeIsoResultsOverlay
             if (existing != null)
                 documents.MdiActiveDocument = existing;
             else
-                documents.Open(path, false);
+            {
+                // The AutoCAD.NET 2025 build references available to this
+                // repository do not expose DocumentCollection.Open().
+                // Queue the native command only AFTER the Results modal
+                // form is gone. -OPEN accepts a quoted path on the command
+                // line even when FILEDIA is enabled in Plant 3D.
+                var active = documents.MdiActiveDocument ??
+                    throw new InvalidOperationException(
+                        "No active Plant 3D drawing is available for -OPEN.");
+                string safePath = path.Replace("\"", "");
+                if (safePath.IndexOfAny(new[] { '\r', '\n' }) >= 0)
+                    throw new ArgumentException("Invalid drawing path.");
+                active.SendStringToExecute(
+                    "_.-OPEN \"" + safePath + "\" ",
+                    true, false, false);
+            }
         }
         catch (Exception ex)
         {
