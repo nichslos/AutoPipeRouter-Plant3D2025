@@ -172,6 +172,13 @@ internal static class NativeIsoResultsOverlay
     private static System.Windows.Forms.Timer? _timer;
     private static string _customFolder = "";
     private static readonly List<string> CopiedPaths = new();
+    // A skipped, pre-existing custom DWG is still a clickable destination,
+    // but must not be misrepresented as a newly generated copy.
+    private static readonly HashSet<string> ExistingCustomPaths =
+        new(StringComparer.OrdinalIgnoreCase);
+    private static string CustomLabel(string path) =>
+        (ExistingCustomPaths.Contains(path)
+            ? "Custom (existing): " : "Custom: ") + path;
     private static readonly HashSet<string> ExpectedIsoTags =
         new(StringComparer.OrdinalIgnoreCase);
     private static string? _pendingOpen;
@@ -185,6 +192,7 @@ internal static class NativeIsoResultsOverlay
         _dialog = IntPtr.Zero;
         _customFolder = "";
         CopiedPaths.Clear();
+        ExistingCustomPaths.Clear();
         ExpectedIsoTags.Clear();
         _pendingOpen = null;
         _pendingCloseTime = default;
@@ -242,7 +250,7 @@ internal static class NativeIsoResultsOverlay
         ExpectedIsoTags.Count == 0 ||
         ExpectedIsoTags.Any(tag => MatchesIsoName(fileName, tag));
 
-    public static void ReportCopied(string path)
+    public static void ReportCopied(string path, bool existing = false)
     {
         if (string.IsNullOrWhiteSpace(_customFolder))
             return;
@@ -255,11 +263,14 @@ internal static class NativeIsoResultsOverlay
             Path.DirectorySeparatorChar;
         if (!full.StartsWith(folderPrefix, StringComparison.OrdinalIgnoreCase) ||
             !File.Exists(full) ||
-            !IsExpectedIsoOutput(Path.GetFileName(full)) ||
-            CopiedPaths.Any(p => p.Equals(full, StringComparison.OrdinalIgnoreCase)))
+            !IsExpectedIsoOutput(Path.GetFileName(full)))
             return;
 
-        CopiedPaths.Add(full);
+        if (existing) ExistingCustomPaths.Add(full);
+        else ExistingCustomPaths.Remove(full);
+
+        if (!CopiedPaths.Any(p => p.Equals(full, StringComparison.OrdinalIgnoreCase)))
+            CopiedPaths.Add(full);
         _displaySignature = "";
         RefreshNativeResults();
     }
@@ -494,7 +505,7 @@ internal static class NativeIsoResultsOverlay
 
                     // One tightly spaced line, directly after Autodesk's
                     // original File + Explorer links. No second scroll.
-                    var item = new TreeNode("Custom: " + path)
+                    var item = new TreeNode(CustomLabel(path))
                     {
                         ForeColor = Color.Blue,
                         ToolTipText = path,
@@ -636,7 +647,7 @@ internal static class NativeIsoResultsOverlay
         IntPtr text = IntPtr.Zero, memory = IntPtr.Zero;
         try
         {
-            text = Marshal.StringToHGlobalUni("Custom: " + path);
+            text = Marshal.StringToHGlobalUni(CustomLabel(path));
             var entry = new TVINSERTSTRUCTW
             {
                 hParent = parent,
@@ -720,7 +731,7 @@ internal static class NativeIsoResultsOverlay
             {
                 Rectangle? row = NativeRowRectangle(tree, link.Item);
                 if (row is null) continue;
-                string caption = "Custom: " + link.Path;
+                string caption = CustomLabel(link.Path);
                 TextRenderer.DrawText(canvas, caption,
                     SystemFonts.MessageBoxFont, row.Value,
                     Color.Blue,
@@ -762,11 +773,11 @@ internal static class NativeIsoResultsOverlay
                 paths.Contains(link.Path,
                     StringComparer.OrdinalIgnoreCase) &&
                 NativeItemText(tree, link.Item).StartsWith(
-                    "Custom: ", StringComparison.Ordinal))
+                    "Custom", StringComparison.Ordinal))
                 continue;
 
             if (NativeItemText(tree, link.Item).StartsWith(
-                    "Custom: ", StringComparison.Ordinal))
+                    "Custom", StringComparison.Ordinal))
                 SendNative(tree, TVM_DELETEITEM, IntPtr.Zero, link.Item);
             _winLinks.Remove(link.Item);
         }
@@ -866,7 +877,7 @@ internal static class NativeIsoResultsOverlay
         {
             foreach (var link in _winLinks.Values.ToList())
                 if (NativeItemText(_winTree, link.Item).StartsWith(
-                    "Custom: ", StringComparison.Ordinal))
+                    "Custom", StringComparison.Ordinal))
                     SendNative(_winTree, TVM_DELETEITEM, IntPtr.Zero, link.Item);
         }
         _winLinks.Clear();
