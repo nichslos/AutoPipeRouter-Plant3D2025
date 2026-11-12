@@ -12,9 +12,10 @@ using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
 namespace SPTC.ProductionIso;
 
 /// <summary>
-/// REV48: show links to actual custom-copy DWG files INSIDE the existing
-/// Autodesk "Isometric Creation Results" dialog, without modifying
-/// Autodesk's original result nodes/links or replacing the dialog.
+/// REV55: Add Custom Save Location links as real child nodes at the END of
+/// Autodesk's original Results TreeView. One shared scroll bar, no overlay
+/// panel, no shrinking/moving/reparenting of Autodesk's results control.
+/// Only Errors shows links for error rows, never successful files.
 /// </summary>
 internal static class NativeIsoResultsOverlay
 {
@@ -28,27 +29,14 @@ internal static class NativeIsoResultsOverlay
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern int GetWindowText(IntPtr hwnd, StringBuilder text, int capacity);
     [DllImport("user32.dll")]
-    private static extern bool GetClientRect(IntPtr hwnd, out RECT rect);
-    [DllImport("user32.dll")]
     private static extern bool GetWindowRect(IntPtr hwnd, out RECT rect);
     [DllImport("user32.dll")]
     private static extern bool ScreenToClient(IntPtr hwnd, ref POINT point);
     [DllImport("user32.dll")]
-    private static extern IntPtr SetParent(IntPtr child, IntPtr parent);
-    [DllImport("user32.dll")]
     private static extern bool IsWindow(IntPtr hwnd);
-    [DllImport("user32.dll")]
-    private static extern IntPtr GetParent(IntPtr hwnd);
     [DllImport("user32.dll")]
     private static extern bool PostMessage(IntPtr hwnd, uint msg, IntPtr wp, IntPtr lp);
     private const uint WM_CLOSE = 0x0010;
-    [DllImport("user32.dll")]
-    private static extern bool SetWindowPos(
-        IntPtr hwnd, IntPtr after, int x, int y, int width, int height, uint flags);
-
-    private const uint SWP_NOZORDER = 0x0004;
-    private const uint SWP_NOACTIVATE = 0x0010;
-    private const uint SWP_SHOWWINDOW = 0x0040;
 
     [StructLayout(LayoutKind.Sequential)]
     private struct RECT
@@ -60,21 +48,17 @@ internal static class NativeIsoResultsOverlay
     [StructLayout(LayoutKind.Sequential)]
     private struct POINT { public int X, Y; }
 
+    private sealed record CustomResultLink(string Path, bool OpenFolder);
+
     private static IntPtr _dialog;
-    private static Panel? _panel;
-    private static Label? _title;
-    private static LinkLabel? _folderLink;
+    private static TreeView? _nativeTree;
+    private static TreeNode? _customGroup;
+    private static string _displaySignature = "";
     private static System.Windows.Forms.Timer? _timer;
     private static string _customFolder = "";
     private static readonly List<string> CopiedPaths = new();
-    // REV54: separate scroll area reserved below the original results pane.
-    private static IntPtr _nativeResultsPane;
-    private static IntPtr _nativePaneParent;
-    private static int _nativeLeft, _nativeTop, _nativeRightMargin, _nativeBottomMargin;
-    private static readonly HashSet<string> ExpectedIsoTags = new(StringComparer.OrdinalIgnoreCase);
-    // REV49: preserve links if Autodesk's Results form is closed then
-    // reopened via its original DWG output. Poll only while this ISO
-    // session is active; no secondary results window is ever created.
+    private static readonly HashSet<string> ExpectedIsoTags =
+        new(StringComparer.OrdinalIgnoreCase);
     private static string? _pendingOpen;
     private static DateTime _pendingCloseTime;
 
@@ -82,420 +66,372 @@ internal static class NativeIsoResultsOverlay
     {
         try { _timer?.Stop(); _timer?.Dispose(); } catch { }
         _timer = null;
-        DisposePanel();
+        DetachTree();
         _dialog = IntPtr.Zero;
         _customFolder = "";
         CopiedPaths.Clear();
         ExpectedIsoTags.Clear();
-        _nativeResultsPane = IntPtr.Zero;
-        _nativePaneParent = IntPtr.Zero;
         _pendingOpen = null;
         _pendingCloseTime = default;
     }
 
-    /// <summary>
-    /// Start looking for the original Results window after the Production
-    /// Iso dialog closes. No custom dialog is ever opened.
-    /// </summary>
     public static void BeginSession(string? customFolder)
     {
         if (string.IsNullOrWhiteSpace(customFolder))
             return;
-
         try { _customFolder = Path.GetFullPath(customFolder); }
         catch (Exception) { return; }
-
         if (_timer != null)
             return;
 
-        // Unlike REV48, keep watching after the FIRST results window
-        // closes so links return if Autodesk reopens its results panel.
-        _timer = new System.Windows.Forms.Timer { Interval = 650 };
+        // Keep listening even if Autodesk closes and reopens Results from
+        // its completion notification. Launch() resets for the next ISO run.
+        _timer = new System.Windows.Forms.Timer { Interval = 550 };
         _timer.Tick += (_, _) => OnTick();
         _timer.Start();
         OnTick();
     }
 
-    // Restrict links/copies to the verified current native ISO selection.
     public static void SetExpectedIsoTags(IEnumerable<string> tags)
     {
         ExpectedIsoTags.Clear();
         foreach (string tag in tags)
             if (!string.IsNullOrWhiteSpace(tag))
                 ExpectedIsoTags.Add(tag.Trim());
+        _displaySignature = ""; // selected route set may have changed
     }
 
-    public static bool IsExpectedIsoOutput(string fileName)
+    private static bool MatchesIsoName(string fileName, string tag)
     {
-        if (ExpectedIsoTags.Count == 0) return true;
         string stem = Path.GetFileNameWithoutExtension(fileName);
-        foreach (string tag in ExpectedIsoTags)
-        {
-            if (stem.Equals(tag, StringComparison.OrdinalIgnoreCase)) return true;
-            if (stem.StartsWith(tag + " (", StringComparison.OrdinalIgnoreCase) &&
-                stem.EndsWith(")", StringComparison.Ordinal) &&
-                int.TryParse(stem.Substring(tag.Length + 2,
-                    stem.Length - tag.Length - 3), out int number) && number > 0)
-                return true;
-            if (stem.StartsWith(tag + "-", StringComparison.OrdinalIgnoreCase) &&
-                int.TryParse(stem.Substring(tag.Length + 1), out int another) && another > 0)
-                return true;
-        }
+        if (stem.Equals(tag, StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        // Native ISO collision numbering: "A-08 (2).dwg".
+        if (stem.StartsWith(tag + " (", StringComparison.OrdinalIgnoreCase) &&
+            stem.EndsWith(")", StringComparison.Ordinal) &&
+            int.TryParse(stem.Substring(tag.Length + 2,
+                stem.Length - tag.Length - 3), out int number) && number > 0)
+            return true;
+
+        // Existing project ISO sheet numbering, e.g. LINE-1.dwg.
+        if (stem.StartsWith(tag + "-", StringComparison.OrdinalIgnoreCase) &&
+            int.TryParse(stem.Substring(tag.Length + 1), out int sheet) && sheet > 0)
+            return true;
         return false;
     }
+
+    public static bool IsExpectedIsoOutput(string fileName) =>
+        ExpectedIsoTags.Count == 0 ||
+        ExpectedIsoTags.Any(tag => MatchesIsoName(fileName, tag));
 
     public static void ReportCopied(string path)
     {
         if (string.IsNullOrWhiteSpace(_customFolder))
             return;
-
         string full;
         try { full = Path.GetFullPath(path); }
         catch (Exception) { return; }
 
-        // Only files physically copied into the user's chosen folder during
-        // THIS Production Iso run are offered as current-result DWG links.
-        if (!full.StartsWith(
-                Path.TrimEndingDirectorySeparator(_customFolder) +
-                Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ||
+        string folderPrefix =
+            Path.TrimEndingDirectorySeparator(_customFolder) +
+            Path.DirectorySeparatorChar;
+        if (!full.StartsWith(folderPrefix, StringComparison.OrdinalIgnoreCase) ||
             !File.Exists(full) ||
             !IsExpectedIsoOutput(Path.GetFileName(full)) ||
             CopiedPaths.Any(p => p.Equals(full, StringComparison.OrdinalIgnoreCase)))
             return;
 
         CopiedPaths.Add(full);
-        RefreshLinks();
+        _displaySignature = "";
+        RefreshNativeResults();
+    }
+
+    private static string WindowText(IntPtr hwnd)
+    {
+        var value = new StringBuilder(256);
+        GetWindowText(hwnd, value, value.Capacity);
+        return value.ToString().Trim();
     }
 
     private static IntPtr FindResults()
     {
-        IntPtr match = IntPtr.Zero;
-        uint currentPid = (uint)Process.GetCurrentProcess().Id;
+        IntPtr result = IntPtr.Zero;
+        uint process = (uint)Process.GetCurrentProcess().Id;
         EnumWindows((hwnd, _) =>
         {
             GetWindowThreadProcessId(hwnd, out uint pid);
-            if (pid != currentPid)
-                return true;
-
-            var text = new StringBuilder(120);
-            GetWindowText(hwnd, text, text.Capacity);
-            if (!text.ToString().Equals("Isometric Creation Results",
+            if (pid == process &&
+                WindowText(hwnd).Equals("Isometric Creation Results",
                     StringComparison.OrdinalIgnoreCase))
+            {
+                result = hwnd;
+                return false;
+            }
+            return true;
+        }, IntPtr.Zero);
+        return result;
+    }
+
+    private static TreeView? FindNativeTree(IntPtr dialog)
+    {
+        if (!GetWindowRect(dialog, out RECT window))
+            return null;
+        double best = -1;
+        TreeView? found = null;
+        EnumChildWindows(dialog, (hwnd, _) =>
+        {
+            if (Control.FromHandle(hwnd) is not TreeView tree ||
+                tree.IsDisposed || !tree.Visible || tree.Nodes.Count == 0 ||
+                !GetWindowRect(hwnd, out RECT rect))
                 return true;
 
-            match = hwnd;
-            return false;
+            POINT start = new() { X = rect.Left, Y = rect.Top };
+            if (!ScreenToClient(dialog, ref start))
+                return true;
+            if (rect.Width < window.Width * 0.55 ||
+                rect.Height < window.Height * 0.42 ||
+                start.Y < 40 || start.Y > window.Height * 0.4)
+                return true;
+
+            double score = rect.Width * (double)rect.Height;
+            if (score > best)
+            {
+                best = score;
+                found = tree;
+            }
+            return true;
         }, IntPtr.Zero);
-        return match;
+        return found;
+    }
+
+    private static bool OnlyErrorsSelected(IntPtr dialog)
+    {
+        bool onlyErrors = false;
+        EnumChildWindows(dialog, (hwnd, _) =>
+        {
+            Control? control = Control.FromHandle(hwnd);
+            string value = control is ComboBox combo
+                ? combo.Text.Trim() : WindowText(hwnd);
+            if (value.Equals("Only Errors", StringComparison.OrdinalIgnoreCase))
+            {
+                onlyErrors = true;
+                return false;
+            }
+            return true;
+        }, IntPtr.Zero);
+        return onlyErrors;
+    }
+
+    private static IEnumerable<TreeNode> OriginalNodes(TreeNodeCollection nodes)
+    {
+        foreach (TreeNode node in nodes)
+        {
+            if (ReferenceEquals(node, _customGroup))
+                continue;
+            yield return node;
+            foreach (TreeNode nested in OriginalNodes(node.Nodes))
+                yield return nested;
+        }
+    }
+
+    private static HashSet<string> VisibleErrorLines(TreeView tree)
+    {
+        var tags = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        // In View -> Only Errors, Autodesk suppresses successful "from *.pcf"
+        // nodes. Find only remaining original route rows, never our own.
+        foreach (TreeNode node in OriginalNodes(tree.Nodes))
+        {
+            string text = node.Text.Trim();
+            int from = text.IndexOf("from ", StringComparison.OrdinalIgnoreCase);
+            int pcf = text.LastIndexOf(".pcf", StringComparison.OrdinalIgnoreCase);
+            if (from < 0 || pcf <= from + 5)
+                continue;
+            string name = text.Substring(from + 5, pcf - (from + 5)).Trim();
+            if (name.Length > 0)
+                tags.Add(name);
+        }
+        return tags;
     }
 
     private static void OnTick()
     {
-        if (_timer == null)
-            return;
-
         IntPtr current = FindResults();
-        if (_panel is { IsDisposed: false } &&
-            (_dialog == IntPtr.Zero || !IsWindow(_dialog) ||
-             current != _dialog))
+        if (_dialog != current ||
+            _nativeTree is { IsDisposed: true })
         {
-            DisposePanel();
-            _dialog = IntPtr.Zero;
+            DetachTree();
+            _dialog = current;
         }
 
-        // REV49: clicking a custom DWG sends WM_CLOSE first. Wait until
-        // the original Autodesk modal Results dialog really disappears
-        // before opening a DWG in this SAME Plant 3D session.
-        if (_pendingOpen is { } path)
+        // Clicking a custom file closes Autodesk's MODAL Results window
+        // before opening the DWG using the existing REV50 runtime API.
+        if (_pendingOpen is string pending)
         {
             if (current == IntPtr.Zero &&
                 DateTime.UtcNow - _pendingCloseTime >
                     TimeSpan.FromMilliseconds(200))
             {
-                _pendingOpen = null; // exactly once
-                OpenDrawingInPlant(path);
-                return;
+                _pendingOpen = null;
+                OpenDrawingInPlant(pending);
             }
-
-            // If a nonstandard Autodesk results window refuses to close,
-            // never force a DWG open behind the still-modal dialog.
-            if (DateTime.UtcNow - _pendingCloseTime >
-                TimeSpan.FromSeconds(8))
+            else if (DateTime.UtcNow - _pendingCloseTime >
+                     TimeSpan.FromSeconds(8))
                 _pendingOpen = null;
             return;
         }
 
         if (current != IntPtr.Zero)
-        {
-            if (_panel is null)
-                Attach(current);
-            else
-                Position();
-        }
-        // Do NOT stop this session's timer after the first Results window
-        // closes. Reopened native result forms get a fresh overlay showing
-        // the SAME verified custom files. Launch() resets the session.
+            RefreshNativeResults();
     }
 
-    private static void Attach(IntPtr hwnd)
+    private static void RefreshNativeResults()
     {
-        if (!GetClientRect(hwnd, out RECT area) ||
-            area.Width < 350 || area.Height < 260)
+        if (_dialog == IntPtr.Zero || !IsWindow(_dialog))
             return;
-
-        try
+        TreeView? tree = FindNativeTree(_dialog);
+        if (tree is null)
         {
-            if (!CaptureNativeResultsPane(hwnd))
-                return; // unrecognized native UI: never cover original rows
-            _dialog = hwnd;
-            _panel = new Panel
-            {
-                BackColor = Color.White,
-                BorderStyle = BorderStyle.None,
-                AutoScroll = true,
-                TabStop = false
-            };
-            _title = new Label
-            {
-                Text = "Custom Save Location:",
-                Font = new Font(SystemFonts.MessageBoxFont, FontStyle.Bold),
-                AutoSize = false,
-                Height = 20,
-                Location = new Point(0, 0),
-                ForeColor = SystemColors.WindowText
-            };
-            _panel.Controls.Add(_title);
-            _folderLink = MakeLink(
-                "Open custom drawing folder in Windows Explorer",
-                () => OpenFolder(_customFolder));
-            _panel.Controls.Add(_folderLink);
-
-            // Child controls live inside Autodesk's ORIGINAL results dialog.
-            // We never alter its native output rows, links or buttons.
-            _ = _panel.Handle;
-            SetParent(_panel.Handle, hwnd);
-            if (GetParent(_panel.Handle) != hwnd)
-                throw new InvalidOperationException("Could not attach custom results.");
-            _panel.Show();
-            RefreshLinks();
-            Position();
-        }
-        catch (Exception)
-        {
-            DisposePanel();
-            _dialog = IntPtr.Zero;
-        }
-    }
-
-    private static LinkLabel MakeLink(string caption, Action click)
-    {
-        var link = new LinkLabel
-        {
-            AutoSize = false,
-            Height = 20,
-            Text = caption,
-            LinkColor = Color.Blue,
-            ActiveLinkColor = Color.Blue,
-            VisitedLinkColor = Color.Blue,
-            Font = SystemFonts.MessageBoxFont,
-            TextAlign = ContentAlignment.MiddleLeft,
-            UseMnemonic = false,
-            TabStop = true
-        };
-        link.LinkClicked += (_, _) =>
-        {
-            try { click(); }
-            catch (Exception ex)
-            {
-                MessageBox.Show(
-                    "Could not open the custom DWG destination: " +
-                    ex.GetBaseException().Message,
-                    "SPTC Custom ISO Link", MessageBoxButtons.OK,
-                    MessageBoxIcon.Information);
-            }
-        };
-        return link;
-    }
-
-    private static void RefreshLinks()
-    {
-        if (_panel is not { IsDisposed: false } panel ||
-            _folderLink is null || _title is null)
+            // Fail CLOSED: if the Autodesk dialog does not expose the native
+            // TreeView, never put another floating panel over its results.
+            DetachTree();
             return;
-
-        // Rebuild only OUR own custom result links; native Autodesk result
-        // nodes and their original DWG link remain entirely untouched.
-        for (int i = panel.Controls.Count - 1; i >= 0; i--)
+        }
+        if (!ReferenceEquals(tree, _nativeTree))
         {
-            Control c = panel.Controls[i];
-            if (ReferenceEquals(c, _title) ||
-                ReferenceEquals(c, _folderLink))
-                continue;
-            panel.Controls.RemoveAt(i);
-            c.Dispose();
+            DetachTree();
+            _nativeTree = tree;
+            tree.NodeMouseClick += OnResultNodeClicked;
+            tree.BeforeSelect += OnBeforeSelect;
         }
 
-        int y = 21;
-        if (CopiedPaths.Count == 0)
-        {
-            var pending = new Label
-            {
-                Text = "Custom DWG copy pending (the original ISO remains above).",
-                AutoSize = false,
-                Height = 20,
-                Location = new Point(0, y),
-                ForeColor = SystemColors.GrayText,
-                Font = SystemFonts.MessageBoxFont
-            };
-            panel.Controls.Add(pending);
-            y += 23;
-        }
+        bool onlyErrors = OnlyErrorsSelected(_dialog);
+        List<string> links;
+        if (!onlyErrors)
+            links = CopiedPaths.Where(File.Exists).ToList();
         else
         {
-            foreach (string path in CopiedPaths)
+            HashSet<string> errorTags = VisibleErrorLines(tree);
+            // No errors in native Results => no custom section at all.
+            // If Autodesk has error rows, show ONLY files matching these.
+            links = errorTags.Count == 0
+                ? new List<string>()
+                : CopiedPaths.Where(path => File.Exists(path) &&
+                    errorTags.Any(tag => MatchesIsoName(
+                        Path.GetFileName(path), tag))).ToList();
+        }
+
+        string signature = (onlyErrors ? "errors:" : "all:") +
+            string.Join("\u001f", links);
+        bool groupAttached = _customGroup is { TreeView: not null } &&
+            ReferenceEquals(_customGroup.TreeView, tree);
+        if (groupAttached && signature == _displaySignature)
+            return;
+
+        TreeNode? priorTop = tree.TopNode;
+        tree.BeginUpdate();
+        try
+        {
+            RemoveCustomGroup();
+            if (links.Count == 0)
             {
-                string captured = path;
-                LinkLabel fileLink = MakeLink(
-                    "File: " + captured, () => OpenDrawing(captured));
-                fileLink.Location = new Point(0, y);
-                fileLink.Tag = captured;
-                fileLink.MouseEnter += (_, _) =>
+                _displaySignature = signature;
+                return;
+            }
+
+            // Native scroll ownership: add a REAL TreeNode after the
+            // original Production Isometrics root (not another Panel).
+            // Autodesk's scroll bar now scrolls originals AND these links.
+            var group = new TreeNode("Custom Save Location:");
+            group.ForeColor = tree.ForeColor;
+            foreach (string path in links)
+            {
+                var link = new TreeNode("File: " + path)
                 {
-                    // Show the untruncated full DWG path on hover.
-                    var tip = new ToolTip();
-                    tip.SetToolTip(fileLink, captured);
-                    fileLink.Disposed += (_, _) => tip.Dispose();
+                    ForeColor = Color.Blue,
+                    ToolTipText = path,
+                    Tag = new CustomResultLink(path, false)
                 };
-                panel.Controls.Add(fileLink);
-                y += 21;
+                group.Nodes.Add(link);
             }
-        }
-
-        _folderLink.Location = new Point(0, y);
-        y += 24;
-
-        if (GetClientRect(_dialog, out RECT bounds))
-        {
-            int w = Math.Max(160, bounds.Width - 116);
-            _title.Width = w;
-            _folderLink.Width = w;
-            foreach (Control item in panel.Controls)
-                item.Width = w;
-        }
-        Position();
-    }
-
-
-    // REV54: detect the original large, scrollable white native Results pane
-    // using bounds, not the variable Y of the last child/PCF. Its height is
-    // reserved for a separate custom scroll section underneath it.
-    private static bool CaptureNativeResultsPane(IntPtr dialog)
-    {
-        if (!GetClientRect(dialog, out RECT client))
-            return false;
-
-        double best = double.MaxValue;
-        IntPtr selected = IntPtr.Zero;
-        int left = 0, top = 0, right = 0, bottom = 0;
-
-        EnumChildWindows(dialog, (hwnd, _) =>
-        {
-            if (!GetWindowRect(hwnd, out RECT screen))
-                return true;
-
-            POINT a = new() { X = screen.Left, Y = screen.Top };
-            POINT b = new() { X = screen.Right, Y = screen.Bottom };
-            if (!ScreenToClient(dialog, ref a) ||
-                !ScreenToClient(dialog, ref b))
-                return true;
-
-            int w = b.X - a.X, h = b.Y - a.Y;
-            if (w < client.Width * 0.65 ||
-                h < client.Height * 0.48 ||
-                a.Y < 25 || a.Y > client.Height * 0.33 ||
-                a.X < 5 || a.X > client.Width * 0.20 ||
-                b.Y > client.Height - 25)
-                return true;
-
-            // The original results region is near 20px left, 75px top,
-            // filling the white interior above the bottom command buttons.
-            double score =
-                Math.Abs(a.X - 24) * 1.5 +
-                Math.Abs(a.Y - 45) * 1.8 +
-                Math.Abs(b.X - (client.Width - 23)) +
-                Math.Abs(b.Y - (client.Height - 60)) * 0.8;
-            Control? managed = Control.FromHandle(hwnd);
-            if (managed is TreeView || managed is ListView)
-                score -= 30;
-
-            if (score < best)
+            group.Nodes.Add(new TreeNode(
+                "Open custom drawing folder in Windows Explorer")
             {
-                best = score;
-                selected = hwnd;
-                left = a.X; top = a.Y;
-                right = client.Width - b.X;
-                bottom = client.Height - b.Y;
+                ForeColor = Color.Blue,
+                Tag = new CustomResultLink(_customFolder, true)
+            });
+            tree.Nodes.Add(group); // always AFTER every native result
+            _customGroup = group;
+            group.Expand();
+            _displaySignature = signature;
+        }
+        finally
+        {
+            tree.EndUpdate();
+            try
+            {
+                if (priorTop is not null &&
+                    ReferenceEquals(priorTop.TreeView, tree) &&
+                    priorTop.IsVisible)
+                    tree.TopNode = priorTop; // don't jump while links arrive
             }
-            return true;
-        }, IntPtr.Zero);
-
-        if (selected == IntPtr.Zero)
-            return false; // safe: do not cover the original native links
-
-        _nativeResultsPane = selected;
-        _nativePaneParent = GetParent(selected);
-        _nativeLeft = left;
-        _nativeTop = top;
-        _nativeRightMargin = right;
-        _nativeBottomMargin = bottom;
-        return _nativePaneParent != IntPtr.Zero;
+            catch (Exception) { }
+        }
     }
 
-    private static void Position()
+    private static void OnBeforeSelect(
+        object? sender, TreeViewCancelEventArgs e)
     {
-        if (_panel is not { IsDisposed: false } panel ||
-            _dialog == IntPtr.Zero ||
-            _nativeResultsPane == IntPtr.Zero ||
-            _nativePaneParent == IntPtr.Zero ||
-            !IsWindow(_nativeResultsPane) ||
-            !GetClientRect(_dialog, out RECT client))
+        // Do not send native Autodesk selection handlers to an SPTC
+        // hyperlink node; our NodeMouseClick opens it separately.
+        if (e.Node.Tag is CustomResultLink)
+            e.Cancel = true;
+    }
+
+    private static void OnResultNodeClicked(
+        object? sender, TreeNodeMouseClickEventArgs e)
+    {
+        if (e.Button != MouseButtons.Left ||
+            e.Node.Tag is not CustomResultLink link)
             return;
-
-        int fullHeight = Math.Max(0,
-            client.Height - _nativeTop - _nativeBottomMargin);
-        int width = Math.Max(0,
-            client.Width - _nativeLeft - _nativeRightMargin);
-        if (fullHeight < 220 || width < 300)
+        try
         {
-            panel.Hide();
-            return;
+            if (link.OpenFolder)
+                OpenFolder(link.Path);
+            else
+                OpenDrawing(link.Path);
         }
-
-        // The native results list receives its own shorter viewport,
-        // with scrollbars still managed by Autodesk. The custom list gets
-        // the reserved bottom strip, so six or sixty original results will
-        // NEVER be covered by custom links.
-        int reserve = Math.Min(155, fullHeight / 3);
-        int nativeHeight = fullHeight - reserve - 5;
-
-        if (GetWindowRect(_nativeResultsPane, out RECT originalScreen))
+        catch (Exception ex)
         {
-            POINT relative = new() {
-                X = originalScreen.Left, Y = originalScreen.Top };
-            if (ScreenToClient(_nativePaneParent, ref relative))
-                SetWindowPos(_nativeResultsPane, IntPtr.Zero,
-                    relative.X, relative.Y, width, nativeHeight,
-                    SWP_NOACTIVATE | SWP_NOZORDER);
+            MessageBox.Show(
+                "Could not open custom ISO result:\n" +
+                ex.GetBaseException().Message,
+                "SPTC Custom ISO Link", MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
         }
+    }
 
-        SetWindowPos(panel.Handle, IntPtr.Zero,
-            _nativeLeft, _nativeTop + nativeHeight + 5,
-            width, reserve - 5,
-            SWP_NOACTIVATE | SWP_NOZORDER | SWP_SHOWWINDOW);
-        panel.Show();
-        panel.BringToFront();
-        foreach (Control item in panel.Controls)
-            item.Width = Math.Max(150, width - 22);
+    private static void RemoveCustomGroup()
+    {
+        try
+        {
+            if (_customGroup?.TreeView is not null)
+                _customGroup.Remove();
+        }
+        catch (Exception) { }
+        _customGroup = null;
+    }
+
+    private static void DetachTree()
+    {
+        RemoveCustomGroup();
+        if (_nativeTree is { IsDisposed: false } tree)
+        {
+            tree.NodeMouseClick -= OnResultNodeClicked;
+            tree.BeforeSelect -= OnBeforeSelect;
+        }
+        _nativeTree = null;
+        _displaySignature = "";
     }
 
     // REV49: just like Autodesk's original DWG result link, close the
@@ -615,13 +551,4 @@ internal static class NativeIsoResultsOverlay
         });
     }
 
-    private static void DisposePanel()
-    {
-        try { _panel?.Dispose(); } catch { }
-        _panel = null;
-        _title = null;
-        _folderLink = null;
-        _nativeResultsPane = IntPtr.Zero;
-        _nativePaneParent = IntPtr.Zero;
-    }
 }
