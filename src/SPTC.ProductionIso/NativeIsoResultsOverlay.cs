@@ -51,6 +51,7 @@ internal static class NativeIsoResultsOverlay
     private const uint WM_MOUSEWHEEL = 0x020A;
     private const uint WM_SIZE = 0x0005;
     private const uint WM_KEYUP = 0x0101;
+    private const uint WM_GETFONT = 0x0031;
     private const uint WM_LBUTTONDOWN = 0x0201;
     private const uint WM_LBUTTONUP = 0x0202;
     private const uint WM_LBUTTONDBLCLK = 0x0203;
@@ -670,44 +671,26 @@ internal static class NativeIsoResultsOverlay
         }
     }
 
-    // REV57: The native SysTreeView32 in Plant 3D uses its own rendering
-    // and does not paint texts for foreign inserted nodes. The nodes exist
-    // (the user's screenshot confirms they can be clicked), but appear as
-    // empty rows. Ask the native control for EXACTLY those row rectangles
-    // and paint visible blue text after Autodesk finishes its own WM_PAINT.
-    // Unlike REV48/REV54, this doesn't create a floating panel, scroll
-    // region or cover ANY original row.
-    private static Rectangle? NativeRowRectangle(IntPtr tree, IntPtr item)
+    // REV58: TVM_GETITEMRECT with wParam=0 returns the whole selectable
+    // item row, which is why REV57's manually drawn blue text started
+    // at the FAR LEFT of the tree. TRUE returns the TEXT rectangle.
+    // Copy its X from the original sibling "File:" row whenever possible;
+    // preserve the custom item's own Y and the original one-row spacing.
+    private static RECT? NativeItemRect(
+        IntPtr tree, IntPtr item, bool textOnly)
     {
-        if (tree == IntPtr.Zero || item == IntPtr.Zero ||
-            !GetClientRect(tree, out RECT client))
+        if (tree == IntPtr.Zero || item == IntPtr.Zero)
             return null;
-
         IntPtr buffer = IntPtr.Zero;
         try
         {
-            // For TVM_GETITEMRECT the native API expects HTREEITEM
-            // (pointer-sized) stored in the first bytes of the RECT
-            // buffer, even though RECT.Left itself is only an int.
             buffer = Marshal.AllocHGlobal(Math.Max(32, IntPtr.Size * 2));
             Marshal.WriteIntPtr(buffer, item);
-            if (SendNative(tree, TVM_GETITEMRECT, IntPtr.Zero, buffer) ==
-                IntPtr.Zero)
+            if (SendNative(tree, TVM_GETITEMRECT,
+                    textOnly ? new IntPtr(1) : IntPtr.Zero,
+                    buffer) == IntPtr.Zero)
                 return null;
-
-            RECT bounds = Marshal.PtrToStructure<RECT>(buffer);
-            if (bounds.Height < 9 || bounds.Height > 55 ||
-                bounds.Bottom <= 0 || bounds.Top >= client.Height ||
-                bounds.Right <= 0 || bounds.Left >= client.Width)
-                return null;
-
-            int x = Math.Max(0, bounds.Left + 2);
-            int y = Math.Max(0, bounds.Top);
-            int right = Math.Min(client.Width - 4, bounds.Right);
-            int bottom = Math.Min(client.Height, bounds.Bottom);
-            if (right <= x || bottom <= y) return null;
-
-            return new Rectangle(x, y, right - x, bottom - y);
+            return Marshal.PtrToStructure<RECT>(buffer);
         }
         catch (Exception) { return null; }
         finally
@@ -716,25 +699,82 @@ internal static class NativeIsoResultsOverlay
         }
     }
 
+    private static Rectangle? NativeCustomTextRectangle(
+        IntPtr tree, NativeCustomLink custom)
+    {
+        if (!GetClientRect(tree, out RECT client))
+            return null;
+        RECT? full = NativeItemRect(tree, custom.Item, false);
+        RECT? text = NativeItemRect(tree, custom.Item, true);
+        if (full is null || text is null)
+            return null;
+        RECT row = full.Value;
+        if (row.Height < 9 || row.Height > 55 ||
+            row.Bottom <= 0 || row.Top >= client.Height)
+            return null;
+
+        int left = text.Value.Left;
+        IntPtr child = WinNext(tree, TVGN_CHILD, custom.Parent);
+        for (int i = 0; child != IntPtr.Zero && i < 100; i++)
+        {
+            // Use actual native "File:" text alignment as source of
+            // truth, instead of hard-coded X positions/DPI assumptions.
+            string label = NativeItemText(tree, child);
+            if (label.StartsWith("File:", StringComparison.OrdinalIgnoreCase))
+            {
+                RECT? sibling = NativeItemRect(tree, child, true);
+                if (sibling is not null)
+                    left = sibling.Value.Left;
+                break;
+            }
+            child = WinNext(tree, TVGN_NEXT, child);
+        }
+
+        int x = Math.Max(0, left);
+        int y = Math.Max(0, row.Top);
+        int right = client.Width - 5;
+        int bottom = Math.Min(client.Height, row.Bottom);
+        if (x >= right || y >= bottom) return null;
+        return new Rectangle(x, y, right - x, bottom - y);
+    }
+
     private static void DrawNativeCustomLabels(IntPtr tree)
     {
         if (tree == IntPtr.Zero || _winLinks.Count == 0 ||
             !IsWindow(tree)) return;
-
-        // Graphics.FromHwnd sends no new painting messages and is disposed
-        // immediately. Restrict every drawing operation to a verified
-        // injected row; this avoids painting over Autodesk file/folder links.
         try
         {
             using Graphics canvas = Graphics.FromHwnd(tree);
+            IntPtr handleFont = SendNative(
+                tree, WM_GETFONT, IntPtr.Zero, IntPtr.Zero);
+            using Font? nativeFont = handleFont == IntPtr.Zero
+                ? null : Font.FromHfont(handleFont);
+            Font drawFont = nativeFont ?? SystemFonts.MessageBoxFont;
+
             foreach (NativeCustomLink link in _winLinks.Values)
             {
-                Rectangle? row = NativeRowRectangle(tree, link.Item);
-                if (row is null) continue;
-                string caption = CustomLabel(link.Path);
-                TextRenderer.DrawText(canvas, caption,
-                    SystemFonts.MessageBoxFont, row.Value,
-                    Color.Blue,
+                Rectangle? bounds = NativeCustomTextRectangle(tree, link);
+                if (bounds is null) continue;
+                Rectangle area = bounds.Value;
+
+                // REV57 repainted the same glyphs every 550ms without
+                // clearing, making them appear artificially bold. Erase
+                // ONLY the inserted custom item's row before repainting.
+                // All original Autodesk result rows remain untouched.
+                RECT? full = NativeItemRect(tree, link.Item, false);
+                if (full is not null)
+                {
+                    RECT row = full.Value;
+                    int clearLeft = Math.Max(0,
+                        Math.Min(row.Left, area.Left) - 2);
+                    canvas.FillRectangle(SystemBrushes.Window,
+                        new Rectangle(clearLeft, area.Top,
+                            Math.Max(0, area.Right - clearLeft),
+                            area.Height));
+                }
+
+                TextRenderer.DrawText(canvas, CustomLabel(link.Path),
+                    drawFont, area, Color.Blue,
                     TextFormatFlags.SingleLine |
                     TextFormatFlags.VerticalCenter |
                     TextFormatFlags.EndEllipsis |
