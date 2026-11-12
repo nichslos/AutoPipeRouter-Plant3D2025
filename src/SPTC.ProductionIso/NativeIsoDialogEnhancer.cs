@@ -62,6 +62,67 @@ internal static class NativeIsoDialogEnhancer
     private static bool _nativeSeen;
     private static bool _resultsSeen;
     private static DateTime _nativeClosedAt;
+    // REV49: honor the ORIGINAL Autodesk 'Overwrite if existing' option
+    // for custom destination copies as well. Default = OFF (REV47).
+    // No independent custom overwrite toggle, no silent file deletion.
+    private static bool _overwriteRequested;
+    private static CheckBox? _nativeOverwriteBox;
+    private const uint BM_GETCHECK = 0x00F0;
+    [DllImport("user32.dll")]
+    private static extern IntPtr SendMessage(
+        IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam);
+
+    private static void OnNativeOverwriteChanged(object? sender, EventArgs e)
+    {
+        if (ReferenceEquals(sender, _nativeOverwriteBox) &&
+            _nativeOverwriteBox is { IsDisposed: false } box)
+            _overwriteRequested = box.Checked;
+    }
+
+    private static void DetachNativeOverwriteTracker()
+    {
+        if (_nativeOverwriteBox is { IsDisposed: false } box)
+            box.CheckedChanged -= OnNativeOverwriteChanged;
+        _nativeOverwriteBox = null;
+    }
+
+    private static void CaptureNativeOverwrite(IntPtr dialog)
+    {
+        if (dialog == IntPtr.Zero)
+            return;
+
+        // Follow the real Autodesk CheckBox, including a click immediately
+        // before Create that could be missed by the 1-second UI poll.
+        if (_nativeOverwriteBox is { IsDisposed: false } active)
+        {
+            _overwriteRequested = active.Checked;
+            return;
+        }
+
+        EnumChildWindows(dialog, (hwnd, _) =>
+        {
+            string caption = WindowText(hwnd).Trim();
+            if (!caption.Equals("Overwrite if existing",
+                    StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            if (Control.FromHandle(hwnd) is CheckBox box &&
+                !box.IsDisposed)
+            {
+                _nativeOverwriteBox = box;
+                _overwriteRequested = box.Checked;
+                box.CheckedChanged += OnNativeOverwriteChanged;
+            }
+            else
+            {
+                // Defensive fallback for a native Win32 checkbox.
+                _overwriteRequested = SendMessage(
+                    hwnd, BM_GETCHECK, IntPtr.Zero, IntPtr.Zero).ToInt32() == 1;
+            }
+            return false;
+        }, IntPtr.Zero);
+    }
+
     private sealed record CopyReport(int Copied, int Skipped, string Destination);
 
     public static void Launch(Document doc)
@@ -75,6 +136,8 @@ internal static class NativeIsoDialogEnhancer
         // REV48: clear only the previous results links, not the approved
         // REV47 custom DWG copier or Autodesk's native results UI.
         NativeIsoResultsOverlay.Reset();
+        DetachNativeOverwriteTracker();
+        _overwriteRequested = false;
         _copyTask = null;
         while (_copyProgress.TryDequeue(out _)) { }
         _copyState = "Waiting for Production Iso dialog";
@@ -185,6 +248,7 @@ internal static class NativeIsoDialogEnhancer
                     var attachWatch = Stopwatch.StartNew();
                     _native = native;
                     Attach(native);
+                    CaptureNativeOverwrite(native);
                     attachWatch.Stop();
 
                     _document?.Editor.WriteMessage(
@@ -266,6 +330,10 @@ internal static class NativeIsoDialogEnhancer
 
                 }
 
+                // Keep native overwrite state synchronized; reading one
+                // checkbox is small, no PnP/database or file operations.
+                CaptureNativeOverwrite(native);
+
                 // Path discovery only; never enumerate network DWGs on the UI thread.
                 if (string.IsNullOrEmpty(_source))
                 {
@@ -278,6 +346,7 @@ internal static class NativeIsoDialogEnhancer
 
             if (_native != IntPtr.Zero)
             {
+                DetachNativeOverwriteTracker();
                 RemoveOverlay();
                 _nativeClosedAt = DateTime.UtcNow;
                 _copyState = "Native dialog closed; watching for completed DWGs";
@@ -727,7 +796,8 @@ internal static class NativeIsoDialogEnhancer
     // copy; do not overwrite or invent _copy1, _copy2, etc. Use an empty
     // destination folder for a fresh run if overwrite was not requested.
     private static async Task<CopyReport> CopyFilesAsync(
-        string source, string targetRoot, DateTime sinceUtc)
+        string source, string targetRoot, DateTime sinceUtc,
+        bool overwriteExisting)
     {
         int copied = 0, skipped = 0;
         var processedFiles = new HashSet<string>(
@@ -837,9 +907,11 @@ internal static class NativeIsoDialogEnhancer
                             string destination = Path.Combine(
                                 targetRoot, Path.GetFileName(file));
 
-                            // REV47: preserve existing custom outputs exactly.
-                            // No _copyN suffix and no silent overwrite.
-                            if (File.Exists(destination))
+                            // REV49: replace ONLY when the user selected
+                            // Autodesk's original Overwrite if existing.
+                            // Otherwise preserve REV47's safe skip behavior.
+                            // Never invent _copy1/_copy2 collision names.
+                            if (File.Exists(destination) && !overwriteExisting)
                             {
                                 processedFiles.Add(file);
                                 skipped++;
@@ -884,9 +956,12 @@ internal static class NativeIsoDialogEnhancer
                                 continue;
                             }
 
-                            // Same-folder atomic publish, fail if a target
-                            // appeared concurrently. Never overwrite.
-                            File.Move(temp, destination);
+                            // The fully copied .sptc-part file lives in the
+                            // same destination folder. Publish only after
+                            // verifying source stability. The explicit native
+                            // Overwrite option permits replacing the CUSTOM
+                            // file, never an original project/native ISO DWG.
+                            File.Move(temp, destination, overwriteExisting);
                             temp = null;
                             processedFiles.Add(file);
                             copied++;
@@ -989,9 +1064,13 @@ internal static class NativeIsoDialogEnhancer
             // links within Autodesk's existing Results dialog. It remains
             // active after the REV47 copy task completes.
             NativeIsoResultsOverlay.BeginSession(destination);
-            _copyTask = Task.Run(() => CopyFilesAsync(source, destination, _launchUtc));
+            bool allowOverwrite = _overwriteRequested;
+            _copyTask = Task.Run(() => CopyFilesAsync(
+                source, destination, _launchUtc, allowOverwrite));
             EnsureMonitor();
-            doc.Editor.WriteMessage("\nSPTC ISO: Monitoring completed DWGs for custom copy (background).");
+            doc.Editor.WriteMessage(
+                "\nSPTC ISO: Monitoring completed DWGs for custom copy (background)." +
+                " Custom destination overwrite=" + (_overwriteRequested ? "YES" : "NO") + ".");
         }
         catch (Exception ex)
         {
