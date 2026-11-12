@@ -73,6 +73,8 @@ internal static class ProjectFolderLinePicker
     // drive its actual checkbox states and the real Autodesk native rows.
     private static int _shiftAnchor = -1;
     private static int _shiftEndPending = -1;
+    private static int _shiftStartPending = -1;
+    private static bool _shiftDesiredPending;
     // REV26: ItemCheck fires before a CheckedListBox commits its own state.
     // Do NOT re-enter the Autodesk checklist from inside that event.
     // Every posted relay captures its projection generation so stale async
@@ -1282,16 +1284,15 @@ internal static class ProjectFolderLinePicker
         }
         finally { _updating = false; }
 
-        // REV53: SHIFT + click a second line to apply the checked state
-        // of the anchor line to every line in between. This uses the same
-        // deferred, verified native checkbox relay as folder Select All.
-        // Plain clicking remains the approved REV41 single-line behavior.
+        // REV53: mouse DOWN remembers the intended Shift gesture; mouse UP
+        // posts the batch operation AFTER WinForms has completed the normal
+        // click and ItemCheck event stack. Prevents an endpoint flip after
+        // the range was already applied (Windows queue ordering).
         _folderLineList.MouseDown += (_, mouse) =>
         {
             if (mouse.Button != MouseButtons.Left ||
                 _folderLineList is null || _folderLineList.IsDisposed)
                 return;
-
             CheckedListBox list = _folderLineList;
             int index = list.IndexFromPoint(mouse.Location);
             if (index < 0 || index >= VisibleEntries.Count)
@@ -1301,40 +1302,49 @@ internal static class ProjectFolderLinePicker
                 _shiftAnchor >= 0 && _shiftAnchor < VisibleEntries.Count &&
                 _shiftAnchor != index)
             {
-                int anchorIndex = _shiftAnchor;
-                bool checkedState = list.GetItemChecked(anchorIndex);
-                int endIndex = index;
-                long generation = _projectionGeneration;
-                NativeEntry[] snapshot = VisibleEntries.ToArray();
-
-                // Cancel just the standard endpoint checkbox flip in the
-                // upcoming ItemCheck. The range commits after MouseDown
-                // and Click/ItemCheck have returned to the UI message loop.
-                _shiftEndPending = endIndex;
-                try
-                {
-                    list.BeginInvoke((MethodInvoker)(() =>
-                    {
-                        if (generation != _projectionGeneration ||
-                            list.IsDisposed ||
-                            !ReferenceEquals(list, _folderLineList))
-                            return;
-
-                        _shiftEndPending = -1;
-                        ApplyShiftCheckedRange(
-                            list, snapshot, generation,
-                            anchorIndex, endIndex, checkedState);
-                    }));
-                }
-                catch (InvalidOperationException)
-                {
-                    _shiftEndPending = -1;
-                }
+                _shiftStartPending = _shiftAnchor;
+                _shiftEndPending = index;
+                _shiftDesiredPending = list.GetItemChecked(_shiftAnchor);
             }
             else
             {
+                _shiftStartPending = -1;
                 _shiftEndPending = -1;
                 _shiftAnchor = index;
+            }
+        };
+        _folderLineList.MouseUp += (_, mouse) =>
+        {
+            if (mouse.Button != MouseButtons.Left ||
+                _folderLineList is null || _folderLineList.IsDisposed ||
+                _shiftStartPending < 0 || _shiftEndPending < 0)
+                return;
+
+            CheckedListBox list = _folderLineList;
+            int anchorIndex = _shiftStartPending;
+            int endIndex = _shiftEndPending;
+            bool checkedState = _shiftDesiredPending;
+            long generation = _projectionGeneration;
+            NativeEntry[] snapshot = VisibleEntries.ToArray();
+            _shiftStartPending = -1;
+
+            try
+            {
+                list.BeginInvoke((MethodInvoker)(() =>
+                {
+                    if (generation != _projectionGeneration ||
+                        list.IsDisposed ||
+                        !ReferenceEquals(list, _folderLineList))
+                        return;
+                    _shiftEndPending = -1;
+                    ApplyShiftCheckedRange(
+                        list, snapshot, generation,
+                        anchorIndex, endIndex, checkedState);
+                }));
+            }
+            catch (InvalidOperationException)
+            {
+                _shiftEndPending = -1;
             }
         };
 
@@ -1632,6 +1642,8 @@ internal static class ProjectFolderLinePicker
         _folderLineList = null;
         _shiftAnchor = -1;
         _shiftEndPending = -1;
+        _shiftStartPending = -1;
+        _shiftDesiredPending = false;
         _updating = false;
     }
 
