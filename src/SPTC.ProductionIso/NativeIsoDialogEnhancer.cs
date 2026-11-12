@@ -912,6 +912,102 @@ internal static class NativeIsoDialogEnhancer
                child.StartsWith(parent + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
     }
 
+    // REV51: AutoCAD holds DWGs open while editing them. Do not attempt to
+    // overwrite a custom DWG that another AutoCAD document/process has open.
+    // An actual OS sharing violation is distinct from ACL, disk-full, or
+    // unauthorized-access errors; only sharing/lock conflicts should cause
+    // the requested numbered filename fallback.
+    private static bool IsSharingViolation(IOException ex)
+    {
+        int code = ex.HResult & 0xFFFF;
+        return code == 32 || code == 33; // ERROR_SHARING_VIOLATION / LOCK_VIOLATION
+    }
+
+    private static bool IsCustomDwgOpenOrLocked(string destination)
+    {
+        if (!File.Exists(destination)) return false;
+
+        try
+        {
+            // Probe ONLY the custom destination, never Autodesk's original
+            // native output. Dispose the test handle before publishing.
+            using var probe = new FileStream(
+                destination, FileMode.Open, FileAccess.ReadWrite,
+                FileShare.None);
+            return false;
+        }
+        catch (IOException ex) when (IsSharingViolation(ex))
+        {
+            return true;
+        }
+    }
+
+    private static string MoveSnapshotToNextNumber(
+        string completeTempPath, string originalDestination)
+    {
+        string folder = Path.GetDirectoryName(originalDestination) ??
+            throw new InvalidOperationException("No custom destination folder.");
+        string stem = Path.GetFileNameWithoutExtension(originalDestination);
+        string extension = Path.GetExtension(originalDestination);
+
+        // Match Autodesk-style numbering: A-08 (1).dwg, A-08 (2).dwg, ...
+        // An existing numbered output is never overwritten, even when
+        // the original native Overwrite checkbox is enabled.
+        for (int n = 1; n <= 10000; n++)
+        {
+            string candidate = Path.Combine(
+                folder, stem + " (" + n + ")" + extension);
+            if (File.Exists(candidate))
+                continue;
+
+            try
+            {
+                // Atomic creation: handles a concurrent copy that claims the
+                // same numbered file between Exists and Move.
+                File.Move(completeTempPath, candidate);
+                return candidate;
+            }
+            catch (IOException ex) when (
+                File.Exists(candidate) &&
+                ((ex.HResult & 0xFFFF) == 80 ||
+                 (ex.HResult & 0xFFFF) == 183 ||
+                 IsSharingViolation(ex)))
+            {
+                continue;
+            }
+        }
+
+        throw new IOException(
+            "All custom ISO numbered filenames (1)-(10000) are occupied.");
+    }
+
+    private static string PublishCustomSnapshot(
+        string completeTempPath, string originalDestination, bool overwrite)
+    {
+        if (File.Exists(originalDestination) &&
+            IsCustomDwgOpenOrLocked(originalDestination))
+            return MoveSnapshotToNextNumber(
+                completeTempPath, originalDestination);
+
+        try
+        {
+            // REV47/REV50 normal behavior: overwrite only if the user
+            // checked Autodesk's native Overwrite if existing checkbox.
+            File.Move(completeTempPath, originalDestination, overwrite);
+            return originalDestination;
+        }
+        catch (IOException ex) when (
+            File.Exists(originalDestination) && IsSharingViolation(ex))
+        {
+            // A drawing can become locked AFTER our probe and before Move.
+            // Retain the complete temporary snapshot and publish it safely
+            // under the next free numbered name without touching the open
+            // original DWG.
+            return MoveSnapshotToNextNumber(
+                completeTempPath, originalDestination);
+        }
+    }
+
     // REV47: safely snapshot ONLY finished native Production Iso DWGs.
     // REV46 held an EXCLUSIVE source FileStream open while copying, which
     // could conflict with Plant 3D's subsequent write/open operations and
@@ -1044,8 +1140,13 @@ internal static class NativeIsoDialogEnhancer
                             // Autodesk's original Overwrite if existing.
                             // Otherwise preserve REV47's safe skip behavior.
                             // Never invent _copy1/_copy2 collision names.
-                            if (File.Exists(destination) && !overwriteExisting)
+                            if (File.Exists(destination) && !overwriteExisting &&
+                                !IsCustomDwgOpenOrLocked(destination))
                             {
+                                // Preserve REV47's skip-on-collision behavior
+                                // when existing DWG is NOT open/locked.
+                                // REV51 creates a numbered copy only if the
+                                // requested existing file is in use.
                                 processedFiles.Add(file);
                                 skipped++;
                                 lastProcessed = now;
@@ -1094,18 +1195,22 @@ internal static class NativeIsoDialogEnhancer
                             // verifying source stability. The explicit native
                             // Overwrite option permits replacing the CUSTOM
                             // file, never an original project/native ISO DWG.
-                            File.Move(temp, destination, overwriteExisting);
+                            string published = PublishCustomSnapshot(
+                                temp, destination, overwriteExisting);
                             temp = null;
                             processedFiles.Add(file);
                             copied++;
                             lastProcessed = DateTime.UtcNow;
-                            _copyProgress.Enqueue(Path.GetFileName(destination));
+                            // REV51: report the ACTUAL numbered output so
+                            // its clickable file link appears in Results.
+                            _copyProgress.Enqueue(Path.GetFileName(published));
                         }
                         catch (IOException)
                         {
-                            // Autodesk may still be writing or locking this
-                            // DWG. Retry later without competing for an
-                            // exclusive source handle or creating duplicates.
+                            // Source DWG may still be writing, or a custom
+                            // target path may be unavailable for reasons other
+                            // than a normal sharing lock. Retry without
+                            // altering original native DWGs.
                         }
                         catch (UnauthorizedAccessException)
                         {
