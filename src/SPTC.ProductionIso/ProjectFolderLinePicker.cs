@@ -67,6 +67,12 @@ internal static class ProjectFolderLinePicker
     private static ListView? _nativeView;
     private static readonly List<NativeEntry> VisibleEntries = new();
     private static bool _updating;
+    // REV53: Shift+click on the FOLDER projection checks/unchecks the entire
+    // inclusive range using the first ordinary-clicked row as its anchor.
+    // CheckedListBox does not support WinForms MultiExtended selection, so
+    // drive its actual checkbox states and the real Autodesk native rows.
+    private static int _shiftAnchor = -1;
+    private static int _shiftEndPending = -1;
     // REV26: ItemCheck fires before a CheckedListBox commits its own state.
     // Do NOT re-enter the Autodesk checklist from inside that event.
     // Every posted relay captures its projection generation so stale async
@@ -1276,6 +1282,62 @@ internal static class ProjectFolderLinePicker
         }
         finally { _updating = false; }
 
+        // REV53: SHIFT + click a second line to apply the checked state
+        // of the anchor line to every line in between. This uses the same
+        // deferred, verified native checkbox relay as folder Select All.
+        // Plain clicking remains the approved REV41 single-line behavior.
+        _folderLineList.MouseDown += (_, mouse) =>
+        {
+            if (mouse.Button != MouseButtons.Left ||
+                _folderLineList is null || _folderLineList.IsDisposed)
+                return;
+
+            CheckedListBox list = _folderLineList;
+            int index = list.IndexFromPoint(mouse.Location);
+            if (index < 0 || index >= VisibleEntries.Count)
+                return;
+
+            if ((Control.ModifierKeys & Keys.Shift) == Keys.Shift &&
+                _shiftAnchor >= 0 && _shiftAnchor < VisibleEntries.Count &&
+                _shiftAnchor != index)
+            {
+                int anchorIndex = _shiftAnchor;
+                bool checkedState = list.GetItemChecked(anchorIndex);
+                int endIndex = index;
+                long generation = _projectionGeneration;
+                NativeEntry[] snapshot = VisibleEntries.ToArray();
+
+                // Cancel just the standard endpoint checkbox flip in the
+                // upcoming ItemCheck. The range commits after MouseDown
+                // and Click/ItemCheck have returned to the UI message loop.
+                _shiftEndPending = endIndex;
+                try
+                {
+                    list.BeginInvoke((MethodInvoker)(() =>
+                    {
+                        if (generation != _projectionGeneration ||
+                            list.IsDisposed ||
+                            !ReferenceEquals(list, _folderLineList))
+                            return;
+
+                        _shiftEndPending = -1;
+                        ApplyShiftCheckedRange(
+                            list, snapshot, generation,
+                            anchorIndex, endIndex, checkedState);
+                    }));
+                }
+                catch (InvalidOperationException)
+                {
+                    _shiftEndPending = -1;
+                }
+            }
+            else
+            {
+                _shiftEndPending = -1;
+                _shiftAnchor = index;
+            }
+        };
+
         // REV26: Let the projected checkbox commit its click first. The
         // REV24 synchronous call could re-enter native ItemCheck while this
         // proxy ItemCheck was still pending; its false return canceled the
@@ -1283,6 +1345,14 @@ internal static class ProjectFolderLinePicker
         // but impossible to check (Create remained disabled).
         _folderLineList.ItemCheck += (_, e) =>
         {
+            // REV53: Shift+click is a range operation, not a toggle of
+            // only the clicked endpoint. Leave the endpoint unchanged
+            // until the deferred range update has committed.
+            if (!_updating && _shiftEndPending == e.Index)
+            {
+                e.NewValue = e.CurrentValue;
+                return;
+            }
             if (_updating || e.Index < 0 || e.Index >= VisibleEntries.Count ||
                 _folderLineList == null || _folderLineList.IsDisposed)
                 return;
@@ -1390,6 +1460,86 @@ internal static class ProjectFolderLinePicker
             SWP_NOACTIVATE | SWP_SHOWWINDOW);
     }
 
+    // REV53: apply only the contiguous folder range, never unrelated
+    // project lines or the full Select All state. The final changed native
+    // row is clicked through Autodesk's real ItemCheck/selection handlers,
+    // which keeps the original Create eligibility in sync (REV41).
+    private static void ApplyShiftCheckedRange(
+        CheckedListBox displayed, NativeEntry[] rows, long generation,
+        int anchorIndex, int endIndex, bool desired)
+    {
+        if (generation != _projectionGeneration ||
+            !HasVisibleProjection ||
+            displayed.IsDisposed ||
+            !ReferenceEquals(displayed, _folderLineList) ||
+            rows.Length != displayed.Items.Count ||
+            rows.Length != VisibleEntries.Count)
+            return;
+
+        int start = Math.Min(anchorIndex, endIndex);
+        int end = Math.Max(anchorIndex, endIndex);
+        if (start < 0 || end >= rows.Length)
+            return;
+
+        for (int i = start; i <= end; i++)
+            if (!rows[i].Equals(VisibleEntries[i]))
+                return;
+
+        // Advance visible checks immediately without firing the ordinary
+        // one-checkbox relay for every row in the range.
+        _updating = true;
+        try
+        {
+            for (int i = start; i <= end; i++)
+                displayed.SetItemChecked(i, desired);
+        }
+        finally { _updating = false; }
+
+        // Commit programmatic native items first, then a real native mouse
+        // event on the LAST row that actually changes. This also covers
+        // cases where the clicked endpoint was already checked.
+        int lastChanged = -1;
+        for (int i = start; i <= end; i++)
+            if (GetNativeChecked(rows[i]) != desired)
+                lastChanged = i;
+
+        bool allSucceeded = true;
+        for (int i = start; i <= end; i++)
+        {
+            if (GetNativeChecked(rows[i]) == desired)
+                continue;
+            if (!SetNativeChecked(rows[i], desired,
+                userAction: i == lastChanged))
+            {
+                allSucceeded = false;
+                break;
+            }
+        }
+
+        // Never display a checked item unless the REAL Autodesk checked
+        // list accepted it. Do not force-enable native Create.
+        _updating = true;
+        try
+        {
+            for (int i = start; i <= end; i++)
+                displayed.SetItemChecked(i, GetNativeChecked(rows[i]));
+        }
+        finally { _updating = false; }
+
+        if (!allSucceeded)
+            _document?.Editor.WriteMessage(
+                "\nSPTC REV53: Shift range could not synchronize every " +
+                "native ISO line; displayed states reflect Autodesk.");
+        else
+        {
+            ScheduleNativeSelectionCommit();
+            _document?.Editor.WriteMessage(
+                "\nSPTC REV53: Folder Shift range " +
+                rows[start].Tag + " through " + rows[end].Tag +
+                (desired ? " checked." : " unchecked."));
+        }
+    }
+
     public static bool TrySelectAllVisible(bool value)
     {
         if (!HasVisibleProjection || _folderLineList is null || _folderLineList.IsDisposed)
@@ -1480,6 +1630,8 @@ internal static class ProjectFolderLinePicker
         try { _lineHost?.Dispose(); } catch { }
         _lineHost = null;
         _folderLineList = null;
+        _shiftAnchor = -1;
+        _shiftEndPending = -1;
         _updating = false;
     }
 
