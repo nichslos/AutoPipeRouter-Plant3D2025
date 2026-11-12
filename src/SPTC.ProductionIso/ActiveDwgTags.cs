@@ -55,6 +55,16 @@ internal static class ActiveDwgTags
     public static string LastDiagnostic { get; private set; } = "Not scanned";
     private static IntPtr _lastAppliedDialog = IntPtr.Zero;
 
+    // REV43: In single Active-DWG mode the native Autodesk filter must keep
+    // the exact tag internally to show only that route. Display it as an
+    // EMPTY search field until the user deliberately types a search.
+    // Never clear the native filter just to clear the visible caption:
+    // that would bring back all Project line numbers and break Create.
+    private static TextBoxBase? _autoFilterEdit;
+    private static IntPtr _autoFilterDialog = IntPtr.Zero;
+    private static string _autoFilterTag = "";
+    private static bool _autoFilterMasked;
+
     public static void Scan(Document doc)
     {
         Invalidate();
@@ -309,6 +319,108 @@ internal static class ActiveDwgTags
         return found;
     }
 
+    // REV43: mask only an internally supplied Active-DWG filter value.
+    // When the user focuses the field, remove the internal query so the
+    // search box is genuinely empty and ready for manual input.
+    private static void NativeSearchEnter(object? sender, EventArgs e)
+    {
+        if (sender is not TextBoxBase edit ||
+            !ReferenceEquals(edit, _autoFilterEdit) ||
+            _autoFilterDialog != _lastAppliedDialog || !_autoFilterMasked)
+            return;
+        _autoFilterMasked = false;
+        edit.ForeColor = SystemColors.WindowText;
+        if (edit.Text.Trim().Equals(_autoFilterTag,
+                StringComparison.OrdinalIgnoreCase))
+            edit.Clear();
+    }
+
+    private static void NativeSearchLeave(object? sender, EventArgs e)
+    {
+        if (sender is not TextBoxBase edit ||
+            !ReferenceEquals(edit, _autoFilterEdit) ||
+            _autoFilterDialog == IntPtr.Zero ||
+            _autoFilterDialog != _lastAppliedDialog)
+            return;
+
+        // An empty manual query in Active mode returns to the same exact
+        // active route, but keeps its automatic tag visually hidden.
+        // Explicit non-empty user searches are never overwritten.
+        if (string.IsNullOrWhiteSpace(edit.Text) &&
+            Tags.Contains(_autoFilterTag) && !ProjectFolderLinePicker.FolderActive)
+        {
+            edit.Text = _autoFilterTag;
+            _autoFilterMasked = true;
+            edit.ForeColor = edit.BackColor;
+            NativeIsoExactLineFilter.Begin(_autoFilterDialog, _autoFilterTag,
+                Autodesk.AutoCAD.ApplicationServices.Application
+                    .DocumentManager.MdiActiveDocument);
+        }
+    }
+
+    private static void NativeSearchTextChanged(object? sender, EventArgs e)
+    {
+        if (sender is not TextBoxBase edit ||
+            !ReferenceEquals(edit, _autoFilterEdit))
+            return;
+
+        // Native refresh/manual typing can replace the automatic tag.
+        // Restore normal readable text when this happens.
+        if (_autoFilterMasked &&
+            !edit.Text.Trim().Equals(_autoFilterTag,
+                StringComparison.OrdinalIgnoreCase))
+            _autoFilterMasked = false;
+
+        if (!_autoFilterMasked && edit.ForeColor != SystemColors.WindowText)
+            edit.ForeColor = SystemColors.WindowText;
+    }
+
+    private static void SetAutoFilterAppearance(TextBoxBase edit)
+    {
+        Color intended = _autoFilterMasked &&
+            ReferenceEquals(edit, _autoFilterEdit) &&
+            edit.Text.Trim().Equals(_autoFilterTag,
+                StringComparison.OrdinalIgnoreCase) && !edit.Focused
+            ? edit.BackColor : SystemColors.WindowText;
+        if (edit.ForeColor != intended)
+            edit.ForeColor = intended;
+    }
+
+    private static void AttachAutoFilterDisplay(
+        IntPtr dialog, TextBoxBase edit, string tag)
+    {
+        if (!ReferenceEquals(_autoFilterEdit, edit) ||
+            _autoFilterDialog != dialog)
+        {
+            ResetAutoFilterDisplay();
+            _autoFilterEdit = edit;
+            _autoFilterDialog = dialog;
+            edit.Enter += NativeSearchEnter;
+            edit.Leave += NativeSearchLeave;
+            edit.TextChanged += NativeSearchTextChanged;
+        }
+        _autoFilterTag = tag;
+        _autoFilterMasked = true;
+        SetAutoFilterAppearance(edit);
+    }
+
+    // Called when switching back to Project, or the native dialog closes.
+    // Never leave the native search field with a hidden user query.
+    public static void ResetAutoFilterDisplay()
+    {
+        TextBoxBase? edit = _autoFilterEdit;
+        _autoFilterEdit = null;
+        _autoFilterDialog = IntPtr.Zero;
+        _autoFilterTag = "";
+        _autoFilterMasked = false;
+        if (edit is not { IsDisposed: false }) return;
+        edit.Enter -= NativeSearchEnter;
+        edit.Leave -= NativeSearchLeave;
+        edit.TextChanged -= NativeSearchTextChanged;
+        if (edit.ForeColor != SystemColors.WindowText)
+            edit.ForeColor = SystemColors.WindowText;
+    }
+
     // REV42: keep the ORIGINAL native filter input editable for manual line
     // number searches. Autodesk sometimes leaves the edit portion greyed
     // out after switching to the active-DWG scope. We only enable the
@@ -347,8 +459,7 @@ internal static class ActiveDwgTags
                 if (edit.ReadOnly) edit.ReadOnly = false;
                 if (edit.Enabled && !edit.ReadOnly)
                 {
-                    if (edit.ForeColor != SystemColors.WindowText)
-                        edit.ForeColor = SystemColors.WindowText;
+                    SetAutoFilterAppearance(edit);
                     return true;
                 }
             }
@@ -431,6 +542,8 @@ internal static class ActiveDwgTags
 
             _lastAppliedDialog = dialog;
             EnsureNativeSearchEditable(dialog);
+            if (Control.FromHandle(nativeFilter) is TextBoxBase visibleEdit)
+                AttachAutoFilterDisplay(dialog, visibleEdit, tag);
             doc?.Editor.WriteMessage(
                 "\nSPTC REV27: Native active filter applied: " + tag);
             return true;
@@ -456,12 +569,14 @@ internal static class ActiveDwgTags
 
         try
         {
+            // Avoid auto-reinstating the tag from LostFocus when the user
+            // explicitly switches back to All Project.
+            _lastAppliedDialog = IntPtr.Zero;
+            ResetAutoFilterDisplay();
             if (Control.FromHandle(nativeFilter) is TextBoxBase edit)
                 edit.Text = "";
             else if (!SetWindowText(nativeFilter, ""))
                 return false;
-
-            _lastAppliedDialog = IntPtr.Zero;
             doc?.Editor.WriteMessage(
                 "\nSPTC REV27: Cleared native line filter; All Project lines restored.");
             return true;
