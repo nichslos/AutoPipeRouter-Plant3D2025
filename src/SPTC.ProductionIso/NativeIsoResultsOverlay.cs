@@ -7,6 +7,7 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Windows.Forms;
+using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
 
 namespace SPTC.ProductionIso;
 
@@ -37,6 +38,9 @@ internal static class NativeIsoResultsOverlay
     [DllImport("user32.dll")]
     private static extern bool IsWindow(IntPtr hwnd);
     [DllImport("user32.dll")]
+    private static extern bool PostMessage(IntPtr hwnd, uint msg, IntPtr wp, IntPtr lp);
+    private const uint WM_CLOSE = 0x0010;
+    [DllImport("user32.dll")]
     private static extern bool SetWindowPos(
         IntPtr hwnd, IntPtr after, int x, int y, int width, int height, uint flags);
 
@@ -59,10 +63,13 @@ internal static class NativeIsoResultsOverlay
     private static Label? _title;
     private static LinkLabel? _folderLink;
     private static System.Windows.Forms.Timer? _timer;
-    private static DateTime _deadline;
     private static string _customFolder = "";
     private static readonly List<string> CopiedPaths = new();
-    private static bool _attachedOnce;
+    // REV49: preserve links if Autodesk's Results form is closed then
+    // reopened via its original DWG output. Poll only while this ISO
+    // session is active; no secondary results window is ever created.
+    private static string? _pendingOpen;
+    private static DateTime _pendingCloseTime;
 
     public static void Reset()
     {
@@ -72,7 +79,8 @@ internal static class NativeIsoResultsOverlay
         _dialog = IntPtr.Zero;
         _customFolder = "";
         CopiedPaths.Clear();
-        _attachedOnce = false;
+        _pendingOpen = null;
+        _pendingCloseTime = default;
     }
 
     /// <summary>
@@ -90,8 +98,9 @@ internal static class NativeIsoResultsOverlay
         if (_timer != null)
             return;
 
-        _deadline = DateTime.UtcNow.AddMinutes(2);
-        _timer = new System.Windows.Forms.Timer { Interval = 500 };
+        // Unlike REV48, keep watching after the FIRST results window
+        // closes so links return if Autodesk reopens its results panel.
+        _timer = new System.Windows.Forms.Timer { Interval = 650 };
         _timer.Tick += (_, _) => OnTick();
         _timer.Start();
         OnTick();
@@ -143,7 +152,8 @@ internal static class NativeIsoResultsOverlay
 
     private static void OnTick()
     {
-        if (_timer == null) return;
+        if (_timer == null)
+            return;
 
         IntPtr current = FindResults();
         if (_panel is { IsDisposed: false } &&
@@ -154,24 +164,38 @@ internal static class NativeIsoResultsOverlay
             _dialog = IntPtr.Zero;
         }
 
+        // REV49: clicking a custom DWG sends WM_CLOSE first. Wait until
+        // the original Autodesk modal Results dialog really disappears
+        // before opening a DWG in this SAME Plant 3D session.
+        if (_pendingOpen is { } path)
+        {
+            if (current == IntPtr.Zero &&
+                DateTime.UtcNow - _pendingCloseTime >
+                    TimeSpan.FromMilliseconds(200))
+            {
+                _pendingOpen = null; // exactly once
+                OpenDrawingInPlant(path);
+                return;
+            }
+
+            // If a nonstandard Autodesk results window refuses to close,
+            // never force a DWG open behind the still-modal dialog.
+            if (DateTime.UtcNow - _pendingCloseTime >
+                TimeSpan.FromSeconds(8))
+                _pendingOpen = null;
+            return;
+        }
+
         if (current != IntPtr.Zero)
         {
             if (_panel is null)
-            {
-                if (_attachedOnce)
-                    return; // never attach to a second/stale results window
                 Attach(current);
-            }
             else
                 Position();
         }
-        else if (_attachedOnce || DateTime.UtcNow > _deadline)
-        {
-            // Keep the existing REV47 copying task independent of the
-            // lifetime of this small, UI-only results overlay.
-            try { _timer.Stop(); _timer.Dispose(); } catch { }
-            _timer = null;
-        }
+        // Do NOT stop this session's timer after the first Results window
+        // closes. Reopened native result forms get a fresh overlay showing
+        // the SAME verified custom files. Launch() resets the session.
     }
 
     private static void Attach(IntPtr hwnd)
@@ -210,7 +234,6 @@ internal static class NativeIsoResultsOverlay
             _ = _panel.Handle;
             SetParent(_panel.Handle, hwnd);
             _panel.Show();
-            _attachedOnce = true;
             RefreshLinks();
             Position();
         }
@@ -403,15 +426,66 @@ internal static class NativeIsoResultsOverlay
         }
     }
 
+    // REV49: just like Autodesk's original DWG result link, close the
+    // current modal results dialog BEFORE opening the custom DWG.
+    // Process.Start on the file from inside the modal form (REV48) deferred
+    // opening until the user manually closed the Results dialog.
     private static void OpenDrawing(string path)
     {
         if (!File.Exists(path))
             throw new FileNotFoundException("The custom DWG is missing.", path);
-        Process.Start(new ProcessStartInfo
+        if (_pendingOpen != null)
+            return;
+
+        IntPtr hwnd = _dialog;
+        if (hwnd == IntPtr.Zero || !IsWindow(hwnd))
+            throw new InvalidOperationException(
+                "The Autodesk results dialog is no longer available.");
+
+        _pendingOpen = path;
+        _pendingCloseTime = DateTime.UtcNow;
+
+        // Post asynchronously to avoid modal WinForms re-entrancy during
+        // the LinkClicked handler. Do not close any other dialog/window.
+        if (!PostMessage(hwnd, WM_CLOSE, IntPtr.Zero, IntPtr.Zero))
         {
-            FileName = path,
-            UseShellExecute = true
-        });
+            _pendingOpen = null;
+            throw new InvalidOperationException(
+                "The Autodesk results dialog could not be closed.");
+        }
+    }
+
+    private static void OpenDrawingInPlant(string path)
+    {
+        try
+        {
+            if (!File.Exists(path))
+                throw new FileNotFoundException(
+                    "The custom DWG is missing.", path);
+
+            // Use AutoCAD's DocumentCollection to open the drawing in the
+            // current Plant 3D instance, not the Windows DWG shell handler.
+            var documents = AcadApp.DocumentManager;
+            var existing = documents
+                .Cast<Autodesk.AutoCAD.ApplicationServices.Document>()
+                .FirstOrDefault(doc => string.Equals(
+                    Path.GetFullPath(doc.Name),
+                    Path.GetFullPath(path),
+                    StringComparison.OrdinalIgnoreCase));
+
+            if (existing != null)
+                documents.MdiActiveDocument = existing;
+            else
+                documents.Open(path, false);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(
+                "Could not open the custom DWG in Plant 3D:\n" +
+                ex.GetBaseException().Message,
+                "SPTC Custom ISO Link", MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+        }
     }
 
     private static void OpenFolder(string path)
