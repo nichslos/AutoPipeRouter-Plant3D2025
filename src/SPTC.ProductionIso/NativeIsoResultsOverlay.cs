@@ -38,6 +38,8 @@ internal static class NativeIsoResultsOverlay
     [DllImport("user32.dll")]
     private static extern bool IsWindow(IntPtr hwnd);
     [DllImport("user32.dll")]
+    private static extern IntPtr GetParent(IntPtr hwnd);
+    [DllImport("user32.dll")]
     private static extern bool PostMessage(IntPtr hwnd, uint msg, IntPtr wp, IntPtr lp);
     private const uint WM_CLOSE = 0x0010;
     [DllImport("user32.dll")]
@@ -65,6 +67,11 @@ internal static class NativeIsoResultsOverlay
     private static System.Windows.Forms.Timer? _timer;
     private static string _customFolder = "";
     private static readonly List<string> CopiedPaths = new();
+    // REV54: separate scroll area reserved below the original results pane.
+    private static IntPtr _nativeResultsPane;
+    private static IntPtr _nativePaneParent;
+    private static int _nativeLeft, _nativeTop, _nativeRightMargin, _nativeBottomMargin;
+    private static readonly HashSet<string> ExpectedIsoTags = new(StringComparer.OrdinalIgnoreCase);
     // REV49: preserve links if Autodesk's Results form is closed then
     // reopened via its original DWG output. Poll only while this ISO
     // session is active; no secondary results window is ever created.
@@ -79,6 +86,9 @@ internal static class NativeIsoResultsOverlay
         _dialog = IntPtr.Zero;
         _customFolder = "";
         CopiedPaths.Clear();
+        ExpectedIsoTags.Clear();
+        _nativeResultsPane = IntPtr.Zero;
+        _nativePaneParent = IntPtr.Zero;
         _pendingOpen = null;
         _pendingCloseTime = default;
     }
@@ -106,6 +116,34 @@ internal static class NativeIsoResultsOverlay
         OnTick();
     }
 
+    // Restrict links/copies to the verified current native ISO selection.
+    public static void SetExpectedIsoTags(IEnumerable<string> tags)
+    {
+        ExpectedIsoTags.Clear();
+        foreach (string tag in tags)
+            if (!string.IsNullOrWhiteSpace(tag))
+                ExpectedIsoTags.Add(tag.Trim());
+    }
+
+    public static bool IsExpectedIsoOutput(string fileName)
+    {
+        if (ExpectedIsoTags.Count == 0) return true;
+        string stem = Path.GetFileNameWithoutExtension(fileName);
+        foreach (string tag in ExpectedIsoTags)
+        {
+            if (stem.Equals(tag, StringComparison.OrdinalIgnoreCase)) return true;
+            if (stem.StartsWith(tag + " (", StringComparison.OrdinalIgnoreCase) &&
+                stem.EndsWith(")", StringComparison.Ordinal) &&
+                int.TryParse(stem.Substring(tag.Length + 2,
+                    stem.Length - tag.Length - 3), out int number) && number > 0)
+                return true;
+            if (stem.StartsWith(tag + "-", StringComparison.OrdinalIgnoreCase) &&
+                int.TryParse(stem.Substring(tag.Length + 1), out int another) && another > 0)
+                return true;
+        }
+        return false;
+    }
+
     public static void ReportCopied(string path)
     {
         if (string.IsNullOrWhiteSpace(_customFolder))
@@ -121,6 +159,7 @@ internal static class NativeIsoResultsOverlay
                 Path.TrimEndingDirectorySeparator(_customFolder) +
                 Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ||
             !File.Exists(full) ||
+            !IsExpectedIsoOutput(Path.GetFileName(full)) ||
             CopiedPaths.Any(p => p.Equals(full, StringComparison.OrdinalIgnoreCase)))
             return;
 
@@ -206,6 +245,8 @@ internal static class NativeIsoResultsOverlay
 
         try
         {
+            if (!CaptureNativeResultsPane(hwnd))
+                return; // unrecognized native UI: never cover original rows
             _dialog = hwnd;
             _panel = new Panel
             {
@@ -233,6 +274,8 @@ internal static class NativeIsoResultsOverlay
             // We never alter its native output rows, links or buttons.
             _ = _panel.Handle;
             SetParent(_panel.Handle, hwnd);
+            if (GetParent(_panel.Handle) != hwnd)
+                throw new InvalidOperationException("Could not attach custom results.");
             _panel.Show();
             RefreshLinks();
             Position();
@@ -549,5 +592,7 @@ internal static class NativeIsoResultsOverlay
         _panel = null;
         _title = null;
         _folderLink = null;
+        _nativeResultsPane = IntPtr.Zero;
+        _nativePaneParent = IntPtr.Zero;
     }
 }
