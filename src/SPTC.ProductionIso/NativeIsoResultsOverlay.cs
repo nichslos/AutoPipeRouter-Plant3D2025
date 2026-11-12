@@ -455,6 +455,12 @@ internal static class NativeIsoResultsOverlay
         }
     }
 
+    // REV50: Use Autodesk's managed document-opening API instead of
+    // sending the unsupported -OPEN command. AutoCAD's official method is
+    // DocumentCollectionExtension.Open(DocumentCollection,string,bool).
+    // The lightweight NuGet compile stub lacks that extension, so resolve
+    // it from the REAL AutoCAD runtime assembly using reflection.
+    // This code runs only after the native modal Results form has closed.
     private static void OpenDrawingInPlant(string path)
     {
         try
@@ -463,8 +469,6 @@ internal static class NativeIsoResultsOverlay
                 throw new FileNotFoundException(
                     "The custom DWG is missing.", path);
 
-            // Use AutoCAD's DocumentCollection to open the drawing in the
-            // current Plant 3D instance, not the Windows DWG shell handler.
             var documents = AcadApp.DocumentManager;
             var existing = documents
                 .Cast<Autodesk.AutoCAD.ApplicationServices.Document>()
@@ -474,24 +478,47 @@ internal static class NativeIsoResultsOverlay
                     StringComparison.OrdinalIgnoreCase));
 
             if (existing != null)
-                documents.MdiActiveDocument = existing;
-            else
             {
-                // The AutoCAD.NET 2025 build references available to this
-                // repository do not expose DocumentCollection.Open().
-                // Queue the native command only AFTER the Results modal
-                // form is gone. -OPEN accepts a quoted path on the command
-                // line even when FILEDIA is enabled in Plant 3D.
-                var active = documents.MdiActiveDocument ??
-                    throw new InvalidOperationException(
-                        "No active Plant 3D drawing is available for -OPEN.");
-                string safePath = path.Replace("\"", "");
-                if (safePath.IndexOfAny(new[] { '\r', '\n' }) >= 0)
-                    throw new ArgumentException("Invalid drawing path.");
-                active.SendStringToExecute(
-                    "_.-OPEN \"" + safePath + "\" ",
-                    true, false, false);
+                documents.MdiActiveDocument = existing;
+                return;
             }
+
+            // Autodesk runtime API is installed with Plant 3D even though
+            // AutoCAD.NET 25.0.1 reference package does not expose all
+            // DocumentCollection extension methods to GitHub CI.
+            Type? extensionType = AppDomain.CurrentDomain
+                .GetAssemblies()
+                .Select(assembly => assembly.GetType(
+                    "Autodesk.AutoCAD.ApplicationServices.DocumentCollectionExtension",
+                    throwOnError: false))
+                .FirstOrDefault(type => type is not null);
+
+            if (extensionType is null)
+                throw new MissingMethodException(
+                    "Autodesk runtime DocumentCollectionExtension unavailable.");
+
+            var method = extensionType
+                .GetMethods(System.Reflection.BindingFlags.Public |
+                            System.Reflection.BindingFlags.Static)
+                .FirstOrDefault(m =>
+                {
+                    if (m.Name != "Open")
+                        return false;
+                    var parameters = m.GetParameters();
+                    return parameters.Length == 3 &&
+                           parameters[0].ParameterType.IsInstanceOfType(documents) &&
+                           parameters[1].ParameterType == typeof(string) &&
+                           parameters[2].ParameterType == typeof(bool);
+                });
+
+            if (method is null)
+                throw new MissingMethodException(
+                    "Autodesk runtime DocumentCollectionExtension.Open was not found.");
+
+            object? result = method.Invoke(
+                null, new object[] { documents, path, false });
+            if (result is Autodesk.AutoCAD.ApplicationServices.Document opened)
+                documents.MdiActiveDocument = opened;
         }
         catch (Exception ex)
         {

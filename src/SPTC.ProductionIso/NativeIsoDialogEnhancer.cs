@@ -62,28 +62,71 @@ internal static class NativeIsoDialogEnhancer
     private static bool _nativeSeen;
     private static bool _resultsSeen;
     private static DateTime _nativeClosedAt;
-    // REV49: honor the ORIGINAL Autodesk 'Overwrite if existing' option
-    // for custom destination copies as well. Default = OFF (REV47).
-    // No independent custom overwrite toggle, no silent file deletion.
+    // REV50: follow the real native Overwrite-if-existing checkbox.
+    // REV49 could miss Autodesk's managed checkbox when its HWND had no
+    // caption, and then silently skip the preexisting custom DWG.
+    // The default is still OFF, and an ambiguous/unknown state NEVER grants
+    // overwrite permission.
     private static bool _overwriteRequested;
     private static CheckBox? _nativeOverwriteBox;
+    private static Button? _nativeCreateButton;
+    private static IntPtr _nativeOverwriteHandle;
+    private static bool _overwriteFound;
+    private static string _overwriteSource = "not detected";
+    private static System.Windows.Forms.Timer? _overwriteTracker;
     private const uint BM_GETCHECK = 0x00F0;
     [DllImport("user32.dll")]
     private static extern IntPtr SendMessage(
         IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam);
 
+    private static bool IsOverwriteCaption(string? text)
+    {
+        string value = (text ?? "").Replace("&", "").Trim();
+        return value.StartsWith("Overwrite if existing",
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void TrackManagedOverwrite(CheckBox box)
+    {
+        if (ReferenceEquals(_nativeOverwriteBox, box))
+        {
+            _overwriteRequested = box.Checked;
+            _overwriteFound = true;
+            return;
+        }
+
+        if (_nativeOverwriteBox is { IsDisposed: false } previous)
+            previous.CheckedChanged -= OnNativeOverwriteChanged;
+        _nativeOverwriteBox = box;
+        _overwriteSource = "managed checkbox";
+        _overwriteFound = true;
+        _overwriteRequested = box.Checked;
+        box.CheckedChanged += OnNativeOverwriteChanged;
+    }
+
     private static void OnNativeOverwriteChanged(object? sender, EventArgs e)
     {
         if (ReferenceEquals(sender, _nativeOverwriteBox) &&
             _nativeOverwriteBox is { IsDisposed: false } box)
+        {
             _overwriteRequested = box.Checked;
+            _overwriteFound = true;
+            _document?.Editor.WriteMessage(
+                "\nSPTC REV50: Native overwrite " +
+                (_overwriteRequested ? "ON" : "OFF") +
+                " (checkbox event).");
+        }
     }
 
-    private static void DetachNativeOverwriteTracker()
+    private static IEnumerable<Control> EnumerateManagedControls(
+        Control parent)
     {
-        if (_nativeOverwriteBox is { IsDisposed: false } box)
-            box.CheckedChanged -= OnNativeOverwriteChanged;
-        _nativeOverwriteBox = null;
+        foreach (Control child in parent.Controls)
+        {
+            yield return child;
+            foreach (Control nested in EnumerateManagedControls(child))
+                yield return nested;
+        }
     }
 
     private static void CaptureNativeOverwrite(IntPtr dialog)
@@ -91,36 +134,124 @@ internal static class NativeIsoDialogEnhancer
         if (dialog == IntPtr.Zero)
             return;
 
-        // Follow the real Autodesk CheckBox, including a click immediately
-        // before Create that could be missed by the 1-second UI poll.
+        // Prefer a managed WinForms CheckBox, even when its own native HWND
+        // has no caption. Enumerate the entire managed controls hierarchy
+        // of the ORIGINAL Autodesk Production Iso dialog.
+        Control? root = Control.FromHandle(dialog);
+        if (root != null && !root.IsDisposed)
+        {
+            foreach (Control control in EnumerateManagedControls(root))
+            {
+                if (control is CheckBox box && !box.IsDisposed &&
+                    IsOverwriteCaption(box.Text))
+                {
+                    TrackManagedOverwrite(box);
+                    break;
+                }
+            }
+        }
+
         if (_nativeOverwriteBox is { IsDisposed: false } active)
         {
+            _overwriteFound = true;
             _overwriteRequested = active.Checked;
             return;
         }
 
+        // Some Plant 3D builds expose the checkbox as a native BUTTON.
+        // Read BM_GETCHECK only for the precise Overwrite checkbox, NEVER
+        // a random Button or the Create DWF checkbox.
         EnumChildWindows(dialog, (hwnd, _) =>
         {
-            string caption = WindowText(hwnd).Trim();
-            if (!caption.Equals("Overwrite if existing",
-                    StringComparison.OrdinalIgnoreCase))
+            Control? child = Control.FromHandle(hwnd);
+            if (child is CheckBox box && !box.IsDisposed &&
+                IsOverwriteCaption(box.Text))
+            {
+                TrackManagedOverwrite(box);
+                return false;
+            }
+            if (!IsOverwriteCaption(WindowText(hwnd)))
                 return true;
 
-            if (Control.FromHandle(hwnd) is CheckBox box &&
-                !box.IsDisposed)
-            {
-                _nativeOverwriteBox = box;
-                _overwriteRequested = box.Checked;
-                box.CheckedChanged += OnNativeOverwriteChanged;
-            }
+            if (child is CheckBox direct && !direct.IsDisposed)
+                TrackManagedOverwrite(direct);
             else
             {
-                // Defensive fallback for a native Win32 checkbox.
+                _nativeOverwriteHandle = hwnd;
                 _overwriteRequested = SendMessage(
                     hwnd, BM_GETCHECK, IntPtr.Zero, IntPtr.Zero).ToInt32() == 1;
+                _overwriteFound = true;
+                _overwriteSource = "native BUTTON";
             }
             return false;
         }, IntPtr.Zero);
+    }
+
+    private static void CaptureBeforeNativeCreate(object? sender, EventArgs e)
+    {
+        if (_native != IntPtr.Zero)
+            CaptureNativeOverwrite(_native);
+        _document?.Editor.WriteMessage(
+            "\nSPTC REV50: Create pressed; custom overwrite=" +
+            (_overwriteRequested ? "YES" : "NO") +
+            " (source: " + _overwriteSource + ").");
+    }
+
+    private static void TrackNativeCreateButton(IntPtr dialog)
+    {
+        if (_nativeCreateButton is { IsDisposed: false })
+            return;
+
+        EnumChildWindows(dialog, (hwnd, _) =>
+        {
+            if (Control.FromHandle(hwnd) is Button button &&
+                !button.IsDisposed &&
+                WindowText(hwnd).Trim().Equals("Create",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                _nativeCreateButton = button;
+                // MouseDown runs BEFORE the original native Click/Close.
+                button.MouseDown += CaptureBeforeNativeCreate;
+                return false;
+            }
+            return true;
+        }, IntPtr.Zero);
+    }
+
+    private static void StartOverwriteTracker(IntPtr dialog)
+    {
+        CaptureNativeOverwrite(dialog);
+        TrackNativeCreateButton(dialog);
+        if (_overwriteTracker != null) return;
+        _overwriteTracker = new System.Windows.Forms.Timer
+        {
+            Interval = 180
+        };
+        _overwriteTracker.Tick += (_, _) =>
+        {
+            if (_native != dialog || _native == IntPtr.Zero)
+                return;
+            CaptureNativeOverwrite(dialog);
+            TrackNativeCreateButton(dialog);
+        };
+        _overwriteTracker.Start();
+    }
+
+    private static void DetachNativeOverwriteTracker()
+    {
+        try { _overwriteTracker?.Stop(); _overwriteTracker?.Dispose(); }
+        catch (Exception) { }
+        _overwriteTracker = null;
+
+        if (_nativeCreateButton is { IsDisposed: false } create)
+            create.MouseDown -= CaptureBeforeNativeCreate;
+        _nativeCreateButton = null;
+        if (_nativeOverwriteBox is { IsDisposed: false } box)
+            box.CheckedChanged -= OnNativeOverwriteChanged;
+        _nativeOverwriteBox = null;
+        _nativeOverwriteHandle = IntPtr.Zero;
+        // DO NOT reset the last confirmed flag here: the copy starts
+        // after the native Create dialog has closed.
     }
 
     private sealed record CopyReport(int Copied, int Skipped, string Destination);
@@ -138,6 +269,8 @@ internal static class NativeIsoDialogEnhancer
         NativeIsoResultsOverlay.Reset();
         DetachNativeOverwriteTracker();
         _overwriteRequested = false;
+        _overwriteFound = false;
+        _overwriteSource = "not detected";
         _copyTask = null;
         while (_copyProgress.TryDequeue(out _)) { }
         _copyState = "Waiting for Production Iso dialog";
@@ -248,7 +381,7 @@ internal static class NativeIsoDialogEnhancer
                     var attachWatch = Stopwatch.StartNew();
                     _native = native;
                     Attach(native);
-                    CaptureNativeOverwrite(native);
+                    StartOverwriteTracker(native);
                     attachWatch.Stop();
 
                     _document?.Editor.WriteMessage(
@@ -1064,7 +1197,11 @@ internal static class NativeIsoDialogEnhancer
             // links within Autodesk's existing Results dialog. It remains
             // active after the REV47 copy task completes.
             NativeIsoResultsOverlay.BeginSession(destination);
-            bool allowOverwrite = _overwriteRequested;
+            bool allowOverwrite = _overwriteFound && _overwriteRequested;
+            _document?.Editor.WriteMessage(
+                "\nSPTC REV50: Custom overwrite=" +
+                (allowOverwrite ? "YES" : "NO") +
+                " (source: " + _overwriteSource + ").");
             _copyTask = Task.Run(() => CopyFilesAsync(
                 source, destination, _launchUtc, allowOverwrite));
             EnsureMonitor();
