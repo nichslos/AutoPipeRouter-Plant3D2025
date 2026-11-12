@@ -699,42 +699,66 @@ internal static class NativeIsoResultsOverlay
         }
     }
 
+    // REV59: align both the baseline and left edge of our custom link to
+    // the ORIGINAL native "File:" hyperlink on the same ISO result. REV58
+    // only copied X, and vertically centered text inside the entire custom
+    // item row, making its font/baseline look different from Autodesk's.
     private static Rectangle? NativeCustomTextRectangle(
         IntPtr tree, NativeCustomLink custom)
     {
         if (!GetClientRect(tree, out RECT client))
             return null;
-        RECT? full = NativeItemRect(tree, custom.Item, false);
-        RECT? text = NativeItemRect(tree, custom.Item, true);
-        if (full is null || text is null)
-            return null;
-        RECT row = full.Value;
-        if (row.Height < 9 || row.Height > 55 ||
-            row.Bottom <= 0 || row.Top >= client.Height)
+
+        RECT? ownRow = NativeItemRect(tree, custom.Item, false);
+        RECT? ownText = NativeItemRect(tree, custom.Item, true);
+        if (ownRow is null || ownText is null)
             return null;
 
-        int left = text.Value.Left;
-        IntPtr child = WinNext(tree, TVGN_CHILD, custom.Parent);
-        for (int i = 0; child != IntPtr.Zero && i < 100; i++)
+        RECT full = ownRow.Value;
+        if (full.Height < 9 || full.Height > 55 ||
+            full.Bottom <= 0 || full.Top >= client.Height)
+            return null;
+
+        int x = ownText.Value.Left;
+        int textTopOffset = Math.Max(0, ownText.Value.Top - full.Top);
+        int textHeight = ownText.Value.Height > 0
+            ? ownText.Value.Height : full.Height;
+
+        IntPtr sibling = WinNext(tree, TVGN_CHILD, custom.Parent);
+        for (int i = 0; sibling != IntPtr.Zero && i < 100; i++)
         {
-            // Use actual native "File:" text alignment as source of
-            // truth, instead of hard-coded X positions/DPI assumptions.
-            string label = NativeItemText(tree, child);
-            if (label.StartsWith("File:", StringComparison.OrdinalIgnoreCase))
+            if (NativeItemText(tree, sibling).StartsWith(
+                    "File:", StringComparison.OrdinalIgnoreCase))
             {
-                RECT? sibling = NativeItemRect(tree, child, true);
-                if (sibling is not null)
-                    left = sibling.Value.Left;
+                RECT? fileRow = NativeItemRect(tree, sibling, false);
+                RECT? fileText = NativeItemRect(tree, sibling, true);
+                if (fileText is not null)
+                {
+                    // Same X offset as Autodesk's real clickable File link.
+                    x = fileText.Value.Left;
+                    if (fileRow is not null)
+                    {
+                        // Same Y offset/baseline and text-height as the
+                        // original, independently of Windows display DPI.
+                        textTopOffset = Math.Max(0,
+                            fileText.Value.Top - fileRow.Value.Top);
+                        if (fileText.Value.Height > 0)
+                            textHeight = fileText.Value.Height;
+                    }
+                }
                 break;
             }
-            child = WinNext(tree, TVGN_NEXT, child);
+            sibling = WinNext(tree, TVGN_NEXT, sibling);
         }
 
-        int x = Math.Max(0, left);
-        int y = Math.Max(0, row.Top);
+        x = Math.Max(0, x);
+        int y = Math.Max(0, full.Top + textTopOffset);
+        int bottom = Math.Min(client.Height,
+            Math.Min(full.Bottom, y + Math.Max(1, textHeight)));
         int right = client.Width - 5;
-        int bottom = Math.Min(client.Height, row.Bottom);
-        if (x >= right || y >= bottom) return null;
+        if (x >= right || y >= bottom)
+            return null;
+
         return new Rectangle(x, y, right - x, bottom - y);
     }
 
@@ -749,7 +773,12 @@ internal static class NativeIsoResultsOverlay
                 tree, WM_GETFONT, IntPtr.Zero, IntPtr.Zero);
             using Font? nativeFont = handleFont == IntPtr.Zero
                 ? null : Font.FromHfont(handleFont);
-            Font drawFont = nativeFont ?? SystemFonts.MessageBoxFont;
+            Font sourceFont = nativeFont ?? SystemFonts.MessageBoxFont;
+            // The original File: hyperlink is a regular-weight UI font.
+            // Some owner-drawn results return a bold/default tree HFONT,
+            // which made the custom labels look heavier than original.
+            using Font drawFont = new Font(sourceFont.FontFamily,
+                sourceFont.SizeInPoints, FontStyle.Regular, GraphicsUnit.Point);
 
             foreach (NativeCustomLink link in _winLinks.Values)
             {
@@ -776,7 +805,6 @@ internal static class NativeIsoResultsOverlay
                 TextRenderer.DrawText(canvas, CustomLabel(link.Path),
                     drawFont, area, Color.Blue,
                     TextFormatFlags.SingleLine |
-                    TextFormatFlags.VerticalCenter |
                     TextFormatFlags.EndEllipsis |
                     TextFormatFlags.NoPadding |
                     TextFormatFlags.NoPrefix |
@@ -796,6 +824,7 @@ internal static class NativeIsoResultsOverlay
 
     private static void RefreshWin32PerLine(IntPtr tree)
     {
+        bool itemsChanged = false;
         var required = new Dictionary<IntPtr, List<string>>();
         foreach (IntPtr parent in WalkNativeTree(tree))
         {
@@ -820,6 +849,7 @@ internal static class NativeIsoResultsOverlay
                     "Custom", StringComparison.Ordinal))
                 SendNative(tree, TVM_DELETEITEM, IntPtr.Zero, link.Item);
             _winLinks.Remove(link.Item);
+            itemsChanged = true;
         }
 
         foreach (var (parent, paths) in required)
@@ -832,12 +862,17 @@ internal static class NativeIsoResultsOverlay
                     continue;
                 IntPtr created = InsertNativeLink(tree, parent, path);
                 if (created != IntPtr.Zero)
+                {
                     _winLinks[created] = new NativeCustomLink(
                         created, parent, path);
+                    itemsChanged = true;
+                }
             }
-        // Initial paint after inserting a new native item, then native
-        // WndProc redraw handles all subsequent scroll/resize events.
-        DrawNativeCustomLabels(tree);
+        // Avoid repainting over the native UI every 550 ms. Draw on
+        // first insertion/removal, then only on real Windows paint/scroll.
+        // This prevents the custom text from looking double-thick.
+        if (itemsChanged)
+            DrawNativeCustomLabels(tree);
     }
 
     private static IntPtr HitNativeItem(IntPtr tree, IntPtr location)
