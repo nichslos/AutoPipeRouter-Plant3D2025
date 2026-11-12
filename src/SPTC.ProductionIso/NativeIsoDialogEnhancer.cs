@@ -655,6 +655,9 @@ internal static class NativeIsoDialogEnhancer
         // Dispose timer immediately when the native dialog closes;
         // do not restore rows into a closing or disposed Autodesk window.
         NativeIsoExactLineFilter.End(restore: false);
+        // REV43: release native search masking handlers when this ISO dialog
+        // closes, so reopening starts with Autodesk's normal empty filter.
+        ActiveDwgTags.ResetAutoFilterDisplay();
         CancelFilterVerification();
         try { _layoutWatch?.Stop(); } catch { }
         try { _layoutWatch?.Dispose(); } catch { }
