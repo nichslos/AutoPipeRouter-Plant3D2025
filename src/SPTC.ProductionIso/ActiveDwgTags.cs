@@ -30,6 +30,13 @@ internal static class ActiveDwgTags
     [DllImport("user32.dll")] private static extern bool EnableWindow(IntPtr hwnd, bool enabled);
     [DllImport("user32.dll")] private static extern IntPtr SendMessage(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam);
     private const uint EM_SETREADONLY = 0x00CF;
+    // Windows edit-control cue banner: used for Autodesk's start-up
+    // "Filter (eg. *52PW*)" hint. Do not change the actual search filter.
+    private const uint EM_SETCUEBANNER = 0x1501;
+    [DllImport("user32.dll", EntryPoint = "SendMessageW",
+        CharSet = CharSet.Unicode)]
+    private static extern IntPtr SendMessageText(
+        IntPtr hwnd, uint msg, IntPtr wParam, string text);
 
     [StructLayout(LayoutKind.Sequential)]
     private struct RECT { public int Left, Top, Right, Bottom; public int Width => Right - Left; public int Height => Bottom - Top; }
@@ -317,6 +324,59 @@ internal static class ActiveDwgTags
             return true;
         }, IntPtr.Zero);
         return found;
+    }
+
+    // REV44: display an actually blank search field when Production Iso
+    // FIRST opens, rather than Autodesk's default "Filter (eg. *52PW*)"
+    // hint. Preserve all real line filters, including the hidden REV43
+    // Active-DWG tag and every subsequent user-entered search.
+    public static void ClearInitialSearchHint(IntPtr dialog)
+    {
+        if (dialog == IntPtr.Zero || ProjectFolderLinePicker.FolderActive)
+            return;
+        IntPtr hwnd = FindNativeFilterInput(dialog);
+        if (hwnd == IntPtr.Zero)
+            return;
+
+        try
+        {
+            Control? control = Control.FromHandle(hwnd);
+
+            // WinForms .NET 8 TextBox placeholder support.
+            if (control is TextBox box && box.PlaceholderText.Length > 0)
+                box.PlaceholderText = string.Empty;
+
+            // Native Windows EDIT cue banner (works for Autodesk EDIT
+            // controls that are not exposed as managed TextBox objects).
+            SendMessageText(hwnd, EM_SETCUEBANNER, IntPtr.Zero, "");
+
+            // Some Autodesk dialogs put the hint in Text instead of using
+            // a cue banner. Clear ONLY the known default hint, never a
+            // user search or the internally applied Active-DWG tag.
+            if (control is TextBoxBase edit)
+            {
+                if (IsStartupSearchHint(edit.Text))
+                    edit.Clear();
+            }
+            else
+            {
+                var value = new StringBuilder(256);
+                GetWindowText(hwnd, value, value.Capacity);
+                if (IsStartupSearchHint(value.ToString()))
+                    SetWindowText(hwnd, "");
+            }
+        }
+        catch (Exception)
+        {
+            // Unsupported native control: retain Autodesk's original UI.
+        }
+    }
+
+    private static bool IsStartupSearchHint(string? text)
+    {
+        string value = (text ?? "").Trim();
+        return value.StartsWith("Filter (eg.", StringComparison.OrdinalIgnoreCase) &&
+               value.EndsWith(")", StringComparison.Ordinal);
     }
 
     // REV43: mask only an internally supplied Active-DWG filter value.
