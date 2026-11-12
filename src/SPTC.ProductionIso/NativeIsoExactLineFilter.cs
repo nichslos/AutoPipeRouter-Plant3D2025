@@ -70,9 +70,11 @@ internal static class NativeIsoExactLineFilter
         if (_working || _dialog == IntPtr.Zero || _tag.Length == 0) return;
         if (!ActiveDwgTags.IsNativeFilterCurrent(_dialog))
         {
-            // User changed the native Filter field, or folder mode took over.
-            // It owns the newly loaded list; never reinsert stale items.
-            End(restore: false);
+            // REV42: manual editing is allowed. Restore previously pruned
+            // native objects only if their saved identity/row-count checks
+            // still match. End() already refuses stale restoration after
+            // Autodesk has rebuilt the list for the new search term.
+            End(restore: true);
             return;
         }
 
