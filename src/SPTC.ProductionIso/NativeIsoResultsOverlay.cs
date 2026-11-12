@@ -524,6 +524,7 @@ internal static class NativeIsoResultsOverlay
             foreach (TreeNode node in deleted)
             {
                 if (node.TreeView != null) node.Remove();
+                node.NodeFont?.Dispose();
                 _managedCustomLinks.Remove(node);
             }
             foreach (var (parent, paths) in desired)
@@ -541,7 +542,13 @@ internal static class NativeIsoResultsOverlay
                         {
                             ForeColor = Color.Blue,
                             ToolTipText = target,
-                            Tag = new CustomResultLink(target, openFolder)
+                            Tag = new CustomResultLink(target, openFolder),
+                            NodeFont = openFolder
+                                ? new Font(tree.Font.FontFamily,
+                                    tree.Font.SizeInPoints,
+                                    FontStyle.Regular | FontStyle.Underline,
+                                    GraphicsUnit.Point)
+                                : null
                         };
                         parent.Nodes.Add(item);
                         _managedCustomLinks.Add(item);
@@ -784,10 +791,12 @@ internal static class NativeIsoResultsOverlay
             sibling = WinNext(tree, TVGN_NEXT, sibling);
         }
 
-        // REV60: one text-space (~6 display pixels) to the right of
-        // Autodesk's File: hyperlink, for BOTH custom result lines.
-        x = Math.Max(0, x + 6);
-        int y = Math.Max(0, full.Top + textTopOffset);
+        // REV61: shift BOTH custom rows half a space (~3 px) back to
+        // the left relative to REV60, and lower their visible glyphs
+        // by 2 px to visually match the native hyperlink row spacing.
+        // Never move the actual TreeView rows or touch the native list.
+        x = Math.Max(0, x + 3);
+        int y = Math.Max(0, full.Top + textTopOffset + 2);
         int bottom = Math.Min(client.Height,
             Math.Min(full.Bottom, y + Math.Max(1, textHeight)));
         int right = client.Width - 5;
@@ -814,6 +823,11 @@ internal static class NativeIsoResultsOverlay
             // which made the custom labels look heavier than original.
             using Font drawFont = new Font(sourceFont.FontFamily,
                 sourceFont.SizeInPoints, FontStyle.Regular, GraphicsUnit.Point);
+            // Match Autodesk's native underlined Explorer hyperlink only
+            // for the added folder row, not the Custom DWG path row.
+            using Font folderFont = new Font(sourceFont.FontFamily,
+                sourceFont.SizeInPoints,
+                FontStyle.Regular | FontStyle.Underline, GraphicsUnit.Point);
 
             foreach (NativeCustomLink link in _winLinks.Values)
             {
@@ -831,15 +845,25 @@ internal static class NativeIsoResultsOverlay
                     RECT row = full.Value;
                     int clearLeft = Math.Max(0,
                         Math.Min(row.Left, area.Left) - 2);
-                    canvas.FillRectangle(SystemBrushes.Window,
-                        new Rectangle(clearLeft, area.Top,
-                            Math.Max(0, area.Right - clearLeft),
-                            area.Height));
+                    // Clear the FULL injected row rather than only the
+                    // shifted text rect, avoiding residual/ghost glyphs.
+                    if (GetClientRect(tree, out RECT client))
+                    {
+                        int clearTop = Math.Max(0, row.Top);
+                        int clearBottom = Math.Min(client.Height, row.Bottom);
+                        if (area.Right > clearLeft &&
+                            clearBottom > clearTop)
+                            canvas.FillRectangle(SystemBrushes.Window,
+                                new Rectangle(clearLeft, clearTop,
+                                    area.Right - clearLeft,
+                                    clearBottom - clearTop));
+                    }
                 }
 
                 TextRenderer.DrawText(canvas,
                     NativeLinkLabel(link.Path, link.OpenFolder),
-                    drawFont, area, Color.Blue,
+                    link.OpenFolder ? folderFont : drawFont,
+                    area, Color.Blue,
                     TextFormatFlags.SingleLine |
                     TextFormatFlags.EndEllipsis |
                     TextFormatFlags.NoPadding |
@@ -981,7 +1005,11 @@ internal static class NativeIsoResultsOverlay
     {
         foreach (TreeNode node in _managedCustomLinks.ToList())
         {
-            try { if (node.TreeView != null) node.Remove(); }
+            try
+            {
+                if (node.TreeView != null) node.Remove();
+                node.NodeFont?.Dispose();
+            }
             catch (Exception) { }
         }
         _managedCustomLinks.Clear();
