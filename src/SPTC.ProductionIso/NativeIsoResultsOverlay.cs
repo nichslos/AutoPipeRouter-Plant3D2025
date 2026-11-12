@@ -412,7 +412,7 @@ internal static class NativeIsoResultsOverlay
             int w = b.X - a.X, h = b.Y - a.Y;
             if (w < client.Width * 0.65 ||
                 h < client.Height * 0.48 ||
-                a.Y < 48 || a.Y > client.Height * 0.28 ||
+                a.Y < 25 || a.Y > client.Height * 0.33 ||
                 a.X < 5 || a.X > client.Width * 0.20 ||
                 b.Y > client.Height - 25)
                 return true;
@@ -421,7 +421,7 @@ internal static class NativeIsoResultsOverlay
             // filling the white interior above the bottom command buttons.
             double score =
                 Math.Abs(a.X - 24) * 1.5 +
-                Math.Abs(a.Y - 78) * 1.8 +
+                Math.Abs(a.Y - 45) * 1.8 +
                 Math.Abs(b.X - (client.Width - 23)) +
                 Math.Abs(b.Y - (client.Height - 60)) * 0.8;
             Control? managed = Control.FromHandle(hwnd);
