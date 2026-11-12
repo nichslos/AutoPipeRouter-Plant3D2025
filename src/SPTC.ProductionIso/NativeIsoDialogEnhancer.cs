@@ -54,6 +54,10 @@ internal static class NativeIsoDialogEnhancer
     private static Document? _document;
     private static int _noWindowTicks;
     private static DateTime _launchUtc;
+    // REV54: snapshot the REAL Autodesk native line selection at Create
+    // so one batch cannot accidentally copy/link unrelated DWGs.
+    private static readonly HashSet<string> _selectedIsoTags =
+        new(StringComparer.OrdinalIgnoreCase);
     private static Task<CopyReport>? _copyTask;
     // REV33: background worker reports each completed DWG immediately
     // without calling any AutoCAD APIs from the worker thread.
@@ -188,10 +192,90 @@ internal static class NativeIsoDialogEnhancer
         }, IntPtr.Zero);
     }
 
+    // REV54: gather ONLY checked route names from the original Autodesk
+    // ISO checklist before the native Create dialog closes. The folder
+    // projection is not authoritative; prefer the native largest list.
+    private static void CaptureSelectedIsoTags(IntPtr dialog)
+    {
+        if (dialog == IntPtr.Zero) return;
+        var best = new List<string>();
+        int bestSize = -1;
+
+        EnumChildWindows(dialog, (hwnd, _) =>
+        {
+            Control? control = Control.FromHandle(hwnd);
+            if (control is CheckedListBox list &&
+                !list.IsDisposed && list.Items.Count > bestSize &&
+                list.Height > 100)
+            {
+                var selected = new List<string>();
+                for (int i = 0; i < list.Items.Count; i++)
+                    if (list.GetItemChecked(i))
+                    {
+                        string tag = list.GetItemText(list.Items[i]).Trim();
+                        if (tag.Length > 0) selected.Add(tag);
+                    }
+                if (selected.Count > 0)
+                {
+                    best = selected;
+                    bestSize = list.Items.Count;
+                }
+            }
+            else if (control is ListView view &&
+                     !view.IsDisposed && view.CheckBoxes &&
+                     view.Items.Count > bestSize && view.Height > 100)
+            {
+                var selected = view.CheckedItems.Cast<ListViewItem>()
+                    .Select(i => i.Text.Trim())
+                    .Where(s => s.Length > 0).ToList();
+                if (selected.Count > 0)
+                {
+                    best = selected;
+                    bestSize = view.Items.Count;
+                }
+            }
+            return true;
+        }, IntPtr.Zero);
+
+        if (best.Count == 0) return; // preserve old behavior if not identified
+        _selectedIsoTags.Clear();
+        foreach (string tag in best)
+            _selectedIsoTags.Add(tag);
+        NativeIsoResultsOverlay.SetExpectedIsoTags(best);
+        _document?.Editor.WriteMessage(
+            "\nSPTC REV54: Native ISO selected lines=" + best.Count +
+            " (custom copies limited to these routes).");
+    }
+
+    private static bool MatchesCurrentIsoBatch(
+        string dwgFileName, IReadOnlyCollection<string> tags)
+    {
+        if (tags.Count == 0) return true;
+        string stem = Path.GetFileNameWithoutExtension(dwgFileName);
+        foreach (string tag in tags)
+        {
+            if (stem.Equals(tag, StringComparison.OrdinalIgnoreCase))
+                return true;
+            if (stem.StartsWith(tag + " (", StringComparison.OrdinalIgnoreCase) &&
+                stem.EndsWith(")", StringComparison.Ordinal) &&
+                int.TryParse(stem.Substring(tag.Length + 2,
+                    stem.Length - tag.Length - 3), out int seq) && seq > 0)
+                return true;
+            if (stem.StartsWith(tag + "-", StringComparison.OrdinalIgnoreCase) &&
+                int.TryParse(stem.Substring(tag.Length + 1), out int seq2) &&
+                seq2 > 0)
+                return true;
+        }
+        return false;
+    }
+
     private static void CaptureBeforeNativeCreate(object? sender, EventArgs e)
     {
         if (_native != IntPtr.Zero)
+        {
             CaptureNativeOverwrite(_native);
+            CaptureSelectedIsoTags(_native);
+        }
         _document?.Editor.WriteMessage(
             "\nSPTC REV50: Create pressed; custom overwrite=" +
             (_overwriteRequested ? "YES" : "NO") +
@@ -268,6 +352,7 @@ internal static class NativeIsoDialogEnhancer
         // REV48: clear only the previous results links, not the approved
         // REV47 custom DWG copier or Autodesk's native results UI.
         NativeIsoResultsOverlay.Reset();
+        _selectedIsoTags.Clear();
         DetachNativeOverwriteTracker();
         _overwriteRequested = false;
         _overwriteFound = false;
@@ -1063,7 +1148,7 @@ internal static class NativeIsoDialogEnhancer
     // destination folder for a fresh run if overwrite was not requested.
     private static async Task<CopyReport> CopyFilesAsync(
         string source, string targetRoot, DateTime sinceUtc,
-        bool overwriteExisting)
+        bool overwriteExisting, IReadOnlyCollection<string> selectedTags)
     {
         int copied = 0, skipped = 0;
         var processedFiles = new HashSet<string>(
@@ -1132,7 +1217,9 @@ internal static class NativeIsoDialogEnhancer
                     foreach (string file in Directory.EnumerateFiles(
                         source, "*.dwg", SearchOption.TopDirectoryOnly))
                     {
-                        if (processedFiles.Contains(file))
+                        if (processedFiles.Contains(file) ||
+                            !MatchesCurrentIsoBatch(Path.GetFileName(file),
+                                selectedTags))
                             continue;
 
                         string? temp = null;
@@ -1356,8 +1443,11 @@ internal static class NativeIsoDialogEnhancer
                 "\nSPTC REV50: Custom overwrite=" +
                 (allowOverwrite ? "YES" : "NO") +
                 " (source: " + _overwriteSource + ").");
+            string[] selectedTags = _selectedIsoTags.ToArray();
+            NativeIsoResultsOverlay.SetExpectedIsoTags(selectedTags);
             _copyTask = Task.Run(() => CopyFilesAsync(
-                source, destination, _launchUtc, allowOverwrite));
+                source, destination, _launchUtc, allowOverwrite,
+                selectedTags));
             EnsureMonitor();
             doc.Editor.WriteMessage(
                 "\nSPTC ISO: Monitoring completed DWGs for custom copy (background)." +
