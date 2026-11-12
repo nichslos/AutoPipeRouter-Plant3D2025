@@ -72,6 +72,9 @@ internal static class NativeIsoDialogEnhancer
             return;
         }
         Detach();
+        // REV48: clear only the previous results links, not the approved
+        // REV47 custom DWG copier or Autodesk's native results UI.
+        NativeIsoResultsOverlay.Reset();
         _copyTask = null;
         while (_copyProgress.TryDequeue(out _)) { }
         _copyState = "Waiting for Production Iso dialog";
@@ -133,6 +136,10 @@ internal static class NativeIsoDialogEnhancer
             // collect the rest of a multi-line Production Iso job.
             while (_copyProgress.TryDequeue(out string? savedName))
             {
+                // REV48: user-clickable DWG link appears inside the ORIGINAL
+                // Isometric Creation Results dialog only after copy exists.
+                NativeIsoResultsOverlay.ReportCopied(
+                    Path.Combine(_destination, savedName));
                 _copyState = "Copied " + savedName + "; monitoring remaining ISOs";
                 _document?.Editor.WriteMessage(
                     "\nSPTC REV33: Custom ISO ready: " +
@@ -282,6 +289,8 @@ internal static class NativeIsoDialogEnhancer
             if (results != IntPtr.Zero)
             {
                 _resultsSeen = true;
+                if (!string.IsNullOrWhiteSpace(_destination))
+                    NativeIsoResultsOverlay.BeginSession(_destination);
                 if (_copyTask is null && _document is not null &&
                     !string.IsNullOrWhiteSpace(_destination) && !string.IsNullOrWhiteSpace(_source))
                     CopyCompleted(_document);
@@ -976,6 +985,10 @@ internal static class NativeIsoDialogEnhancer
                 throw new InvalidOperationException("Custom folder must be outside the native ISO output folder.");
 
             _copyState = "Background watcher started";
+            // REV48: this light UI-only watcher attaches clickable custom
+            // links within Autodesk's existing Results dialog. It remains
+            // active after the REV47 copy task completes.
+            NativeIsoResultsOverlay.BeginSession(destination);
             _copyTask = Task.Run(() => CopyFilesAsync(source, destination, _launchUtc));
             EnsureMonitor();
             doc.Editor.WriteMessage("\nSPTC ISO: Monitoring completed DWGs for custom copy (background).");
