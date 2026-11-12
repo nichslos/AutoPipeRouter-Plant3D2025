@@ -912,6 +912,42 @@ internal static class NativeIsoDialogEnhancer
                child.StartsWith(parent + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
     }
 
+    // REV52: Autodesk may produce "A-08 (2).dwg" at its ORIGINAL
+    // Production Iso location when a previous output remains open. The
+    // CUSTOM location has a separate naming/locking policy: normalize
+    // only Autodesk's FINAL numeric suffix. Never change/rename a native
+    // Autodesk ISO source file.
+    private static string CustomDestinationName(
+        string nativeFileName, out bool numberedNativeSource)
+    {
+        string stem = Path.GetFileNameWithoutExtension(nativeFileName);
+        string extension = Path.GetExtension(nativeFileName);
+        numberedNativeSource = false;
+
+        // Match " (1)", " (2)", ... only at the very end of the stem.
+        // Preserve embedded parentheses or component IDs in real tags.
+        int end = stem.Length - 1;
+        if (end <= 3 || stem[end] != ')')
+            return nativeFileName;
+
+        int open = stem.LastIndexOf(" (", StringComparison.Ordinal);
+        if (open <= 0 || open + 3 > end)
+            return nativeFileName;
+
+        string number = stem.Substring(open + 2, end - (open + 2));
+        if (!int.TryParse(number, out int sequence) ||
+            sequence < 1 || sequence > 10000 ||
+            !number.All(char.IsDigit))
+            return nativeFileName;
+
+        string baseName = stem.Substring(0, open);
+        if (baseName.Length == 0)
+            return nativeFileName;
+
+        numberedNativeSource = true;
+        return baseName + extension;
+    }
+
     // REV51: AutoCAD holds DWGs open while editing them. Do not attempt to
     // overwrite a custom DWG that another AutoCAD document/process has open.
     // An actual OS sharing violation is distinct from ACL, disk-full, or
@@ -1133,14 +1169,26 @@ internal static class NativeIsoDialogEnhancer
                                 continue;
 
                             Directory.CreateDirectory(targetRoot);
-                            string destination = Path.Combine(
-                                targetRoot, Path.GetFileName(file));
 
-                            // REV49: replace ONLY when the user selected
-                            // Autodesk's original Overwrite if existing.
-                            // Otherwise preserve REV47's safe skip behavior.
-                            // Never invent _copy1/_copy2 collision names.
-                            if (File.Exists(destination) && !overwriteExisting &&
+                            // REV52: Source "A-08 (2).dwg" maps to CUSTOM
+                            // "A-08.dwg", rather than copying the native
+                            // suffix. The two folders must be independent.
+                            string customName = CustomDestinationName(
+                                Path.GetFileName(file), out bool sourceNumbered);
+                            string destination = Path.Combine(
+                                targetRoot, customName);
+
+                            // User-requested special case: when Autodesk
+                            // numbered the ORIGINAL native output, a CLOSED
+                            // existing CUSTOM base DWG is replaced even if
+                            // the native checkbox was not selected. When the
+                            // custom DWG is OPEN/locked, REV51 still emits
+                            // " (1)", " (2)", ... without overwriting it.
+                            // Unnumbered native sources retain REV51/REV47
+                            // checkbox and skip semantics.
+                            bool allowCustomOverwrite =
+                                overwriteExisting || sourceNumbered;
+                            if (File.Exists(destination) && !allowCustomOverwrite &&
                                 !IsCustomDwgOpenOrLocked(destination))
                             {
                                 // Preserve REV47's skip-on-collision behavior
@@ -1196,7 +1244,7 @@ internal static class NativeIsoDialogEnhancer
                             // Overwrite option permits replacing the CUSTOM
                             // file, never an original project/native ISO DWG.
                             string published = PublishCustomSnapshot(
-                                temp, destination, overwriteExisting);
+                                temp, destination, allowCustomOverwrite);
                             temp = null;
                             processedFiles.Add(file);
                             copied++;
