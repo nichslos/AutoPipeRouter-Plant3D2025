@@ -70,6 +70,10 @@ internal static class ActiveDwgTags
     private static TextBoxBase? _autoFilterEdit;
     private static IntPtr _autoFilterDialog = IntPtr.Zero;
     private static string _autoFilterTag = "";
+    // REV46: Autodesk may not match the full tag in the native text filter
+    // (notably long tags with '+' separators). This is the actual internal
+    // search term; _autoFilterTag remains the verified FULL route name.
+    private static string _autoFilterQuery = "";
     private static bool _autoFilterMasked;
 
     public static void Scan(Document doc)
@@ -390,7 +394,7 @@ internal static class ActiveDwgTags
             return;
         _autoFilterMasked = false;
         edit.ForeColor = SystemColors.WindowText;
-        if (edit.Text.Trim().Equals(_autoFilterTag,
+        if (edit.Text.Trim().Equals(_autoFilterQuery,
                 StringComparison.OrdinalIgnoreCase))
             edit.Clear();
     }
@@ -409,7 +413,7 @@ internal static class ActiveDwgTags
         if (string.IsNullOrWhiteSpace(edit.Text) &&
             Tags.Contains(_autoFilterTag) && !ProjectFolderLinePicker.FolderActive)
         {
-            edit.Text = _autoFilterTag;
+            edit.Text = _autoFilterQuery;
             _autoFilterMasked = true;
             edit.ForeColor = edit.BackColor;
             NativeIsoExactLineFilter.Begin(_autoFilterDialog, _autoFilterTag,
@@ -427,7 +431,7 @@ internal static class ActiveDwgTags
         // Native refresh/manual typing can replace the automatic tag.
         // Restore normal readable text when this happens.
         if (_autoFilterMasked &&
-            !edit.Text.Trim().Equals(_autoFilterTag,
+            !edit.Text.Trim().Equals(_autoFilterQuery,
                 StringComparison.OrdinalIgnoreCase))
             _autoFilterMasked = false;
 
@@ -439,7 +443,7 @@ internal static class ActiveDwgTags
     {
         Color intended = _autoFilterMasked &&
             ReferenceEquals(edit, _autoFilterEdit) &&
-            edit.Text.Trim().Equals(_autoFilterTag,
+            edit.Text.Trim().Equals(_autoFilterQuery,
                 StringComparison.OrdinalIgnoreCase) && !edit.Focused
             ? edit.BackColor : SystemColors.WindowText;
         if (edit.ForeColor != intended)
@@ -460,6 +464,7 @@ internal static class ActiveDwgTags
             edit.TextChanged += NativeSearchTextChanged;
         }
         _autoFilterTag = tag;
+        _autoFilterQuery = tag;
         _autoFilterMasked = true;
         SetAutoFilterAppearance(edit);
     }
@@ -472,6 +477,7 @@ internal static class ActiveDwgTags
         _autoFilterEdit = null;
         _autoFilterDialog = IntPtr.Zero;
         _autoFilterTag = "";
+        _autoFilterQuery = "";
         _autoFilterMasked = false;
         if (edit is not { IsDisposed: false }) return;
         edit.Enter -= NativeSearchEnter;
@@ -567,7 +573,13 @@ internal static class ActiveDwgTags
             current = buffer.ToString();
         }
 
-        return string.Equals(current.Trim(), Tags.First(),
+        // REV46: support a guarded internal fallback substring query.
+        // User-entered text still cancels the exact Active-DWG filter when
+        // it differs from the one SPTC applied.
+        string expected = _lastAppliedDialog == dialog &&
+            !string.IsNullOrWhiteSpace(_autoFilterQuery)
+            ? _autoFilterQuery : Tags.First();
+        return string.Equals(current.Trim(), expected,
             StringComparison.OrdinalIgnoreCase);
     }
 
@@ -612,6 +624,66 @@ internal static class ActiveDwgTags
         {
             doc?.Editor.WriteMessage(
                 "\nSPTC REV27: Native active filter failed: " + ex.Message);
+            return false;
+        }
+    }
+
+    // REV46: when Autodesk's own Filter returns no exact match for a long
+    // Active-DWG line tag, retry once using a distinctive literal suffix.
+    // The native ISO list is never trusted on a substring alone:
+    // NativeIsoExactLineFilter still requires a FULL exact tag match and
+    // hides any other matching rows. No model, PnP or DWG data is changed.
+    public static bool TryApplyActiveSearchFallback(
+        IntPtr dialog, string fullTag, string searchTerm, Document? doc)
+    {
+        if (dialog == IntPtr.Zero || _lastAppliedDialog != dialog ||
+            Count != 1 || !Tags.Contains(fullTag) ||
+            string.IsNullOrWhiteSpace(searchTerm) ||
+            searchTerm.Trim().Equals(fullTag, StringComparison.OrdinalIgnoreCase) ||
+            ProjectFolderLinePicker.FolderActive ||
+            !IsNativeFilterCurrent(dialog))
+            return false;
+
+        IntPtr hwnd = FindNativeFilterInput(dialog);
+        if (hwnd == IntPtr.Zero)
+            return false;
+        string query = searchTerm.Trim();
+
+        try
+        {
+            if (Control.FromHandle(hwnd) is TextBoxBase edit)
+            {
+                // Do not overwrite a search the user is actively editing.
+                if (edit.Focused)
+                    return false;
+                _autoFilterMasked = false;
+                edit.Text = query;
+                if (!edit.Text.Trim().Equals(query,
+                        StringComparison.OrdinalIgnoreCase))
+                    return false;
+
+                _autoFilterQuery = query;
+                _autoFilterMasked = ReferenceEquals(edit, _autoFilterEdit) &&
+                                    _autoFilterDialog == dialog;
+                SetAutoFilterAppearance(edit);
+            }
+            else
+            {
+                if (!SetWindowText(hwnd, query))
+                    return false;
+                _autoFilterQuery = query;
+            }
+            doc?.Editor.WriteMessage(
+                "\nSPTC REV46: Exact Active-DWG lookup for '" + fullTag +
+                "' did not populate; retrying native search with '" +
+                query + "' (full-tag verification still required).");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            doc?.Editor.WriteMessage(
+                "\nSPTC REV46: Native fallback search unavailable: " +
+                ex.GetBaseException().Message);
             return false;
         }
     }
