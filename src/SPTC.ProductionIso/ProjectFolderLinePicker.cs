@@ -1094,18 +1094,21 @@ internal static class ProjectFolderLinePicker
 
         try
         {
+            // REV41: the native selected row must be known before the
+            // ItemCheck and Click events. Folder projection covers this
+            // Autodesk list, so a click in the visible proxy does not select
+            // a native row by itself. REV39 changed only the check state,
+            // causing a checked icon with Create still disabled.
+            if (desired)
+            {
+                if (list.SelectedIndex == index)
+                    list.ClearSelected();
+                list.SelectedIndex = index;
+            }
+
             bool before = list.GetItemChecked(index);
             if (before == desired)
-            {
-                // An existing checked row may still need the native selection
-                // event that the original Create button expects.
-                if (desired)
-                {
-                    if (list.SelectedIndex == index) list.ClearSelected();
-                    list.SelectedIndex = index;
-                }
                 return true;
-            }
 
             int oldTopIndex = list.TopIndex;
             try
@@ -1139,7 +1142,8 @@ internal static class ProjectFolderLinePicker
                     list.SetItemChecked(index, desired);
                 }
 
-                if (list.GetItemChecked(index) == desired && desired)
+                if (list.GetItemChecked(index) == desired && desired &&
+                    list.SelectedIndex != index)
                     list.SelectedIndex = index;
 
                 return list.GetItemChecked(index) == desired;
@@ -1306,28 +1310,21 @@ internal static class ProjectFolderLinePicker
                     if (displayed.GetItemChecked(displayIndex) != desired)
                         return;
 
-                    // REV39: A single folder checkbox must use the same
-                    // verified native SetItemChecked path as working bulk
-                    // selection. Synthetic mouse clicks on Autodesk's
-                    // COVERED original list can invert/reject a single item
-                    // and our old callback then removed the visible check.
-                    // Keep the bulk Select All path unchanged.
-                    if (SetNativeChecked(nativeRow, desired))
+                    // REV41: the REV39 programmatic SetItemChecked path
+                    // updates the check icon but can leave Autodesk's native
+                    // Create eligibility disabled for ONE folder line. Send
+                    // the checked/unchecked action through the ORIGINAL
+                    // Autodesk control's mouse/ItemCheck handlers *after*
+                    // the projected ItemCheck has committed. A native row
+                    // selection is primed BEFORE the click (see helper).
+                    // Preserve the existing bulk Select All handler intact.
+                    if (SetNativeChecked(nativeRow, desired, userAction: true))
                     {
-                        if (desired && _nativeChecked is { IsDisposed: false } native &&
-                            nativeRow.Index < native.Items.Count)
-                        {
-                            // Trigger genuine native selection notification
-                            // without sending clicks through the overlay.
-                            if (native.SelectedIndex == nativeRow.Index)
-                                native.ClearSelected();
-                            native.SelectedIndex = nativeRow.Index;
-                        }
-                        else if (desired && _nativeView is { IsDisposed: false } view &&
-                                 nativeRow.Index < view.Items.Count)
-                            view.Items[nativeRow.Index].Selected = true;
-
                         ScheduleNativeSelectionCommit();
+                        _document?.Editor.WriteMessage(
+                            "\nSPTC REV41 folder individual native event: " +
+                            nativeRow.Tag + " requested=" + desired +
+                            " actual=" + GetNativeChecked(nativeRow));
                         return;
                     }
 
