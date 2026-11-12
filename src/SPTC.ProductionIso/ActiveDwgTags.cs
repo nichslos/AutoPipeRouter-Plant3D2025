@@ -27,6 +27,9 @@ internal static class ActiveDwgTags
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetClassName(IntPtr hwnd, StringBuilder name, int count);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetWindowText(IntPtr hwnd, StringBuilder text, int count);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern bool SetWindowText(IntPtr hwnd, string text);
+    [DllImport("user32.dll")] private static extern bool EnableWindow(IntPtr hwnd, bool enabled);
+    [DllImport("user32.dll")] private static extern IntPtr SendMessage(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam);
+    private const uint EM_SETREADONLY = 0x00CF;
 
     [StructLayout(LayoutKind.Sequential)]
     private struct RECT { public int Left, Top, Right, Bottom; public int Width => Right - Left; public int Height => Bottom - Top; }
@@ -306,6 +309,74 @@ internal static class ActiveDwgTags
         return found;
     }
 
+    // REV42: keep the ORIGINAL native filter input editable for manual line
+    // number searches. Autodesk sometimes leaves the edit portion greyed
+    // out after switching to the active-DWG scope. We only enable the
+    // identified filter-row input and its narrow immediate container;
+    // no native line items, filter text or project records are changed.
+    public static bool EnsureNativeSearchEditable(IntPtr dialog)
+    {
+        if (dialog == IntPtr.Zero || ProjectFolderLinePicker.FolderActive)
+            return false;
+        IntPtr hwnd = FindNativeFilterInput(dialog);
+        if (hwnd == IntPtr.Zero)
+            return false;
+
+        Control? control = Control.FromHandle(hwnd);
+        try
+        {
+            // Edit inside a small filter-row panel can inherit Disabled from
+            // the parent. Do not enable the whole Display lines group.
+            Control? parent = control?.Parent;
+            for (int depth = 0; depth < 2 && parent != null; depth++)
+            {
+                if (parent is GroupBox)
+                    break;
+                if (parent is Panel panel && panel.Height <= 58)
+                    panel.Enabled = true;
+                else if (parent is ComboBox combo)
+                    combo.Enabled = true;
+                else
+                    break;
+                parent = parent.Parent;
+            }
+
+            if (control is TextBoxBase edit)
+            {
+                if (!edit.Enabled) edit.Enabled = true;
+                if (edit.ReadOnly) edit.ReadOnly = false;
+                if (edit.Enabled && !edit.ReadOnly)
+                {
+                    if (edit.ForeColor != SystemColors.WindowText)
+                        edit.ForeColor = SystemColors.WindowText;
+                    return true;
+                }
+            }
+            else if (control is ComboBox combo)
+            {
+                if (!combo.Enabled) combo.Enabled = true;
+                return combo.Enabled && combo.DropDownStyle != ComboBoxStyle.DropDownList;
+            }
+
+            // Some Autodesk versions expose a native Windows EDIT child
+            // rather than a managed WinForms TextBox.
+            var cls = new StringBuilder(96);
+            GetClassName(hwnd, cls, cls.Capacity);
+            if (cls.ToString().Contains("EDIT",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                EnableWindow(hwnd, true);
+                SendMessage(hwnd, EM_SETREADONLY, IntPtr.Zero, IntPtr.Zero);
+                return true;
+            }
+        }
+        catch (Exception)
+        {
+            // Preserve Autodesk's original UI on an unrecognized control.
+        }
+        return false;
+    }
+
     // REV28: keep the independent DWG checkbox synchronized if Autodesk's
     // Drawing/Project buttons or the user clear/change the native Filter text.
     // UI-only read; it does not scan any PnP project metadata.
@@ -359,6 +430,7 @@ internal static class ActiveDwgTags
                 return false;
 
             _lastAppliedDialog = dialog;
+            EnsureNativeSearchEditable(dialog);
             doc?.Editor.WriteMessage(
                 "\nSPTC REV27: Native active filter applied: " + tag);
             return true;
