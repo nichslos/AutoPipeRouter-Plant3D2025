@@ -36,7 +36,23 @@ internal static class NativeIsoResultsOverlay
     private static extern bool IsWindow(IntPtr hwnd);
     [DllImport("user32.dll")]
     private static extern bool PostMessage(IntPtr hwnd, uint msg, IntPtr wp, IntPtr lp);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetClassName(IntPtr hwnd, StringBuilder name, int capacity);
+    [DllImport("user32.dll", EntryPoint = "SendMessageW", CharSet = CharSet.Unicode)]
+    private static extern IntPtr SendNative(IntPtr hwnd, uint msg, IntPtr wp, IntPtr lp);
+
     private const uint WM_CLOSE = 0x0010;
+    private const uint WM_LBUTTONDOWN = 0x0201;
+    private const uint WM_LBUTTONUP = 0x0202;
+    private const uint WM_LBUTTONDBLCLK = 0x0203;
+    private const uint TVM_GETNEXTITEM = 0x110A;
+    private const uint TVM_GETITEMW = 0x113E;
+    private const uint TVM_INSERTITEMW = 0x1132;
+    private const uint TVM_DELETEITEM = 0x1101;
+    private const uint TVM_HITTEST = 0x1111;
+    private const uint TVGN_ROOT = 0;
+    private const uint TVGN_NEXT = 1;
+    private const uint TVGN_CHILD = 4;
 
     [StructLayout(LayoutKind.Sequential)]
     private struct RECT
@@ -48,6 +64,72 @@ internal static class NativeIsoResultsOverlay
     [StructLayout(LayoutKind.Sequential)]
     private struct POINT { public int X, Y; }
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct TVITEMW
+    {
+        public uint mask;
+        public IntPtr hItem;
+        public uint state;
+        public uint stateMask;
+        public IntPtr pszText;
+        public int cchTextMax;
+        public int iImage, iSelectedImage, cChildren;
+        public IntPtr lParam;
+    }
+    [StructLayout(LayoutKind.Sequential)]
+    private struct TVINSERTSTRUCTW
+    {
+        public IntPtr hParent, hInsertAfter;
+        public TVITEMW item;
+    }
+    [StructLayout(LayoutKind.Sequential)]
+    private struct TVHITTESTINFO
+    {
+        public POINT pt;
+        public uint flags;
+        public IntPtr hItem;
+    }
+    private sealed record NativeCustomLink(IntPtr Item, IntPtr Parent, string Path);
+
+    private sealed class NativeTreeHook : NativeWindow
+    {
+        private readonly IntPtr _tree;
+        public NativeTreeHook(IntPtr tree)
+        {
+            _tree = tree;
+            AssignHandle(tree);
+        }
+        protected override void WndProc(ref Message message)
+        {
+            if ((uint)message.Msg == WM_LBUTTONDOWN ||
+                (uint)message.Msg == WM_LBUTTONUP ||
+                (uint)message.Msg == WM_LBUTTONDBLCLK)
+            {
+                IntPtr item = HitNativeItem(_tree, message.LParam);
+                if (_winLinks.TryGetValue(item, out var link))
+                {
+                    // Never send our custom row clicks to Autodesk's
+                    // original result tree item handler.
+                    if ((uint)message.Msg == WM_LBUTTONUP)
+                    {
+                        try { OpenDrawing(link.Path); }
+                        catch (Exception ex)
+                        {
+                            MessageBox.Show(
+                                "Could not open custom ISO result:\n" +
+                                ex.GetBaseException().Message,
+                                "SPTC Custom ISO Link", MessageBoxButtons.OK,
+                                MessageBoxIcon.Information);
+                        }
+                    }
+                    message.Result = IntPtr.Zero;
+                    return;
+                }
+            }
+            base.WndProc(ref message);
+        }
+    }
+
     private sealed record CustomResultLink(string Path, bool OpenFolder);
 
     private static IntPtr _dialog;
@@ -57,6 +139,7 @@ internal static class NativeIsoResultsOverlay
     private static NativeTreeHook? _winHook;
     private static readonly Dictionary<IntPtr, NativeCustomLink> _winLinks = new();
     private static string _displaySignature = "";
+    private static bool _missingTreeWarned;
     private static System.Windows.Forms.Timer? _timer;
     private static string _customFolder = "";
     private static readonly List<string> CopiedPaths = new();
@@ -76,6 +159,7 @@ internal static class NativeIsoResultsOverlay
         ExpectedIsoTags.Clear();
         _pendingOpen = null;
         _pendingCloseTime = default;
+        _missingTreeWarned = false;
     }
 
     public static void BeginSession(string? customFolder)
@@ -425,6 +509,189 @@ internal static class NativeIsoResultsOverlay
         return from >= 0 && pcf > from + 5
             ? value.Substring(from + 5, pcf - from - 5).Trim()
             : null;
+    }
+
+    private static void Diagnostic(string message)
+    {
+        try
+        {
+            AcadApp.DocumentManager.MdiActiveDocument?.Editor.WriteMessage(
+                "\nSPTC REV56: " + message);
+        }
+        catch (Exception) { }
+    }
+
+    private static IntPtr FindWin32Tree(IntPtr dialog)
+    {
+        if (!GetWindowRect(dialog, out RECT bounds)) return IntPtr.Zero;
+        IntPtr found = IntPtr.Zero;
+        long area = 0;
+        EnumChildWindows(dialog, (hwnd, _) =>
+        {
+            var kind = new StringBuilder(120);
+            GetClassName(hwnd, kind, kind.Capacity);
+            if (!kind.ToString().Contains("SysTreeView32",
+                    StringComparison.OrdinalIgnoreCase) ||
+                !GetWindowRect(hwnd, out RECT rect))
+                return true;
+            long size = (long)rect.Width * rect.Height;
+            if (rect.Width >= bounds.Width * 0.50 &&
+                rect.Height >= bounds.Height * 0.35 &&
+                size > area)
+            {
+                found = hwnd;
+                area = size;
+            }
+            return true;
+        }, IntPtr.Zero);
+        return found;
+    }
+
+    private static IntPtr WinNext(IntPtr tree, uint type, IntPtr node) =>
+        SendNative(tree, TVM_GETNEXTITEM, new IntPtr(type), node);
+
+    private static string NativeItemText(IntPtr tree, IntPtr node)
+    {
+        if (node == IntPtr.Zero) return "";
+        IntPtr buffer = IntPtr.Zero, itemBuffer = IntPtr.Zero;
+        try
+        {
+            buffer = Marshal.AllocHGlobal(2048);
+            Marshal.WriteInt16(buffer, 0);
+            var entry = new TVITEMW
+            {
+                mask = 1, // TVIF_TEXT
+                hItem = node,
+                pszText = buffer,
+                cchTextMax = 1024
+            };
+            itemBuffer = Marshal.AllocHGlobal(Marshal.SizeOf<TVITEMW>());
+            Marshal.StructureToPtr(entry, itemBuffer, false);
+            return SendNative(tree, TVM_GETITEMW, IntPtr.Zero,
+                itemBuffer) == IntPtr.Zero
+                ? "" : Marshal.PtrToStringUni(buffer) ?? "";
+        }
+        finally
+        {
+            if (buffer != IntPtr.Zero) Marshal.FreeHGlobal(buffer);
+            if (itemBuffer != IntPtr.Zero) Marshal.FreeHGlobal(itemBuffer);
+        }
+    }
+
+    private static IEnumerable<IntPtr> WalkNativeTree(IntPtr tree)
+    {
+        var output = new List<IntPtr>();
+        var seen = new HashSet<IntPtr>();
+        void Walk(IntPtr first, int depth)
+        {
+            if (depth > 14) return;
+            IntPtr item = first;
+            for (int counter = 0;
+                 item != IntPtr.Zero && counter < 10000; counter++)
+            {
+                if (!seen.Add(item)) break;
+                if (!_winLinks.ContainsKey(item))
+                    output.Add(item);
+                Walk(WinNext(tree, TVGN_CHILD, item), depth + 1);
+                item = WinNext(tree, TVGN_NEXT, item);
+            }
+        }
+        Walk(WinNext(tree, TVGN_ROOT, IntPtr.Zero), 0);
+        return output;
+    }
+
+    private static IntPtr InsertNativeLink(
+        IntPtr tree, IntPtr parent, string path)
+    {
+        IntPtr text = IntPtr.Zero, memory = IntPtr.Zero;
+        try
+        {
+            text = Marshal.StringToHGlobalUni("Custom: " + path);
+            var entry = new TVINSERTSTRUCTW
+            {
+                hParent = parent,
+                hInsertAfter = new IntPtr(-65534), // TVI_LAST
+                item = new TVITEMW
+                {
+                    mask = 1, // TVIF_TEXT
+                    pszText = text
+                }
+            };
+            memory = Marshal.AllocHGlobal(
+                Marshal.SizeOf<TVINSERTSTRUCTW>());
+            Marshal.StructureToPtr(entry, memory, false);
+            return SendNative(tree, TVM_INSERTITEMW, IntPtr.Zero, memory);
+        }
+        finally
+        {
+            if (memory != IntPtr.Zero) Marshal.FreeHGlobal(memory);
+            if (text != IntPtr.Zero) Marshal.FreeHGlobal(text);
+        }
+    }
+
+    private static void RefreshWin32PerLine(IntPtr tree)
+    {
+        var required = new Dictionary<IntPtr, List<string>>();
+        foreach (IntPtr parent in WalkNativeTree(tree))
+        {
+            string? tag = ExtractRoute(NativeItemText(tree, parent));
+            if (tag is null) continue;
+            var paths = CopiedPaths.Where(p =>
+                File.Exists(p) && MatchesIsoName(
+                    Path.GetFileName(p), tag)).ToList();
+            if (paths.Count > 0) required[parent] = paths;
+        }
+
+        foreach (NativeCustomLink link in _winLinks.Values.ToList())
+        {
+            if (required.TryGetValue(link.Parent, out var paths) &&
+                paths.Contains(link.Path,
+                    StringComparer.OrdinalIgnoreCase) &&
+                NativeItemText(tree, link.Item).StartsWith(
+                    "Custom: ", StringComparison.Ordinal))
+                continue;
+
+            if (NativeItemText(tree, link.Item).StartsWith(
+                    "Custom: ", StringComparison.Ordinal))
+                SendNative(tree, TVM_DELETEITEM, IntPtr.Zero, link.Item);
+            _winLinks.Remove(link.Item);
+        }
+
+        foreach (var (parent, paths) in required)
+            foreach (string path in paths)
+            {
+                if (_winLinks.Values.Any(link =>
+                    link.Parent == parent &&
+                    link.Path.Equals(path,
+                        StringComparison.OrdinalIgnoreCase)))
+                    continue;
+                IntPtr created = InsertNativeLink(tree, parent, path);
+                if (created != IntPtr.Zero)
+                    _winLinks[created] = new NativeCustomLink(
+                        created, parent, path);
+            }
+    }
+
+    private static IntPtr HitNativeItem(IntPtr tree, IntPtr location)
+    {
+        long bits = location.ToInt64();
+        int x = unchecked((short)(bits & 0xFFFF));
+        int y = unchecked((short)((bits >> 16) & 0xFFFF));
+        IntPtr memory = IntPtr.Zero;
+        try
+        {
+            memory = Marshal.AllocHGlobal(
+                Marshal.SizeOf<TVHITTESTINFO>());
+            Marshal.StructureToPtr(new TVHITTESTINFO
+            {
+                pt = new POINT { X = x, Y = y }
+            }, memory, false);
+            return SendNative(tree, TVM_HITTEST, IntPtr.Zero, memory);
+        }
+        finally
+        {
+            if (memory != IntPtr.Zero) Marshal.FreeHGlobal(memory);
+        }
     }
 
     private static void OnBeforeSelect(
