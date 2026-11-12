@@ -701,39 +701,40 @@ internal static class NativeIsoDialogEnhancer
                child.StartsWith(parent + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
     }
 
-    // REV33: Event-assisted, safe near-immediate copying. In REV32 the
-    // worker polled every 2.5 seconds and then waited 3 more seconds for
-    // each source DWG to look stable. A completed ISO could therefore
-    // take 5–8+ seconds to appear in Custom Save Location.
+    // REV47: safely snapshot ONLY finished native Production Iso DWGs.
+    // REV46 held an EXCLUSIVE source FileStream open while copying, which
+    // could conflict with Plant 3D's subsequent write/open operations and
+    // plausibly trigger eFileSharingViolation. It also used a new _copyN
+    // name each time the source DWG was rewritten. Both are removed.
     //
-    // The FileSystemWatcher wakes the worker promptly when output changes;
-    // a 650 ms fallback poll also works on mapped/network drives when
-    // filesystem notifications are unavailable or lost.
+    // Wait for at least 4 seconds of stability PER FILE and 5 seconds of
+    // silence for ALL Autodesk native output DWGs before taking a snapshot.
+    // Read source with cooperative sharing, never FileShare.None, and
+    // verify the source's length/modified time again BEFORE publishing the
+    // atomically completed destination.
     //
-    // A DWG is copied ONLY after its size and LastWriteTime remain stable
-    // for 650 ms AND an exclusive FileStream opens successfully. The file
-    // remains locked against writers during the entire copy, and the
-    // destination becomes visible atomically after a .sptc-part transfer.
-    //
-    // No Windows filesystem I/O or copy runs on the Plant 3D UI thread.
+    // Each source path is processed at most once per ISO run. If the
+    // destination name already exists, KEEP that user file and skip this
+    // copy; do not overwrite or invent _copy1, _copy2, etc. Use an empty
+    // destination folder for a fresh run if overwrite was not requested.
     private static async Task<CopyReport> CopyFilesAsync(
         string source, string targetRoot, DateTime sinceUtc)
     {
         int copied = 0, skipped = 0;
-        var copiedVersions =
-            new Dictionary<string, (long Size, long Modified)>(
-                StringComparer.OrdinalIgnoreCase);
-        var observed =
-            new Dictionary<string, (long Size, long Modified, DateTime SeenAt)>(
-                StringComparer.OrdinalIgnoreCase);
+        var processedFiles = new HashSet<string>(
+            StringComparer.OrdinalIgnoreCase);
+        var observed = new Dictionary<string,
+            (long Size, long Modified, DateTime SeenAt)>(
+            StringComparer.OrdinalIgnoreCase);
         DateTime start = DateTime.UtcNow;
-        DateTime lastCopy = start;
+        DateTime lastProcessed = start;
+        long lastNativeChangeTicks = start.Ticks;
 
-        // Coalesce frequent filesystem events; never process a DWG from
-        // the FileSystemWatcher callback itself.
         using var wake = new System.Threading.SemaphoreSlim(0, 1);
         void Signal()
         {
+            System.Threading.Interlocked.Exchange(
+                ref lastNativeChangeTicks, DateTime.UtcNow.Ticks);
             try { wake.Release(); }
             catch (System.Threading.SemaphoreFullException) { }
             catch (ObjectDisposedException) { }
@@ -767,128 +768,157 @@ internal static class NativeIsoDialogEnhancer
                                            ex is UnauthorizedAccessException ||
                                            ex is ArgumentException)
                 {
-                    // SMB/network notifications may be unavailable. Polling
-                    // still detects completed ISO files safely.
                     watcher?.Dispose();
                     watcher = null;
                 }
             }
 
-            // One batch may generate multiple DWGs. Continue monitoring
-            // for 25 seconds after the last successful copy, as in REV32.
+            // Preserve REV33's maximum monitoring horizon. We can observe
+            // several ISO sheets created asynchronously by Autodesk.
             while ((DateTime.UtcNow - start).TotalMinutes < 10)
             {
                 try
                 {
                     if (!Directory.Exists(source))
                         throw new DirectoryNotFoundException(
-                            "Native Production Iso output folder is unavailable: " + source);
+                            "Native Production Iso output folder is unavailable: " +
+                            source);
 
                     foreach (string file in Directory.EnumerateFiles(
                         source, "*.dwg", SearchOption.TopDirectoryOnly))
                     {
+                        if (processedFiles.Contains(file))
+                            continue;
+
+                        string? temp = null;
                         try
                         {
                             var info = new FileInfo(file);
                             if (info.LastWriteTimeUtc < sinceUtc.AddSeconds(-10))
                                 continue;
 
-                            var version = (info.Length, info.LastWriteTimeUtc.Ticks);
-                            if (copiedVersions.TryGetValue(file, out var done) &&
-                                done == version)
+                            var version =
+                                (Size: info.Length,
+                                 Modified: info.LastWriteTimeUtc.Ticks);
+                            if (version.Size <= 0)
                                 continue;
 
+                            DateTime now = DateTime.UtcNow;
                             if (!observed.TryGetValue(file, out var first) ||
-                                first.Size != version.Item1 ||
-                                first.Modified != version.Item2)
+                                first.Size != version.Size ||
+                                first.Modified != version.Modified)
                             {
                                 observed[file] = (
-                                    version.Item1, version.Item2, DateTime.UtcNow);
+                                    version.Size, version.Modified, now);
+                                System.Threading.Interlocked.Exchange(
+                                    ref lastNativeChangeTicks, now.Ticks);
                                 continue;
                             }
 
-                            if ((DateTime.UtcNow - first.SeenAt).TotalMilliseconds < 650)
-                                continue;
-
-                            // The exclusive native handle is kept open for
-                            // the ENTIRE copy. A still-writing ISO is skipped
-                            // and retried; never copy a partial DWG.
-                            using var input = new FileStream(
-                                file, FileMode.Open, FileAccess.Read,
-                                FileShare.None, 128 * 1024, FileOptions.SequentialScan);
-                            if (input.Length == 0 || input.Length != version.Item1)
+                            // Avoid accessing source DWGs while Plant 3D may
+                            // still be finishing native save/reopen passes.
+                            if ((now - first.SeenAt).TotalSeconds < 4 ||
+                                (now - new DateTime(
+                                    System.Threading.Interlocked.Read(
+                                        ref lastNativeChangeTicks),
+                                    DateTimeKind.Utc)).TotalSeconds < 5)
                                 continue;
 
                             Directory.CreateDirectory(targetRoot);
                             string destination = Path.Combine(
                                 targetRoot, Path.GetFileName(file));
 
-                            // Never overwrite existing user output. Retain
-                            // previous REV32 _copyN collision behavior.
+                            // REV47: preserve existing custom outputs exactly.
+                            // No _copyN suffix and no silent overwrite.
                             if (File.Exists(destination))
                             {
-                                string stem = Path.GetFileNameWithoutExtension(file);
-                                string extension = Path.GetExtension(file);
-                                int n = 1;
-                                while (File.Exists(destination))
-                                {
-                                    if (n > 9999)
-                                        throw new IOException(
-                                            "Too many existing target copies.");
-                                    destination = Path.Combine(
-                                        targetRoot, stem + "_copy" + n++ + extension);
-                                }
+                                processedFiles.Add(file);
+                                skipped++;
+                                lastProcessed = now;
+                                continue;
                             }
 
-                            string temp = destination + ".sptc-part";
-                            if (File.Exists(temp))
-                                File.Delete(temp);
+                            // NO exclusive source lock: the previous
+                            // FileShare.None handle could block Autodesk
+                            // while it was generating/saving the DWG.
+                            using var input = new FileStream(
+                                file, FileMode.Open, FileAccess.Read,
+                                FileShare.ReadWrite | FileShare.Delete,
+                                128 * 1024, FileOptions.SequentialScan);
+                            if (input.Length != version.Size)
+                                continue;
 
-                            try
+                            temp = destination + ".sptc-part-" +
+                                   Guid.NewGuid().ToString("N");
+                            await using (var output = new FileStream(
+                                temp, FileMode.CreateNew, FileAccess.Write,
+                                FileShare.None, 128 * 1024,
+                                FileOptions.SequentialScan))
                             {
-                                await using (var output = new FileStream(
-                                    temp, FileMode.CreateNew, FileAccess.Write,
-                                    FileShare.None, 128 * 1024,
-                                    FileOptions.SequentialScan))
-                                {
-                                    await input.CopyToAsync(output, 128 * 1024)
-                                        .ConfigureAwait(false);
-                                    await output.FlushAsync().ConfigureAwait(false);
-                                }
-
-                                // Same-directory rename gives the final DWG
-                                // name only after all copy bytes are flushed.
-                                File.Move(temp, destination);
+                                await input.CopyToAsync(output, 128 * 1024)
+                                    .ConfigureAwait(false);
+                                await output.FlushAsync().ConfigureAwait(false);
                             }
-                            finally
+
+                            // Reject a snapshot if Autodesk edited the DWG
+                            // while we were reading it. Never publish a
+                            // potentially incomplete or mid-write copy.
+                            var after = new FileInfo(file);
+                            if (after.Length != version.Size ||
+                                after.LastWriteTimeUtc.Ticks != version.Modified ||
+                                input.Length != version.Size)
                             {
-                                if (File.Exists(temp))
-                                    File.Delete(temp);
+                                observed.Remove(file);
+                                System.Threading.Interlocked.Exchange(
+                                    ref lastNativeChangeTicks,
+                                    DateTime.UtcNow.Ticks);
+                                continue;
                             }
 
-                            copiedVersions[file] = version;
+                            // Same-folder atomic publish, fail if a target
+                            // appeared concurrently. Never overwrite.
+                            File.Move(temp, destination);
+                            temp = null;
+                            processedFiles.Add(file);
                             copied++;
-                            lastCopy = DateTime.UtcNow;
+                            lastProcessed = DateTime.UtcNow;
                             _copyProgress.Enqueue(Path.GetFileName(destination));
                         }
-                        catch (IOException) { skipped++; }
-                        catch (UnauthorizedAccessException) { skipped++; }
+                        catch (IOException)
+                        {
+                            // Autodesk may still be writing or locking this
+                            // DWG. Retry later without competing for an
+                            // exclusive source handle or creating duplicates.
+                        }
+                        catch (UnauthorizedAccessException)
+                        {
+                            // Retry a locked/network project file later.
+                        }
+                        finally
+                        {
+                            if (temp is not null)
+                            {
+                                try { if (File.Exists(temp)) File.Delete(temp); }
+                                catch (IOException) { }
+                                catch (UnauthorizedAccessException) { }
+                            }
+                        }
                     }
                 }
                 catch (IOException)
                 {
-                    if ((DateTime.UtcNow - start).TotalMinutes > 2 && copied == 0)
+                    if ((DateTime.UtcNow - start).TotalMinutes > 2 &&
+                        copied == 0 && skipped == 0)
                         throw;
                 }
                 catch (UnauthorizedAccessException) { throw; }
 
-                if (copied > 0 &&
-                    (DateTime.UtcNow - lastCopy).TotalSeconds >= 25)
+                if ((copied > 0 || skipped > 0) &&
+                    (DateTime.UtcNow - lastProcessed).TotalSeconds >= 25)
                     break;
 
-                // An event can wake us instantly, but never depend on it:
-                // a short periodic fallback covers SMB drives and missed
-                // notifications without blocking the native UI.
+                // FileSystemWatcher is a hint, not a guarantee. SMB drives
+                // are supported with a low-cost periodic fallback.
                 await wake.WaitAsync(TimeSpan.FromMilliseconds(650))
                     .ConfigureAwait(false);
             }
