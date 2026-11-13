@@ -80,6 +80,19 @@ internal static class NativeIsoLineSelectOverlay
     // All/Current/Folder mode switch. Never force Create.Enabled.
     private static System.Windows.Forms.Timer? _modeRecoveryTimer;
     private static int _modeRecoverySerial;
+    // REV66: preserve selected ROUTE NAMES across Autodesk's manual filter
+    // rebuilds. The old REV65 counter only counted current visible rows,
+    // and Autodesk dropped checked state while replacing its filtered list.
+    private static readonly HashSet<string> SessionSelectedTags =
+        new(StringComparer.OrdinalIgnoreCase);
+    private static CheckedListBox? _trackedNativeList;
+    private static TextBoxBase? _trackedNativeSearch;
+    private static int _gestureIndex = -1;
+    private static string _gestureTag = "";
+    private static bool _restoringSelection;
+    private static string _lastNativeRowSignature = "";
+    private static string _lastRestoredRowSignature = "";
+    private static int _stableNativePolls;
 
     public static void Attach(IntPtr dialog)
     {
@@ -129,6 +142,7 @@ internal static class NativeIsoLineSelectOverlay
         Position(dialog);
         _host.Show();
 
+        EnsureSelectionTracking();
         UpdateDisplayedCount();
         _countTimer = new System.Windows.Forms.Timer { Interval = 800 };
         _countTimer.Tick += (_, _) => UpdateDisplayedCount();
@@ -184,11 +198,16 @@ internal static class NativeIsoLineSelectOverlay
         if (!string.Equals(_toggle.Text, caption, StringComparison.Ordinal))
             _toggle.Text = caption;
 
-        // REV65: Selected means actually CHECKED in the current list,
-        // never merely blue-highlighted. Folder mode uses visible
-        // projected native-backed rows, not unrelated hidden project tags.
+        // REV66: the actual selected route TAGS persist across search
+        // views. Current screen may show 0 checks even though earlier
+        // searches selected other routes. Folder projections retain their
+        // existing visible-only selection semantics for ISO safety.
+        EnsureSelectionTracking();
+        ReconcileVisibleNativeSelection();
         int? checkedCount = ProjectFolderLinePicker.VisibleCheckedCount ??
-                            ReadNativeCheckedCount(_dialog);
+            (_trackedNativeList is { IsDisposed: false }
+                ? SessionSelectedTags.Count
+                : ReadNativeCheckedCount(_dialog));
         if (_selectedCountLabel is { IsDisposed: false } selectedLabel)
         {
             string selectedText = checkedCount.HasValue
@@ -294,19 +313,14 @@ internal static class NativeIsoLineSelectOverlay
 
     public static string[] CaptureSelectedTags(IntPtr dialog)
     {
+        if (dialog != _dialog || dialog == IntPtr.Zero)
+            return Array.Empty<string>();
+        EnsureSelectionTracking();
         var list = FindNativeCheckedList(dialog);
         if (list != null)
-        {
-            var tags = new List<string>();
-            for (int i = 0; i < list.Items.Count; i++)
-                if (list.GetItemChecked(i))
-                {
-                    string name = list.GetItemText(list.Items[i]).Trim();
-                    if (name.Length > 0) tags.Add(name);
-                }
-            return tags.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-        }
-        return Array.Empty<string>();
+            foreach (var tag in ReadCheckedTags(list))
+                SessionSelectedTags.Add(tag);
+        return SessionSelectedTags.ToArray();
     }
 
     public static void ScheduleModeChangeRecovery(
@@ -315,9 +329,14 @@ internal static class NativeIsoLineSelectOverlay
         if (dialog == IntPtr.Zero || dialog != _dialog)
             return;
 
+        foreach (string name in selectedBefore)
+            if (!string.IsNullOrWhiteSpace(name))
+                SessionSelectedTags.Add(name);
         var previous = new HashSet<string>(
-            selectedBefore.Where(s => !string.IsNullOrWhiteSpace(s)),
-            StringComparer.OrdinalIgnoreCase);
+            SessionSelectedTags, StringComparer.OrdinalIgnoreCase);
+        _lastRestoredRowSignature = "";
+        _lastNativeRowSignature = "";
+        _stableNativePolls = 0;
         try { _modeRecoveryTimer?.Stop(); _modeRecoveryTimer?.Dispose(); }
         catch (Exception) { }
         int serial = ++_modeRecoverySerial;
@@ -1133,6 +1152,11 @@ internal static class NativeIsoLineSelectOverlay
         catch { }
         _modeRecoveryTimer = null;
         _modeRecoverySerial++;
+        DetachSelectionTracking();
+        SessionSelectedTags.Clear();
+        _lastNativeRowSignature = "";
+        _lastRestoredRowSignature = "";
+        _stableNativePolls = 0;
         _dialog = IntPtr.Zero;
         try { _countTimer?.Stop(); } catch { }
         try { _countTimer?.Dispose(); } catch { }
