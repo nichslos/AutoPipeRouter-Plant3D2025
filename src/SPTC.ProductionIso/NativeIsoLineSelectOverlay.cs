@@ -102,6 +102,12 @@ internal static class NativeIsoLineSelectOverlay
     private static string _lastNativeRowSignature = "";
     private static string _lastRestoredRowSignature = "";
     private static int _stableNativePolls;
+    // REV70: once the exact current-DWG row is verified and restored,
+    // suppress periodic writes to that unchanged native checkbox row.
+    // Screen Snip temporarily suspends the competing UI timers, which
+    // explains why it looked steady after capture. This latch removes
+    // that timer competition without changing the saved Selected count.
+    private static string _settledActiveRoute = "";
 
     public static void Attach(IntPtr dialog)
     {
@@ -382,6 +388,7 @@ internal static class NativeIsoLineSelectOverlay
             _lastNativeRowSignature = "";
             _lastRestoredRowSignature = "";
             _stableNativePolls = 0;
+            _settledActiveRoute = "";
         }
 
         if (_trackedNativeSearch == null)
@@ -424,6 +431,7 @@ internal static class NativeIsoLineSelectOverlay
         _lastNativeRowSignature = "";
         _lastRestoredRowSignature = "";
         _stableNativePolls = 0;
+        _settledActiveRoute = "";
         _gestureIndex = -1;
         _gestureTag = "";
         _gestureBefore = null;
@@ -433,6 +441,7 @@ internal static class NativeIsoLineSelectOverlay
     {
         if (_dialog != dialog || dialog == IntPtr.Zero) return;
         _scopeSwitchPending = true;
+        _settledActiveRoute = "";
         _selectionEpoch++;
         _gestureIndex = -1;
         _gestureTag = "";
@@ -451,6 +460,7 @@ internal static class NativeIsoLineSelectOverlay
     {
         if (_dialog != dialog || dialog == IntPtr.Zero) return;
         _scopeSwitchPending = false;
+        _settledActiveRoute = "";
         _lastNativeRowSignature = "";
         _stableNativePolls = 0;
     }
@@ -633,6 +643,18 @@ internal static class NativeIsoLineSelectOverlay
             ProjectFolderLinePicker.HasVisibleProjection ||
             _trackedNativeList is not { IsDisposed: false } list ||
             list.Items.Count == 0)
+            return;
+
+        // REV70: the exact Active-DWG row was already reconciled ONE TIME
+        // after Autodesk's list stopped changing. Rewriting its checkbox
+        // on each 800ms Selected counter tick causes repeated blinking
+        // while the native filter still owns that row. A new manual query,
+        // toolbar mode switch or replacement native list resets this latch.
+        if (_settledActiveRoute.Length > 0 &&
+            ActiveDwgTags.IsNativeFilterCurrent(_dialog) &&
+            list.Items.Count == 1 &&
+            list.GetItemText(list.Items[0]).Trim().Equals(
+                _settledActiveRoute, StringComparison.OrdinalIgnoreCase))
             return;
 
         // Include the exact native list contents and editable search term.
@@ -824,12 +846,19 @@ internal static class NativeIsoLineSelectOverlay
                 }
                 finally { _restoringSelection = false; }
 
-                // REV69: once the native list names have stabilized and
-                // all exact-tag checks have been reconciled, finish this
-                // mode change immediately. The normal, lightweight
-                // selection tracker can handle any later actual list
-                // replacement; a second/third mode recovery repaint is
-                // neither necessary nor desirable.
+                // REV70: a single exact current-DWG row has reached the
+                // intended state. Keep the Selected counter timer passive
+                // for this native row until the user changes scope/query.
+                // This avoids repeatedly fighting Autodesk's own timer.
+                if (ActiveDwgTags.IsNativeFilterCurrent(dialog) &&
+                    list.Items.Count == 1)
+                {
+                    string exactTag = list.GetItemText(list.Items[0]).Trim();
+                    if (previous.Contains(exactTag) &&
+                        list.GetItemChecked(0))
+                        _settledActiveRoute = exactTag;
+                }
+
                 UpdateSelectedLabel();
                 Stop();
             }
@@ -1570,6 +1599,7 @@ internal static class NativeIsoLineSelectOverlay
         DetachSelectionTracking();
         SessionSelectedTags.Clear();
         _initialNativeSelectionImported = false;
+        _settledActiveRoute = "";
         _lastNativeRowSignature = "";
         _lastRestoredRowSignature = "";
         _stableNativePolls = 0;
