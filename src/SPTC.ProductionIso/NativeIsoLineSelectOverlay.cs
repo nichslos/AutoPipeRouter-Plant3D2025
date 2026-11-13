@@ -1133,6 +1133,24 @@ internal static class NativeIsoLineSelectOverlay
         finally { _restoringSelection = false; }
     }
 
+    // In-memory signature of the ORIGINAL native list's tag names,
+    // NOT the one-row active/folder projection. Used only for waiting
+    // until Autodesk's own All Project refresh has finished.
+    public static string NativeRouteNameSignature(IntPtr dialog)
+    {
+        if (dialog == IntPtr.Zero || dialog != _dialog ||
+            ProjectFolderLinePicker.HasVisibleProjection)
+            return "";
+        CheckedListBox? list = FindNativeCheckedList(dialog);
+        if (list == null || list.IsDisposed || list.Items.Count == 0)
+            return "";
+        var signature = new StringBuilder(list.Items.Count * 18);
+        for (int i = 0; i < list.Items.Count; i++)
+            signature.Append(list.GetItemText(list.Items[i]).Trim())
+                     .Append('\u001f');
+        return signature.ToString();
+    }
+
     // REV79: prepare the ORIGINAL Autodesk selection for a single Create
     // click, regardless of the search/Active/Folder view used while the
     // user chose the routes. Never fabricate list items or force Create.
