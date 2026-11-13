@@ -292,10 +292,16 @@ internal static class NativeIsoLineSelectOverlay
         // existing visible-only selection semantics for ISO safety.
         EnsureSelectionTracking();
         ReconcileVisibleNativeSelection();
-        int? checkedCount = ProjectFolderLinePicker.VisibleCheckedCount ??
-            (_trackedNativeList is { IsDisposed: false }
-                ? SessionSelectedTags.Count
-                : ReadNativeCheckedCount(_dialog));
+        // REV77: Active Drawing exact projection displays just one native-
+        // backed route, but Selected:N must still report the session total
+        // (e.g. A-08 + five previously selected CAP_BF routes = six).
+        // Folder mode intentionally keeps its scoped checked count.
+        int? checkedCount = ProjectFolderLinePicker.ActiveDwgView
+            ? SessionSelectedTags.Count
+            : ProjectFolderLinePicker.VisibleCheckedCount ??
+              (_trackedNativeList is { IsDisposed: false }
+                  ? SessionSelectedTags.Count
+                  : ReadNativeCheckedCount(_dialog));
         if (_selectedCountLabel is { IsDisposed: false } selectedLabel)
         {
             string selectedText = checkedCount.HasValue
@@ -787,6 +793,33 @@ internal static class NativeIsoLineSelectOverlay
         timer.Start();
     }
 
+    // REV77: exactly verified active line is presented by a native-backed
+    // projection WITHOUT deleting/reindexing Autodesk checklist entries.
+    // No active checkbox click timers are required: projection delegates
+    // a genuine user click to the original Autodesk row's existing index.
+    public static bool IsSessionTagSelected(string tag) =>
+        !string.IsNullOrWhiteSpace(tag) && SessionSelectedTags.Contains(tag);
+
+    public static void CompleteActiveProjectionScope(
+        IntPtr dialog, string exactTag)
+    {
+        if (_dialog != dialog || dialog == IntPtr.Zero ||
+            !ProjectFolderLinePicker.ActiveDwgView ||
+            !ProjectFolderLinePicker.HasVisibleProjection ||
+            string.IsNullOrWhiteSpace(exactTag))
+            return;
+
+        CancelActiveCommit();
+        _scopeSwitchPending = false;
+        _settledActiveRoute = "";
+        _lastNativeRowSignature = "";
+        _stableNativePolls = 0;
+        _countTimer?.Stop();
+        UpdateDisplayedCount();
+        WriteDiagnostic("REV77: native-backed exact active view " +
+            exactTag + "; original checklist row indices preserved.");
+    }
+
     public static void ResumeNativeSelectionPolling(IntPtr dialog)
     {
         if (_dialog != dialog || dialog == IntPtr.Zero) return;
@@ -1009,8 +1042,10 @@ internal static class NativeIsoLineSelectOverlay
         if (_selectedCountLabel is { IsDisposed: false } label)
         {
             string caption = "Selected: " +
-                (ProjectFolderLinePicker.VisibleCheckedCount ??
-                    SessionSelectedTags.Count);
+                (ProjectFolderLinePicker.ActiveDwgView
+                    ? SessionSelectedTags.Count
+                    : ProjectFolderLinePicker.VisibleCheckedCount ??
+                      SessionSelectedTags.Count);
             if (label.Text != caption)
                 label.Text = caption;
         }
