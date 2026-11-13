@@ -475,7 +475,7 @@ internal static class NativeIsoDialogEnhancer
                 if (_createPreflightFilter is null)
                 {
                     _createPreflightFilter = new CreateClickPreflightFilter();
-                    Application.AddMessageFilter(_createPreflightFilter);
+                    System.Windows.Forms.Application.AddMessageFilter(_createPreflightFilter);
                 }
                 return false;
             }
@@ -510,7 +510,7 @@ internal static class NativeIsoDialogEnhancer
 
         if (_createPreflightFilter != null)
         {
-            Application.RemoveMessageFilter(_createPreflightFilter);
+            System.Windows.Forms.Application.RemoveMessageFilter(_createPreflightFilter);
             _createPreflightFilter = null;
         }
         _swallowCreateMouseUp = false;
