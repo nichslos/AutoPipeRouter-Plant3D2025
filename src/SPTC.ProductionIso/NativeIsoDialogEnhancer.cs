@@ -603,7 +603,13 @@ internal static class NativeIsoDialogEnhancer
 
             if (!_autoCreatePending &&
                 !TryGetCreateSelectionMismatch(_native, out _))
+            {
+                // A NEW explicit valid native Create action after a prior
+                // failed batch resets the failure latch. The filter is run
+                // before the button's WinForms MouseDown/Click handlers.
+                _batchPreparationFailed = false;
                 return false;
+            }
 
             if (mouseDown) _swallowCreateMouseUp = true;
             _createRequested = false;
@@ -694,6 +700,11 @@ internal static class NativeIsoDialogEnhancer
         // REV64: treat only an actual Create button action as authorization
         // to monitor/copy. Never infer Create merely from dialog closure.
         if (_createRequested) return;
+        // REV80: a FAILED automatic attempt can trigger a delayed
+        // WinForms Create.MouseDown/Click notification. Never convert
+        // that stale event into a legitimate ISO generation request.
+        if (_batchPreparationFailed && !_autoCreateSubmitting)
+            return;
         // The ordinary Create button is intercepted before its native
         // handler whenever a filtered view hides saved tags. An automatic
         // invocation is permitted ONLY after all requested names have been
@@ -724,6 +735,34 @@ internal static class NativeIsoDialogEnhancer
         // MouseDown. Capture before Autodesk's own Click closes the form.
         if (e.KeyCode == Keys.Enter || e.KeyCode == Keys.Space)
             CaptureBeforeNativeCreate(sender, e);
+    }
+
+    private static void TrackNativeCancelClose(IntPtr dialog)
+    {
+        // REV80: don't leave a preparation timer alive after Cancel/X/Esc.
+        // FormClosed also covers closing via Alt+F4 and Autodesk's X.
+        if (_nativeParentForm is null &&
+            Control.FromHandle(dialog) is Form nativeForm &&
+            !nativeForm.IsDisposed)
+        {
+            _nativeParentForm = nativeForm;
+            nativeForm.FormClosed += OnNativeFormClosed;
+        }
+        if (_nativeCancelButton is { IsDisposed: false }) return;
+        EnumChildWindows(dialog, (hwnd, _) =>
+        {
+            if (Control.FromHandle(hwnd) is Button button &&
+                !button.IsDisposed &&
+                WindowText(hwnd).Trim().Equals("Cancel",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                _nativeCancelButton = button;
+                button.MouseDown += OnNativeCancelAction;
+                button.Click += OnNativeCancelAction;
+                return false;
+            }
+            return true;
+        }, IntPtr.Zero);
     }
 
     private static void TrackNativeCreateButton(IntPtr dialog)
@@ -759,6 +798,7 @@ internal static class NativeIsoDialogEnhancer
     {
         CaptureNativeOverwrite(dialog);
         TrackNativeCreateButton(dialog);
+        TrackNativeCancelClose(dialog);
         if (_overwriteTracker != null) return;
         _overwriteTracker = new System.Windows.Forms.Timer
         {
@@ -770,6 +810,7 @@ internal static class NativeIsoDialogEnhancer
                 return;
             CaptureNativeOverwrite(dialog);
             TrackNativeCreateButton(dialog);
+            TrackNativeCancelClose(dialog);
         };
         _overwriteTracker.Start();
     }
@@ -786,7 +827,18 @@ internal static class NativeIsoDialogEnhancer
             _createPreflightFilter = null;
         }
         _swallowCreateMouseUp = false;
+        // A failed/canceled auto-preparation never authorizes a watcher.
+        if (_batchPreparationFailed) _createRequested = false;
         StopAutoCreate();
+        if (_nativeCancelButton is { IsDisposed: false } cancel)
+        {
+            cancel.MouseDown -= OnNativeCancelAction;
+            cancel.Click -= OnNativeCancelAction;
+        }
+        _nativeCancelButton = null;
+        if (_nativeParentForm is { IsDisposed: false } form)
+            form.FormClosed -= OnNativeFormClosed;
+        _nativeParentForm = null;
         if (_nativeCreateButton is { IsDisposed: false } create)
         {
             create.MouseDown -= CaptureBeforeNativeCreate;
@@ -834,6 +886,7 @@ internal static class NativeIsoDialogEnhancer
         _resultsSeen = false;
         _nativeClosedAt = DateTime.MinValue;
         _createRequested = false;
+        _batchPreparationFailed = false;
         // REV09: discover active DWG line-group tags but do not filter
         // the native list until the user explicitly clicks a top mode icon.
         // REV22: do not scan every model component while opening the dialog.
@@ -1111,6 +1164,11 @@ internal static class NativeIsoDialogEnhancer
             {
                 DetachNativeOverwriteTracker();
                 RemoveOverlay();
+
+                // REV80: failure/cancellation is not a native generation
+                // request, even if Autodesk emitted a delayed button Click.
+                if (_batchPreparationFailed)
+                    _createRequested = false;
 
                 // REV64: Cancel / X / Esc closes exactly the same Autodesk
                 // dialog as Create. Never run the custom copier if Create
