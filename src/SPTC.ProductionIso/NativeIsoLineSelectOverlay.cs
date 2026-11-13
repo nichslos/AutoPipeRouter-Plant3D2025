@@ -108,6 +108,19 @@ internal static class NativeIsoLineSelectOverlay
     // explains why it looked steady after capture. This latch removes
     // that timer competition without changing the saved Selected count.
     private static string _settledActiveRoute = "";
+    // REV73: a separate, ONE-SHOT native checkbox commit AFTER Autodesk's
+    // Filter.TextChanged/index remapping has settled. No repeating
+    // checked/unchecked writes: stops blink and validates Create normally.
+    private static System.Windows.Forms.Timer? _activeCommitTimer;
+    private static int _activeCommitSerial;
+
+    private static void CancelActiveCommit()
+    {
+        try { _activeCommitTimer?.Stop(); _activeCommitTimer?.Dispose(); }
+        catch (Exception) { }
+        _activeCommitTimer = null;
+        _activeCommitSerial++;
+    }
 
     public static void Attach(IntPtr dialog)
     {
@@ -432,6 +445,7 @@ internal static class NativeIsoLineSelectOverlay
         _lastRestoredRowSignature = "";
         _stableNativePolls = 0;
         _settledActiveRoute = "";
+        CancelActiveCommit();
         // REV72: a manual query change resumes the regular selection
         // tracker. Active-only idle mode must never affect a new search.
         if (_countTimer is { Enabled: false }) _countTimer.Start();
@@ -445,6 +459,7 @@ internal static class NativeIsoLineSelectOverlay
         if (_dialog != dialog || dialog == IntPtr.Zero) return;
         _scopeSwitchPending = true;
         _settledActiveRoute = "";
+        CancelActiveCommit();
         // Re-enable regular monitoring before the All/Current button
         // changes the native checklist.
         if (_countTimer is { Enabled: false }) _countTimer.Start();
@@ -474,6 +489,7 @@ internal static class NativeIsoLineSelectOverlay
         if (_dialog != dialog || dialog == IntPtr.Zero) return;
         _scopeSwitchPending = false;
         _settledActiveRoute = "";
+        CancelActiveCommit();
         if (_countTimer is { Enabled: false }) _countTimer.Start();
         _lastNativeRowSignature = "";
         _stableNativePolls = 0;
@@ -499,28 +515,12 @@ internal static class NativeIsoLineSelectOverlay
                 exactTag, StringComparison.OrdinalIgnoreCase))
             return;
 
-        bool selected = SessionSelectedTags.Contains(exactTag);
-        try
-        {
-            _restoringSelection = true;
-            if (list.GetItemChecked(0) != selected)
-                list.SetItemChecked(0, selected);
-            // Do not clear and reselect an already focused native row;
-            // this was visible as blinking in REV68-REV70.
-            if (selected && list.SelectedIndex < 0)
-                list.SelectedIndex = 0;
-            else if (!selected && list.SelectedIndex >= 0)
-                list.ClearSelected();
-        }
-        catch (Exception ex)
-        {
-            WriteDiagnostic("REV71 fast active restore: " +
-                ex.GetBaseException().Message);
-            return; // keep pending for the next exact-filter retry
-        }
-        finally { _restoringSelection = false; }
-
-        // Done; later count-timer ticks are read-only for this exact row.
+        // REV73: do NOT immediately check an Autodesk item while the
+        // native Filter may still be committing its own checkbox/index
+        // state. REV72 latched that premature checkbox value and then
+        // stopped monitoring, leaving A-08 unchecked and Create disabled.
+        // Let the native list settle, then do at most ONE guarded native
+        // checkbox click, never a periodic check/uncheck loop.
         _settledActiveRoute = exactTag;
         _scopeSwitchPending = false;
         _lastNativeRowSignature = "";
@@ -531,17 +531,134 @@ internal static class NativeIsoLineSelectOverlay
         // keyboard check events update Selected: N immediately.
         UpdateDisplayedCount();
         _countTimer?.Stop();
+        ScheduleFinalActiveCheckboxCommit(dialog, exactTag);
+    }
+
+    // REV73: SINGLE deferred native check for an exact, user-selected
+    // current-DWG tag. Existing Autodesk control and Click handlers remain
+    // authoritative; never assign Create.Enabled or invent a route row.
+    private static void ScheduleFinalActiveCheckboxCommit(
+        IntPtr dialog, string exactTag)
+    {
+        CancelActiveCommit();
+        int serial = _activeCommitSerial;
+        int generation = _generation;
+        int attempts = 0;
+        string lastTag = "";
+        bool lastChecked = false;
+        int stableSamples = 0;
+        var timer = new System.Windows.Forms.Timer { Interval = 160 };
+        _activeCommitTimer = timer;
+        void Stop()
+        {
+            try { timer.Stop(); timer.Dispose(); }
+            catch (Exception) { }
+            if (ReferenceEquals(_activeCommitTimer, timer))
+                _activeCommitTimer = null;
+        }
+        timer.Tick += (_, _) =>
+        {
+            if (_dialog != dialog || generation != _generation ||
+                _activeCommitSerial != serial ||
+                !ActiveDwgTags.IsNativeFilterCurrent(dialog) ||
+                ProjectFolderLinePicker.HasVisibleProjection)
+            {
+                Stop();
+                return;
+            }
+            if (++attempts > 8) // Bounded; never hang/repaint indefinitely.
+            {
+                WriteDiagnostic("REV73: active route native check did " +
+                    "not stabilize; no automatic click performed.");
+                Stop();
+                return;
+            }
+            CheckedListBox? list = FindNativeCheckedList(dialog);
+            if (list is null || list.IsDisposed || list.Items.Count != 1)
+                return;
+            string visibleTag = list.GetItemText(list.Items[0]).Trim();
+            if (!visibleTag.Equals(exactTag, StringComparison.OrdinalIgnoreCase))
+                return;
+            bool checkedNow = list.GetItemChecked(0);
+            if (!string.Equals(lastTag, visibleTag, StringComparison.Ordinal) ||
+                checkedNow != lastChecked)
+            {
+                lastTag = visibleTag;
+                lastChecked = checkedNow;
+                stableSamples = 0;
+                return;
+            }
+            if (++stableSamples < 2) return;
+
+            Stop();
+            // The route may have been manually unchecked while this
+            // timer was waiting. Read the real saved intent NOW.
+            bool shouldCheck = SessionSelectedTags.Contains(exactTag);
+            if (shouldCheck == checkedNow)
+            {
+                // Checkbox is already correct. Leave it untouched.
+                Button? existingCreate = FindNativeCreateButton(dialog);
+                WriteDiagnostic("REV73: active " + exactTag +
+                    " native checked=" + checkedNow +
+                    ", Create=" +
+                    (existingCreate?.Enabled.ToString() ?? "unknown") +
+                    " (no checkbox mutation).");
+                return;
+            }
+
+            _restoringSelection = true;
+            _scopeSwitchPending = true;
+            _selectionEpoch++;
+            try
+            {
+                if (shouldCheck)
+                {
+                    // Use ONE original native checkbox mouse action.
+                    // SetItemChecked alone can appear checked without
+                    // engaging Autodesk's Create validation; an actual
+                    // checkbox event is required on this dialog.
+                    ClickNativeCheckedRow(list, 0, exactTag);
+                }
+                else
+                    list.SetItemChecked(0, false);
+            }
+            catch (Exception ex)
+            {
+                WriteDiagnostic("REV73 final native check: " +
+                    ex.GetBaseException().Message);
+            }
+            finally
+            {
+                _gestureIndex = -1;
+                _gestureTag = "";
+                _gestureBefore = null;
+                _selectionEpoch++;
+                _scopeSwitchPending = false;
+                _restoringSelection = false;
+            }
+            Button? create = FindNativeCreateButton(dialog);
+            WriteDiagnostic("REV73: active " + exactTag +
+                " native checked=" + list.GetItemChecked(0) +
+                ", Create=" + (create?.Enabled.ToString() ?? "unknown") +
+                " after one native validation click.");
+            UpdateSelectedLabel();
+        };
+        timer.Start();
     }
 
     public static void ResumeNativeSelectionPolling(IntPtr dialog)
     {
         if (_dialog != dialog || dialog == IntPtr.Zero) return;
         _settledActiveRoute = "";
+        CancelActiveCommit();
         if (_countTimer is { Enabled: false }) _countTimer.Start();
     }
 
     private static void BeginUserGesture(CheckedListBox list, int index)
     {
+        // Never classify the guarded SPTC native commit as a USER gesture.
+        if (_restoringSelection || _scopeSwitchPending) return;
+        CancelActiveCommit();
         if (!ReferenceEquals(_trackedNativeList, list) ||
             index < 0 || index >= list.Items.Count) return;
         _gestureIndex = index;
@@ -1662,6 +1779,7 @@ internal static class NativeIsoLineSelectOverlay
     public static void Hide()
     {
         _generation++;
+        CancelActiveCommit();
         try { _firstRowRetry?.Stop(); _firstRowRetry?.Dispose(); }
         catch { }
         _firstRowRetry = null;
