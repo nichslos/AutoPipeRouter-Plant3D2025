@@ -1257,6 +1257,13 @@ internal static class NativeIsoLineSelectOverlay
     {
         try { _firstRowRetry?.Stop(); _firstRowRetry?.Dispose(); }
         catch { }
+        // REV67: delayed row-zero retry belongs ONLY to this native
+        // filter result. If Autodesk repopulates the list meanwhile,
+        // it must not check an unrelated line by the same row INDEX.
+        string firstTagAtSchedule = native.Items.Count > 0
+            ? native.GetItemText(native.Items[0]).Trim() : "";
+        int countAtSchedule = native.Items.Count;
+        string searchAtSchedule = _trackedNativeSearch?.Text ?? "";
         var timer = new System.Windows.Forms.Timer { Interval = 160 };
         _firstRowRetry = timer;
         timer.Tick += (_, _) =>
@@ -1265,7 +1272,12 @@ internal static class NativeIsoLineSelectOverlay
             timer.Dispose();
             if (ReferenceEquals(_firstRowRetry, timer)) _firstRowRetry = null;
             if (_generation != generation || _dialog != parent ||
-                native.IsDisposed || native.Items.Count == 0)
+                native.IsDisposed || native.Items.Count == 0 ||
+                native.Items.Count != countAtSchedule ||
+                !native.GetItemText(native.Items[0]).Trim().Equals(
+                    firstTagAtSchedule, StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(_trackedNativeSearch?.Text ?? "",
+                    searchAtSchedule, StringComparison.Ordinal))
                 return;
             try
             {
