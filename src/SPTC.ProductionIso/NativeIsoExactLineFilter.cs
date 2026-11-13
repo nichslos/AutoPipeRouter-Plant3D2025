@@ -54,6 +54,8 @@ internal static class NativeIsoExactLineFilter
     // Results/selection reconciliation for an unchanged native row.
     private static bool _steadyExact;
     private static object? _steadyItem;
+    private static int _steadyNativeRowCount;
+    private static int _steadyExactIndex;
     // REV46: one bounded alternative text query; still validate and retain
     // ONLY the exact full line number from Autodesk's original checklist.
     private static bool _fallbackApplied;
@@ -72,6 +74,8 @@ internal static class NativeIsoExactLineFilter
         _readyReported = false;
         _steadyExact = false;
         _steadyItem = null;
+        _steadyNativeRowCount = 0;
+        _steadyExactIndex = -1;
         _activeFilterWatch = Stopwatch.StartNew();
 
         if (_dialog == IntPtr.Zero || _tag.Length == 0) return;
@@ -88,176 +92,118 @@ internal static class NativeIsoExactLineFilter
         if (_working || _dialog == IntPtr.Zero || _tag.Length == 0) return;
         if (!ActiveDwgTags.IsNativeFilterCurrent(_dialog))
         {
-            // REV42: manual editing is allowed. Restore previously pruned
-            // native objects only if their saved identity/row-count checks
-            // still match. End() already refuses stale restoration after
-            // Autodesk has rebuilt the list for the new search term.
-            End(restore: true);
+            // The user changed the search manually. Drop ONLY our Active
+            // projection and return the native Autodesk list to the user;
+            // no original checked-list item was ever removed.
+            if (ProjectFolderLinePicker.ActiveDwgView)
+                ProjectFolderLinePicker.ClearVisibleProjection();
+            IntPtr oldDialog = _dialog;
+            End(restore: false);
+            NativeIsoLineSelectOverlay.ResumeNativeSelectionPolling(oldDialog);
             return;
         }
 
         _working = true;
         try
         {
-            if (_steadyExact)
-            {
-                // A successful native exact filter is STATIC. Previously
-                // REV31-71 still enumerated, verified, and potentially
-                // rebuilt this same checklist every 1.2 seconds.
-                // That periodic native interaction can cause perpetual
-                // checkbox repaint contention with Autodesk's own timer.
-                if (TryFindNativeList(_dialog, out var steadyBox,
-                    out var steadyView))
-                {
-                    object? row = steadyBox is { IsDisposed: false } cb &&
-                        cb.Items.Count == 1
-                            ? cb.Items[0]
-                            : steadyView is { IsDisposed: false } lv &&
-                                lv.Items.Count == 1
-                                    ? lv.Items[0] : null;
-                    string rowTag = steadyBox is { IsDisposed: false } bc &&
-                        bc.Items.Count == 1
-                            ? bc.GetItemText(bc.Items[0]).Trim()
-                            : steadyView is { IsDisposed: false } vc &&
-                                vc.Items.Count == 1
-                                    ? vc.Items[0].Text.Trim() : "";
-                    if (row != null && ReferenceEquals(row, _steadyItem) &&
-                        rowTag.Equals(_tag, StringComparison.OrdinalIgnoreCase))
-                        return; // read-only; do not touch selection or paint
-                }
-                // Actual native list replacement: re-enable normal
-                // selection tracking before the existing validation runs.
-                _steadyExact = false;
-                _steadyItem = null;
-                NativeIsoLineSelectOverlay.ResumeNativeSelectionPolling(_dialog);
-            }
-
             if (!TryFindNativeList(_dialog, out var box, out var view))
             {
-                RetryOrRollback("Native checkbox list is not available.");
+                RetryOrRollback("Original native checkbox list unavailable.");
                 return;
             }
-
-            if (box != null && box.DataSource != null)
-            {
-                Rollback("Native list is data-bound; in-memory exact trimming is unsafe.");
+            // REV77 intentionally DOES NOT remove native list items: it
+            // preserves Autodesk's source row-index -> line data mapping.
+            // That mapping was broken by REV31's Items.RemoveAt pruning,
+            // explaining checked=False even after two real native clicks.
+            if (box is { IsDisposed: true } ||
+                view is { IsDisposed: true })
                 return;
-            }
-            if (view != null && view.VirtualMode)
-            {
-                Rollback("Native list uses virtual rows; exact trimming is unsafe.");
-                return;
-            }
 
             var rows = box != null
                 ? Enumerable.Range(0, box.Items.Count)
                     .Select(i => (Index: i,
                         Text: box.GetItemText(box.Items[i]).Trim(),
-                        Item: box.Items[i]!,
-                        Check: box.GetItemCheckState(i))).ToList()
+                        Item: box.Items[i]!)).ToList()
                 : Enumerable.Range(0, view!.Items.Count)
                     .Select(i => (Index: i,
                         Text: view.Items[i].Text.Trim(),
-                        Item: (object)view.Items[i],
-                        Check: view.Items[i].Checked
-                            ? CheckState.Checked : CheckState.Unchecked)).ToList();
-
-            // Autodesk can briefly have no items during its filter refresh.
-            if (rows.Count == 0 || !rows.Any(r =>
-                r.Text.Equals(_tag, StringComparison.OrdinalIgnoreCase)))
+                        Item: (object)view.Items[i])).ToList();
+            var exact = rows.Where(r => r.Text.Equals(
+                _tag, StringComparison.OrdinalIgnoreCase)).ToArray();
+            if (exact.Length != 1)
             {
-                RetryOrRollback("No exact native line item for " + _tag + ".");
+                if (_steadyExact)
+                {
+                    ProjectFolderLinePicker.ClearVisibleProjection();
+                    _steadyExact = false;
+                    _steadyItem = null;
+                    NativeIsoLineSelectOverlay.ResumeNativeSelectionPolling(
+                        _dialog);
+                }
+                RetryOrRollback(exact.Length == 0
+                    ? "No exact native line item for " + _tag + "."
+                    : "Ambiguous duplicate exact native rows for " + _tag + ".");
                 return;
             }
 
-            List<(int Index, string Text, object Item, CheckState Check)> extras =
-                rows.Where(r => !r.Text.Equals(_tag,
-                    StringComparison.OrdinalIgnoreCase)).ToList();
-
-            bool viewChanged = extras.Count > 0 || _state == null;
-            if (extras.Count > 0)
+            if (_steadyExact)
             {
-                // If native TextChanged regenerated the collection, abandon
-                // the previous stale snapshot and take a new one.
-                var next = new PrunedState { Checked = box, View = view,
-                    Retained = rows.Count - extras.Count };
-                foreach (var extra in extras)
-                    next.Removed.Add(new RemovedRow(
-                        extra.Index, extra.Item, extra.Check));
-                next.Survivors.AddRange(rows.Where(r =>
-                    r.Text.Equals(_tag, StringComparison.OrdinalIgnoreCase))
-                    .Select(r => r.Item));
+                // Idempotent read-only health check. If Autodesk replaces
+                // the native rows or moves the exact item to another index,
+                // rebuild the small projection using the CURRENT indices.
+                if (ProjectFolderLinePicker.ActiveDwgView &&
+                    rows.Count == _steadyNativeRowCount &&
+                    exact[0].Index == _steadyExactIndex &&
+                    ReferenceEquals(exact[0].Item, _steadyItem))
+                    return;
 
-                if (box != null)
-                {
-                    box.BeginUpdate();
-                    try
-                    {
-                        foreach (var extra in extras.OrderByDescending(r => r.Index))
-                            box.Items.RemoveAt(extra.Index);
-                    }
-                    finally { box.EndUpdate(); }
-                }
-                else if (view != null)
-                {
-                    view.BeginUpdate();
-                    try
-                    {
-                        foreach (var extra in extras.OrderByDescending(r => r.Index))
-                            view.Items.RemoveAt(extra.Index);
-                    }
-                    finally { view.EndUpdate(); }
-                }
-
-                _state = next;
-                _document?.Editor.WriteMessage(
-                    "\nSPTC REV31: Exact native filter " + _tag +
-                    " — hidden " + extras.Count +
-                    " substring-only line(s); real Autodesk checklist retained.");
+                ProjectFolderLinePicker.ClearVisibleProjection();
+                _steadyExact = false;
+                _steadyItem = null;
+                NativeIsoLineSelectOverlay.ResumeNativeSelectionPolling(_dialog);
             }
-            else if (_state is null)
+
+            // The exact active route is displayed using the EXISTING
+            // folder-style native-backed projection: a one-row visible list
+            // delegates mouse/keyboard selection to the REAL Autodesk row
+            // at its unchanged index in the original broad-filter results.
+            // All unrelated substring matches remain in the original list
+            // but unchecked, never passed to ISO creation.
+            if (!ProjectFolderLinePicker.ShowExactActiveDwgTags(
+                new[] { _tag }, _document))
             {
-                // Native filter was exact already. No items were mutated.
-                _state = new PrunedState { Checked = box, View = view,
-                    Retained = rows.Count };
-                _state.Survivors.AddRange(rows.Select(r => r.Item));
+                RetryOrRollback(
+                    "Native-backed exact view could not bind " + _tag + ".");
+                return;
             }
 
             _attempts = 0;
-            // REV72: after successful exact validation, convert the
-            // recurring filter timer to a slow, READ-ONLY health check.
-            // Identity comparison detects genuine native list replacement.
-            _steadyItem = box is { Items.Count: 1 }
-                ? box.Items[0] : view is { Items.Count: 1 }
-                    ? view.Items[0] : null;
-            _steadyExact = _steadyItem != null;
-            if (_timer != null) _timer.Interval = _steadyExact ? 2500 : 1200;
-            // REV71: the exact Autodesk native checklist is ready NOW.
-            // Restore its saved checked state immediately instead of
-            // waiting for the separate 350ms/350ms/350ms mode timer.
-            // Method is a no-op if this was already finalized.
-            NativeIsoLineSelectOverlay.CompleteActiveScopeAfterExactFilter(
+            _steadyExact = true;
+            _steadyItem = exact[0].Item;
+            _steadyExactIndex = exact[0].Index;
+            _steadyNativeRowCount = rows.Count;
+            if (_timer != null) _timer.Interval = 2500;
+
+            // This completes the current-DWG mode transition. No more
+            // synthetic checkbox-click attempts on a reindexed native list.
+            NativeIsoLineSelectOverlay.CompleteActiveProjectionScope(
                 _dialog, _tag);
+
             if (!_readyReported)
             {
                 _readyReported = true;
                 _activeFilterWatch?.Stop();
                 _document?.Editor.WriteMessage(
-                    "\nSPTC REV71: active exact line ready in " +
+                    "\nSPTC REV77: exact native-backed active route " + _tag +
+                    " ready in " +
                     (_activeFilterWatch?.ElapsedMilliseconds ?? 0) +
-                    " ms (native filter + SPTC exact validation).");
+                    " ms; " + rows.Count +
+                    " original Autodesk result row(s) retained.");
             }
-            // REV70: on steady exact-filter ticks do NOT unnecessarily
-            // retrigger the Selected counter / checkbox reconciliation
-            // while Autodesk is painting the same single-row results.
-            // If Autodesk actually repopulates/prunes the native list,
-            // the update still runs for the changed view.
-            if (viewChanged)
-                NativeIsoLineSelectOverlay.UpdateDisplayedCount();
         }
         catch (Exception ex)
         {
-            Rollback("Native exact-filter UI update failed: " +
+            Rollback("REV77 native-backed exact view failed: " +
                 ex.GetBaseException().Message);
         }
         finally { _working = false; }
@@ -325,7 +271,9 @@ internal static class NativeIsoExactLineFilter
         }
         IntPtr dialog = _dialog;
         Document? doc = _document;
-        End(restore: true);
+        if (ProjectFolderLinePicker.ActiveDwgView)
+            ProjectFolderLinePicker.ClearVisibleProjection();
+        End(restore: false);
         // When an active exact match cannot be verified, release the
         // selection-scope guard rather than leaving the native UI frozen.
         NativeIsoLineSelectOverlay.CancelScopeSwitch(dialog);
@@ -353,6 +301,8 @@ internal static class NativeIsoExactLineFilter
         _attempts = 0;
         _steadyExact = false;
         _steadyItem = null;
+        _steadyNativeRowCount = 0;
+        _steadyExactIndex = -1;
 
         if (!restore || state == null || state.Removed.Count == 0)
             return;
