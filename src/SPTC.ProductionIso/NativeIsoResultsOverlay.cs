@@ -38,6 +38,10 @@ internal static class NativeIsoResultsOverlay
     private static extern bool IsWindow(IntPtr hwnd);
     [DllImport("user32.dll")]
     private static extern bool PostMessage(IntPtr hwnd, uint msg, IntPtr wp, IntPtr lp);
+    // Match Windows Explorer's numeric (natural) filename order, so
+    // -1, -2, ..., -9, -10, -11 rather than -1, -10, -11, -2.
+    [DllImport("shlwapi.dll", CharSet = CharSet.Unicode)]
+    private static extern int StrCmpLogicalW(string first, string second);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern int GetClassName(IntPtr hwnd, StringBuilder name, int capacity);
     [DllImport("user32.dll", EntryPoint = "SendMessageW", CharSet = CharSet.Unicode)]
@@ -241,6 +245,27 @@ internal static class NativeIsoResultsOverlay
                 ExpectedIsoTags.Add(tag.Trim());
         _displaySignature = ""; // selected route set may have changed
     }
+
+    // REV63: display-only sorting. Does not rename/move native or custom
+    // drawings and never reads other folders. Restrict to already verified
+    // SPTC CopiedPaths for this ISO session.
+    private static int CompareIsoDwgPaths(string a, string b)
+    {
+        int result = StrCmpLogicalW(
+            Path.GetFileName(a), Path.GetFileName(b));
+        return result != 0 ? result :
+            StringComparer.OrdinalIgnoreCase.Compare(a, b);
+    }
+
+    private static readonly IComparer<string> NaturalIsoFileOrder =
+        Comparer<string>.Create(CompareIsoDwgPaths);
+
+    private static List<string> ResultsForRoute(string tag) =>
+        CopiedPaths.Where(path =>
+            File.Exists(path) &&
+            MatchesIsoName(Path.GetFileName(path), tag))
+        .OrderBy(path => path, NaturalIsoFileOrder)
+        .ToList();
 
     private static bool MatchesIsoName(string fileName, string tag)
     {
@@ -483,9 +508,7 @@ internal static class NativeIsoResultsOverlay
         {
             string? tag = ExtractRoute(parent.Text);
             if (tag is null) continue;
-            List<string> matched = CopiedPaths.Where(p =>
-                File.Exists(p) &&
-                MatchesIsoName(Path.GetFileName(p), tag)).ToList();
+            List<string> matched = ResultsForRoute(tag);
             if (matched.Count > 0) desired[parent] = matched;
         }
 
@@ -902,9 +925,7 @@ internal static class NativeIsoResultsOverlay
         {
             string? tag = ExtractRoute(NativeItemText(tree, parent));
             if (tag is null) continue;
-            var paths = CopiedPaths.Where(p =>
-                File.Exists(p) && MatchesIsoName(
-                    Path.GetFileName(p), tag)).ToList();
+            var paths = ResultsForRoute(tag);
             if (paths.Count > 0) required[parent] = paths;
         }
 
@@ -932,56 +953,64 @@ internal static class NativeIsoResultsOverlay
 
         foreach (var (parent, paths) in required)
         {
-            bool HasLink(string path, bool openFolder) =>
-                _winLinks.Values.Any(link =>
-                    link.Parent == parent &&
-                    link.OpenFolder == openFolder &&
-                    link.Path.Equals(path, StringComparison.OrdinalIgnoreCase));
+            // The native Win32 tree keeps insertion order. Checking only
+            // for missing links (REV62) left earlier lexical ordering intact,
+            // even when PathsForRoute was subsequently natural-sorted.
+            // Compare ACTUAL child order against expected numeric order.
+            var expectedItems = paths.Select(path =>
+                (Path: path, OpenFolder: false)).ToList();
+            expectedItems.Add((Path: paths[0], OpenFolder: true));
 
-            // If more split sheets appear after the first custom DWG,
-            // move the existing folder row to the bottom of the group.
-            // Without this, it would stay between two custom DWG links.
-            bool missingFile = paths.Any(path => !HasLink(path, false));
-            var folders = _winLinks.Values
-                .Where(link => link.Parent == parent && link.OpenFolder)
-                .ToList();
-            if (missingFile || folders.Count > 1)
+            var actualItems = new List<NativeCustomLink>();
+            IntPtr child = WinNext(tree, TVGN_CHILD, parent);
+            for (int index = 0;
+                 child != IntPtr.Zero && index < 10000; index++)
             {
-                foreach (NativeCustomLink folder in folders)
-                {
-                    if (NativeItemText(tree, folder.Item).Equals(
-                            NativeLinkLabel(folder.Path, true),
-                            StringComparison.Ordinal))
-                        SendNative(tree, TVM_DELETEITEM, IntPtr.Zero, folder.Item);
-                    _winLinks.Remove(folder.Item);
-                    itemsChanged = true;
-                }
+                if (_winLinks.TryGetValue(child, out var entry) &&
+                    entry.Parent == parent)
+                    actualItems.Add(entry);
+                child = WinNext(tree, TVGN_NEXT, child);
             }
 
-            // N custom DWGs first; all use original native formatting.
+            bool needsReorder = actualItems.Count != expectedItems.Count ||
+                actualItems.Where((item, index) =>
+                    item.OpenFolder != expectedItems[index].OpenFolder ||
+                    !item.Path.Equals(expectedItems[index].Path,
+                        StringComparison.OrdinalIgnoreCase)).Any();
+
+            if (!needsReorder)
+                continue;
+
+            // Remove ONLY our exact SPTC links. Native Autodesk File and
+            // Explorer items are never touched; no scrollbar or pane edits.
+            foreach (NativeCustomLink old in _winLinks.Values
+                .Where(item => item.Parent == parent).ToList())
+            {
+                if (NativeItemText(tree, old.Item).Equals(
+                        NativeLinkLabel(old.Path, old.OpenFolder),
+                        StringComparison.Ordinal))
+                    SendNative(tree, TVM_DELETEITEM,
+                        IntPtr.Zero, old.Item);
+                _winLinks.Remove(old.Item);
+            }
+
+            // N custom DWG links in Windows Explorer numeric order.
             foreach (string path in paths)
             {
-                if (HasLink(path, false)) continue;
-                IntPtr created = InsertNativeLink(tree, parent, path, false);
-                if (created == IntPtr.Zero) continue;
-                _winLinks[created] = new NativeCustomLink(
-                    created, parent, path, false);
-                itemsChanged = true;
+                IntPtr created = InsertNativeLink(
+                    tree, parent, path, false);
+                if (created != IntPtr.Zero)
+                    _winLinks[created] = new NativeCustomLink(
+                        created, parent, path, false);
             }
 
-            // Exactly one clickable Explorer folder link at the end,
-            // for one or many split-sheet DWGs from the same route.
-            if (!HasLink(paths[0], true))
-            {
-                IntPtr created = InsertNativeLink(
-                    tree, parent, paths[0], true);
-                if (created != IntPtr.Zero)
-                {
-                    _winLinks[created] = new NativeCustomLink(
-                        created, parent, paths[0], true);
-                    itemsChanged = true;
-                }
-            }
+            // Exactly ONE custom Explorer-folder link after the last DWG.
+            IntPtr folderItem = InsertNativeLink(
+                tree, parent, paths[0], true);
+            if (folderItem != IntPtr.Zero)
+                _winLinks[folderItem] = new NativeCustomLink(
+                    folderItem, parent, paths[0], true);
+            itemsChanged = true;
         }
 
         if (itemsChanged)
