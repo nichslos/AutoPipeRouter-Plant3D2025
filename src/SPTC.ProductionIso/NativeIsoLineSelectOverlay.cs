@@ -239,6 +239,12 @@ internal static class NativeIsoLineSelectOverlay
             ? Math.Clamp(currentBounds.Width, 160, available)
             : Math.Min(294, available);
 
+        // Resize the hosting HWND BEFORE setting child bounds. WinForms
+        // Anchor=Right adjusts child positions during parent resizing;
+        // laying children out first would apply the delta twice.
+        SetWindowPos(_host.Handle, IntPtr.Zero, left, top, width, 29,
+            SWP_NOACTIVATE | SWP_NOZORDER | SWP_SHOWWINDOW);
+
         // Keep Select All LEFT; align Selected N RIGHT (just before the
         // native list's right edge/scrollbar). Allow enough width for
         // 3+ digit totals without overlapping the checkbox at normal sizes.
@@ -258,8 +264,6 @@ internal static class NativeIsoLineSelectOverlay
             _selectedCountLabel.SetBounds(
                 labelLeft, 4, labelWidth, 23);
         }
-        SetWindowPos(_host.Handle, IntPtr.Zero, left, top, width, 29,
-            SWP_NOACTIVATE | SWP_NOZORDER | SWP_SHOWWINDOW);
     }
 
     // REV17: "Select All (N)" counts the lines currently displayed, not
