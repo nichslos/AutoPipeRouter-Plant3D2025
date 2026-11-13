@@ -95,6 +95,12 @@ internal static class NativeIsoDialogEnhancer
     private static bool _autoCreatePending;
     private static bool _autoCreateSubmitting;
     private static string[] _autoCreateTags = Array.Empty<string>();
+    // REV80: canceled/failed auto Create must NEVER be mistaken for a
+    // successful native Create after dialog Close; otherwise a network
+    // DWG watcher can run for up to ten minutes without an ISO job.
+    private static bool _batchPreparationFailed;
+    private static Button? _nativeCancelButton;
+    private static Form? _nativeParentForm;
     private static bool _overwriteFound;
     private static string _overwriteSource = "not detected";
     private static System.Windows.Forms.Timer? _overwriteTracker;
@@ -298,10 +304,41 @@ internal static class NativeIsoDialogEnhancer
         _autoCreateTags = Array.Empty<string>();
     }
 
+    private static void AbortAutoCreate()
+    {
+        StopAutoCreate();
+        _batchPreparationFailed = true;
+        _createRequested = false;
+        _selectedIsoTags.Clear();
+    }
+
+    private static void OnNativeCancelAction(object? sender, EventArgs e)
+    {
+        // Abort immediately, not at the next one-second dialog poll.
+        // A canceled or closed dialog cannot authorize custom copying.
+        if (_autoCreatePending)
+        {
+            AbortAutoCreate();
+            _document?.Editor.WriteMessage(
+                "\nSPTC REV80: canceled pending ISO batch selection; " +
+                "auto-create timer stopped; no custom-copy watcher.");
+        }
+    }
+
+    private static void OnNativeFormClosed(object? sender, FormClosedEventArgs e)
+    {
+        if (_autoCreatePending)
+            OnNativeCancelAction(sender, e);
+    }
+
     private static void ShowAutoCreateFailure(string problem)
     {
+        // Failure is terminal for THIS attempted click; do not allow a
+        // delayed native MouseDown/Click to flag a nonexistent ISO run.
+        _batchPreparationFailed = true;
+        _createRequested = false;
         _document?.Editor.WriteMessage(
-            "\nSPTC REV79: Batch Create not started: " + problem);
+            "\nSPTC REV80: Batch Create not started: " + problem);
         try
         {
             MessageBox.Show(_overlay,
@@ -334,6 +371,7 @@ internal static class NativeIsoDialogEnhancer
         if (requested.Length == 0) return;
 
         StopAutoCreate();
+        _batchPreparationFailed = false;
         _autoCreatePending = true;
         _autoCreateTags = requested;
         int serial = _autoCreateSerial;
@@ -345,9 +383,13 @@ internal static class NativeIsoDialogEnhancer
         {
             nativeCreate.BeginInvoke((MethodInvoker)(() =>
             {
-                if (!_autoCreatePending || _autoCreateSerial != serial ||
-                    _native != dialog || !IsWindow(dialog))
+                if (_autoCreateSerial != serial) return;
+                if (!_autoCreatePending || _native != dialog ||
+                    !IsWindow(dialog))
+                {
+                    AbortAutoCreate();
                     return;
+                }
 
                 try
                 {
@@ -356,7 +398,7 @@ internal static class NativeIsoDialogEnhancer
                     NativeIsoExactLineFilter.End(restore: true);
                     if (!ActiveDwgTags.ClearOneTag(dialog, _document))
                     {
-                        StopAutoCreate();
+                        AbortAutoCreate();
                         NativeIsoLineSelectOverlay.CancelScopeSwitch(dialog);
                         ShowAutoCreateFailure(
                             "Autodesk's native line filter could not be cleared.");
@@ -375,7 +417,7 @@ internal static class NativeIsoDialogEnhancer
                 }
                 catch (Exception ex)
                 {
-                    StopAutoCreate();
+                    AbortAutoCreate();
                     NativeIsoLineSelectOverlay.CancelScopeSwitch(dialog);
                     ShowAutoCreateFailure(ex.GetBaseException().Message);
                     return;
@@ -391,20 +433,27 @@ internal static class NativeIsoDialogEnhancer
 
                 timer.Tick += (_, _) =>
                 {
-                    if (_autoCreateSerial != serial || !_autoCreatePending ||
-                        _native != dialog || !IsWindow(dialog) ||
+                    if (_autoCreateSerial != serial)
+                    {
+                        try { timer.Stop(); timer.Dispose(); }
+                        catch (Exception) { }
+                        return;
+                    }
+                    if (!_autoCreatePending || _native != dialog ||
+                        !IsWindow(dialog) ||
                         _nativeCreateButton is not { IsDisposed: false } create)
                     {
-                        StopAutoCreate();
+                        AbortAutoCreate();
                         return;
                     }
                     if (++polls > 35) // bounded: no background looping
                     {
-                        string issue = "Only " + matched + " of " +
-                            requested.Length + " selected route(s) appeared " +
-                            "in the original Autodesk list, or native " +
-                            "Create remained disabled.";
-                        StopAutoCreate();
+                        string issue = "Found " + matched + "/" +
+                            requested.Length + " route(s); native checked=" +
+                            checkedCount + "/" + requested.Length +
+                            "; Autodesk Create.Enabled=" + create.Enabled +
+                            ". Stopped automatic batch preparation.";
+                        AbortAutoCreate();
                         NativeIsoLineSelectOverlay.CancelScopeSwitch(dialog);
                         ShowAutoCreateFailure(issue);
                         return;
@@ -423,7 +472,7 @@ internal static class NativeIsoDialogEnhancer
                                 current, StringComparer.OrdinalIgnoreCase)
                                 .SetEquals(requested))
                         {
-                            StopAutoCreate();
+                            AbortAutoCreate();
                             NativeIsoLineSelectOverlay.CancelScopeSwitch(dialog);
                             ShowAutoCreateFailure(
                                 "Selected line numbers changed during Create.");
@@ -482,7 +531,7 @@ internal static class NativeIsoDialogEnhancer
                     }
                     catch (Exception ex)
                     {
-                        StopAutoCreate();
+                        AbortAutoCreate();
                         NativeIsoLineSelectOverlay.CancelScopeSwitch(dialog);
                         ShowAutoCreateFailure(
                             "Native Create validation failed: " +
@@ -494,7 +543,7 @@ internal static class NativeIsoDialogEnhancer
         }
         catch (Exception ex)
         {
-            StopAutoCreate();
+            AbortAutoCreate();
             ShowAutoCreateFailure(ex.GetBaseException().Message);
         }
     }
