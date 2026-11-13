@@ -189,7 +189,10 @@ internal static class NativeIsoLineSelectOverlay
             Height = 23,
             AutoSize = false,
             Font = SystemFonts.MessageBoxFont,
-            TextAlign = ContentAlignment.MiddleLeft
+            TextAlign = ContentAlignment.MiddleRight,
+            // REV75: keep the Selected counter at the far right of the
+            // resizable Line Numbers pane, not next to Select All.
+            Anchor = AnchorStyles.Top | AnchorStyles.Right
         };
         _host.Controls.Add(_selectedCountLabel);
 
@@ -226,20 +229,41 @@ internal static class NativeIsoLineSelectOverlay
             top = Math.Min(dialogRect.Height - 116, listBounds.Bottom + 5);
         }
 
-        // REV65: present the selected count beside Select All, inside
-        // the original Display Lines panel; no additional dialog height.
-        int width = Math.Min(294,
-            TryFindLineListBounds(dialog, out RECT currentBounds)
-                ? Math.Max(160, currentBounds.Width) : 294);
-        if (_toggle != null && _selectedCountLabel != null)
-        {
-            int toggleWidth = Math.Min(149, Math.Max(109, width / 2));
-            _toggle.Width = toggleWidth;
-            _selectedCountLabel.Left = toggleWidth + 4;
-            _selectedCountLabel.Width = Math.Max(30, width - toggleWidth - 4);
-        }
+        // REV75: the native line-list width grows/shrinks with the
+        // horizontally stretched "Display lines" pane. Previously this
+        // host was capped at 294px, so "Selected: N" stayed fixed near
+        // Select All while the native scrollbar moved to the right.
+        // Size the host to the LIVE native list width instead.
+        int available = Math.Max(160, dialogRect.Width - left - 10);
+        int width = TryFindLineListBounds(dialog, out RECT currentBounds)
+            ? Math.Clamp(currentBounds.Width, 160, available)
+            : Math.Min(294, available);
+
+        // Resize the hosting HWND BEFORE setting child bounds. WinForms
+        // Anchor=Right adjusts child positions during parent resizing;
+        // laying children out first would apply the delta twice.
         SetWindowPos(_host.Handle, IntPtr.Zero, left, top, width, 29,
             SWP_NOACTIVATE | SWP_NOZORDER | SWP_SHOWWINDOW);
+
+        // Keep Select All LEFT; align Selected N RIGHT (just before the
+        // native list's right edge/scrollbar). Allow enough width for
+        // 3+ digit totals without overlapping the checkbox at normal sizes.
+        if (_toggle != null && _selectedCountLabel != null)
+        {
+            const int rightPadding = 9;
+            int textWidth = TextRenderer.MeasureText(
+                _selectedCountLabel.Text,
+                _selectedCountLabel.Font,
+                Size.Empty,
+                TextFormatFlags.NoPadding | TextFormatFlags.SingleLine).Width;
+            int desiredLabelWidth = Math.Max(88, textWidth + 6);
+            int labelWidth = Math.Min(desiredLabelWidth,
+                Math.Max(51, width - 109 - rightPadding));
+            int labelLeft = Math.Max(0, width - rightPadding - labelWidth);
+            _toggle.Width = Math.Min(149, Math.Max(75, labelLeft - 5));
+            _selectedCountLabel.SetBounds(
+                labelLeft, 4, labelWidth, 23);
+        }
     }
 
     // REV17: "Select All (N)" counts the lines currently displayed, not
