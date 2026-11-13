@@ -472,8 +472,11 @@ internal static class NativeIsoDialogEnhancer
                 button.MouseDown += CaptureBeforeNativeCreate;
                 button.KeyDown += OnNativeCreateKeyDown;
                 button.Click += CaptureBeforeNativeCreate;
-                _createPreflightFilter ??= new CreateClickPreflightFilter();
-                Application.AddMessageFilter(_createPreflightFilter);
+                if (_createPreflightFilter is null)
+                {
+                    _createPreflightFilter = new CreateClickPreflightFilter();
+                    Application.AddMessageFilter(_createPreflightFilter);
+                }
                 return false;
             }
             return true;
