@@ -49,6 +49,11 @@ internal static class NativeIsoExactLineFilter
     private static bool _diagnosticWritten;
     private static Stopwatch? _activeFilterWatch;
     private static bool _readyReported;
+    // REV72: only a read-only health check runs after exact Active-DWG
+    // validation. No recurring Items.RemoveAt(), SetItemChecked() or
+    // Results/selection reconciliation for an unchanged native row.
+    private static bool _steadyExact;
+    private static object? _steadyItem;
     // REV46: one bounded alternative text query; still validate and retain
     // ONLY the exact full line number from Autodesk's original checklist.
     private static bool _fallbackApplied;
@@ -65,6 +70,8 @@ internal static class NativeIsoExactLineFilter
         _fallbackApplied = false;
         _fallbackQuery = "";
         _readyReported = false;
+        _steadyExact = false;
+        _steadyItem = null;
         _activeFilterWatch = Stopwatch.StartNew();
 
         if (_dialog == IntPtr.Zero || _tag.Length == 0) return;
@@ -92,6 +99,39 @@ internal static class NativeIsoExactLineFilter
         _working = true;
         try
         {
+            if (_steadyExact)
+            {
+                // A successful native exact filter is STATIC. Previously
+                // REV31-71 still enumerated, verified, and potentially
+                // rebuilt this same checklist every 1.2 seconds.
+                // That periodic native interaction can cause perpetual
+                // checkbox repaint contention with Autodesk's own timer.
+                if (TryFindNativeList(_dialog, out var steadyBox,
+                    out var steadyView))
+                {
+                    object? row = steadyBox is { IsDisposed: false } cb &&
+                        cb.Items.Count == 1
+                            ? cb.Items[0]
+                            : steadyView is { IsDisposed: false } lv &&
+                                lv.Items.Count == 1
+                                    ? lv.Items[0] : null;
+                    string rowTag = steadyBox is { IsDisposed: false } bc &&
+                        bc.Items.Count == 1
+                            ? bc.GetItemText(bc.Items[0]).Trim()
+                            : steadyView is { IsDisposed: false } vc &&
+                                vc.Items.Count == 1
+                                    ? vc.Items[0].Text.Trim() : "";
+                    if (row != null && ReferenceEquals(row, _steadyItem) &&
+                        rowTag.Equals(_tag, StringComparison.OrdinalIgnoreCase))
+                        return; // read-only; do not touch selection or paint
+                }
+                // Actual native list replacement: re-enable normal
+                // selection tracking before the existing validation runs.
+                _steadyExact = false;
+                _steadyItem = null;
+                NativeIsoLineSelectOverlay.ResumeNativeSelectionPolling(_dialog);
+            }
+
             if (!TryFindNativeList(_dialog, out var box, out var view))
             {
                 RetryOrRollback("Native checkbox list is not available.");
@@ -184,7 +224,14 @@ internal static class NativeIsoExactLineFilter
             }
 
             _attempts = 0;
-            if (_timer != null) _timer.Interval = 1200;
+            // REV72: after successful exact validation, convert the
+            // recurring filter timer to a slow, READ-ONLY health check.
+            // Identity comparison detects genuine native list replacement.
+            _steadyItem = box is { Items.Count: 1 }
+                ? box.Items[0] : view is { Items.Count: 1 }
+                    ? view.Items[0] : null;
+            _steadyExact = _steadyItem != null;
+            if (_timer != null) _timer.Interval = _steadyExact ? 2500 : 1200;
             // REV71: the exact Autodesk native checklist is ready NOW.
             // Restore its saved checked state immediately instead of
             // waiting for the separate 350ms/350ms/350ms mode timer.
@@ -304,6 +351,8 @@ internal static class NativeIsoExactLineFilter
         _tag = "";
         _document = null;
         _attempts = 0;
+        _steadyExact = false;
+        _steadyItem = null;
 
         if (!restore || state == null || state.Removed.Count == 0)
             return;

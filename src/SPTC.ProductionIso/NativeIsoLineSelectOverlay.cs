@@ -432,6 +432,9 @@ internal static class NativeIsoLineSelectOverlay
         _lastRestoredRowSignature = "";
         _stableNativePolls = 0;
         _settledActiveRoute = "";
+        // REV72: a manual query change resumes the regular selection
+        // tracker. Active-only idle mode must never affect a new search.
+        if (_countTimer is { Enabled: false }) _countTimer.Start();
         _gestureIndex = -1;
         _gestureTag = "";
         _gestureBefore = null;
@@ -442,6 +445,9 @@ internal static class NativeIsoLineSelectOverlay
         if (_dialog != dialog || dialog == IntPtr.Zero) return;
         _scopeSwitchPending = true;
         _settledActiveRoute = "";
+        // Re-enable regular monitoring before the All/Current button
+        // changes the native checklist.
+        if (_countTimer is { Enabled: false }) _countTimer.Start();
         // REV71: abort any obsolete recovery window when changing scope.
         // Active mode will be finalized directly when its exact native
         // route is verified, not via 3 x 350ms repaint polling.
@@ -468,6 +474,7 @@ internal static class NativeIsoLineSelectOverlay
         if (_dialog != dialog || dialog == IntPtr.Zero) return;
         _scopeSwitchPending = false;
         _settledActiveRoute = "";
+        if (_countTimer is { Enabled: false }) _countTimer.Start();
         _lastNativeRowSignature = "";
         _stableNativePolls = 0;
     }
@@ -518,7 +525,19 @@ internal static class NativeIsoLineSelectOverlay
         _scopeSwitchPending = false;
         _lastNativeRowSignature = "";
         _stableNativePolls = 0;
+        // Refresh the visible count just ONCE, then stop the 800ms
+        // periodic enumeration and state reconciliation while the
+        // verified single Active-DWG row stays on-screen. Real mouse/
+        // keyboard check events update Selected: N immediately.
         UpdateDisplayedCount();
+        _countTimer?.Stop();
+    }
+
+    public static void ResumeNativeSelectionPolling(IntPtr dialog)
+    {
+        if (_dialog != dialog || dialog == IntPtr.Zero) return;
+        _settledActiveRoute = "";
+        if (_countTimer is { Enabled: false }) _countTimer.Start();
     }
 
     private static void BeginUserGesture(CheckedListBox list, int index)
