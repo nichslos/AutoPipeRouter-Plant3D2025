@@ -88,6 +88,13 @@ internal static class NativeIsoDialogEnhancer
     private static IntPtr _nativeOverwriteHandle;
     private static CreateClickPreflightFilter? _createPreflightFilter;
     private static bool _swallowCreateMouseUp;
+    // REV79: full-batch Create from ANY filtered view. Selection intent
+    // is the exact tag ledger, not the visible native subset.
+    private static System.Windows.Forms.Timer? _autoCreateTimer;
+    private static int _autoCreateSerial;
+    private static bool _autoCreatePending;
+    private static bool _autoCreateSubmitting;
+    private static string[] _autoCreateTags = Array.Empty<string>();
     private static bool _overwriteFound;
     private static string _overwriteSource = "not detected";
     private static System.Windows.Forms.Timer? _overwriteTracker;
@@ -275,6 +282,218 @@ internal static class NativeIsoDialogEnhancer
         return true;
     }
 
+    private static void StopAutoCreate()
+    {
+        try { _autoCreateTimer?.Stop(); _autoCreateTimer?.Dispose(); }
+        catch (Exception) { }
+        _autoCreateTimer = null;
+        _autoCreateSerial++;
+        _autoCreatePending = false;
+        _autoCreateSubmitting = false;
+        _autoCreateTags = Array.Empty<string>();
+    }
+
+    private static void ShowAutoCreateFailure(string problem)
+    {
+        _document?.Editor.WriteMessage(
+            "\nSPTC REV79: Batch Create not started: " + problem);
+        try
+        {
+            MessageBox.Show(_overlay,
+                "Could not safely prepare all selected ISO line numbers.\n\n" +
+                problem + "\n\nThe original Create dialog remains open. " +
+                "No partial ISO batch was submitted.",
+                "SPTC Production ISO", MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+        }
+        catch (Exception) { }
+    }
+
+    // REV79: automatic one-click Create even with Current Drawing,
+    // manual text search, or a folder projection still showing. Restore
+    // the authoritative native Autodesk project-wide source, check ALL
+    // saved user-selected tags by exact name, validate the native checked
+    // set (never just Selected:N) and invoke original Create exactly once.
+    private static void BeginAutomaticBatchCreate(IntPtr dialog)
+    {
+        if (_autoCreatePending || _autoCreateSubmitting ||
+            dialog == IntPtr.Zero || dialog != _native ||
+            _nativeCreateButton is not { IsDisposed: false } nativeCreate)
+            return;
+
+        string[] requested = NativeIsoLineSelectOverlay
+            .CaptureSelectedTags(dialog)
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (requested.Length == 0) return;
+
+        StopAutoCreate();
+        _autoCreatePending = true;
+        _autoCreateTags = requested;
+        int serial = _autoCreateSerial;
+        _createRequested = false;
+
+        // Message filter has already swallowed the user's original click.
+        // Defer native UI changes until the mouse-up message is drained.
+        try
+        {
+            nativeCreate.BeginInvoke((MethodInvoker)(() =>
+            {
+                if (!_autoCreatePending || _autoCreateSerial != serial ||
+                    _native != dialog || !IsWindow(dialog))
+                    return;
+
+                try
+                {
+                    NativeIsoLineSelectOverlay.BeginScopeSwitch(dialog);
+                    ProjectFolderLinePicker.PrepareForNativeModeChange();
+                    NativeIsoExactLineFilter.End(restore: true);
+                    if (!ActiveDwgTags.ClearOneTag(dialog, _document))
+                    {
+                        StopAutoCreate();
+                        NativeIsoLineSelectOverlay.CancelScopeSwitch(dialog);
+                        ShowAutoCreateFailure(
+                            "Autodesk's native line filter could not be cleared.");
+                        return;
+                    }
+
+                    bool refreshed =
+                        NativeIsoToolbarClickFilter.TryRefreshNativeProjectList(
+                            dialog);
+                    NativeIsoToolbarClickFilter.MarkAllLinesRestored(dialog);
+                    _document?.Editor.WriteMessage(
+                        "\nSPTC REV79: Create clicked with " +
+                        requested.Length + " saved route(s); restoring " +
+                        "All Project native selection (refresh=" +
+                        refreshed + ").");
+                }
+                catch (Exception ex)
+                {
+                    StopAutoCreate();
+                    NativeIsoLineSelectOverlay.CancelScopeSwitch(dialog);
+                    ShowAutoCreateFailure(ex.GetBaseException().Message);
+                    return;
+                }
+
+                int polls = 0;
+                int stableSamples = 0;
+                int matched = 0;
+                int checkedCount = 0;
+                string lastNativeSignature = "";
+                var timer = new System.Windows.Forms.Timer { Interval = 200 };
+                _autoCreateTimer = timer;
+
+                timer.Tick += (_, _) =>
+                {
+                    if (_autoCreateSerial != serial || !_autoCreatePending ||
+                        _native != dialog || !IsWindow(dialog) ||
+                        _nativeCreateButton is not { IsDisposed: false } create)
+                    {
+                        StopAutoCreate();
+                        return;
+                    }
+                    if (++polls > 35) // bounded: no background looping
+                    {
+                        string issue = "Only " + matched + " of " +
+                            requested.Length + " selected route(s) appeared " +
+                            "in the original Autodesk list, or native " +
+                            "Create remained disabled.";
+                        StopAutoCreate();
+                        NativeIsoLineSelectOverlay.CancelScopeSwitch(dialog);
+                        ShowAutoCreateFailure(issue);
+                        return;
+                    }
+
+                    try
+                    {
+                        // If the user changed their saved selection during
+                        // the native list rebuild, do not submit a stale
+                        // batch. The Create click applies ONLY to the exact
+                        // user selection captured when they pressed it.
+                        string[] current = NativeIsoLineSelectOverlay
+                            .CaptureSelectedTags(dialog);
+                        if (current.Length != requested.Length ||
+                            !new HashSet<string>(
+                                current, StringComparer.OrdinalIgnoreCase)
+                                .SetEquals(requested))
+                        {
+                            StopAutoCreate();
+                            NativeIsoLineSelectOverlay.CancelScopeSwitch(dialog);
+                            ShowAutoCreateFailure(
+                                "Selected line numbers changed during Create.");
+                            return;
+                        }
+
+                        // Wait for the Autodesk list names to remain stable,
+                        // instead of clicking Create while a native
+                        // Filter.TextChanged refresh is still in progress.
+                        string nativeSignature = NativeIsoLineSelectOverlay
+                            .NativeRouteNameSignature(dialog);
+                        if (string.IsNullOrEmpty(nativeSignature))
+                            return;
+                        if (!nativeSignature.Equals(lastNativeSignature,
+                                StringComparison.Ordinal))
+                        {
+                            lastNativeSignature = nativeSignature;
+                            stableSamples = 0;
+                            return;
+                        }
+                        if (++stableSamples < 2)
+                            return;
+
+                        bool exact = NativeIsoLineSelectOverlay
+                            .TryApplySavedBatchToNative(dialog, requested,
+                                out matched, out checkedCount);
+                        if (!exact || checkedCount != requested.Length ||
+                            !create.Enabled)
+                            return;
+
+                        // Second native UI turn proves the full checked set
+                        // remained stable after Autodesk selection handlers.
+                        if (++stableSamples < 4)
+                            return;
+                        string[] verified = NativeCheckedRouteNames(dialog);
+                        if (verified.Length != requested.Length ||
+                            !new HashSet<string>(
+                                verified, StringComparer.OrdinalIgnoreCase)
+                                .SetEquals(requested))
+                            return;
+
+                        // End the guard: PerformClick calls the ORIGINAL
+                        // Autodesk Create handler with its real checked
+                        // rows now containing ALL selected route names.
+                        try { timer.Stop(); timer.Dispose(); } catch (Exception) { }
+                        _autoCreateTimer = null;
+                        _autoCreatePending = false;
+                        _autoCreateSubmitting = true;
+                        NativeIsoLineSelectOverlay.CancelScopeSwitch(dialog);
+                        _document?.Editor.WriteMessage(
+                            "\nSPTC REV79: verified full native Create batch " +
+                            "(" + verified.Length + " selected route(s)); " +
+                            "submitting original Autodesk Create.");
+                        try { create.PerformClick(); }
+                        finally { _autoCreateSubmitting = false; }
+                    }
+                    catch (Exception ex)
+                    {
+                        StopAutoCreate();
+                        NativeIsoLineSelectOverlay.CancelScopeSwitch(dialog);
+                        ShowAutoCreateFailure(
+                            "Native Create validation failed: " +
+                            ex.GetBaseException().Message);
+                    }
+                };
+                timer.Start();
+            }));
+        }
+        catch (Exception ex)
+        {
+            StopAutoCreate();
+            ShowAutoCreateFailure(ex.GetBaseException().Message);
+        }
+    }
+
     private static void ShowCreateSelectionWarning(string warning)
     {
         _document?.Editor.WriteMessage(
@@ -302,7 +521,7 @@ internal static class NativeIsoDialogEnhancer
         {
             if (_native == IntPtr.Zero ||
                 _nativeCreateButton is not { IsDisposed: false } create ||
-                !IsWindow(_native))
+                !IsWindow(_native) || _autoCreateSubmitting)
                 return false;
 
             bool buttonMessage = m.HWnd == create.Handle;
@@ -328,17 +547,13 @@ internal static class NativeIsoDialogEnhancer
             if (!mouseDown && !buttonKey && !parentCommand)
                 return false;
 
-            if (!TryGetCreateSelectionMismatch(_native, out string warning))
+            if (!_autoCreatePending &&
+                !TryGetCreateSelectionMismatch(_native, out _))
                 return false;
 
             if (mouseDown) _swallowCreateMouseUp = true;
             _createRequested = false;
-            // The message filter runs BEFORE Autodesk's managed/native
-            // button handler, so no single-line ISO is launched here.
-            // Defer modal warning to next UI turn after swallowing input.
-            try { create.BeginInvoke((MethodInvoker)(() =>
-                ShowCreateSelectionWarning(warning))); }
-            catch (Exception) { }
+            BeginAutomaticBatchCreate(_native);
             return true;
         }
     }
@@ -425,13 +640,16 @@ internal static class NativeIsoDialogEnhancer
         // REV64: treat only an actual Create button action as authorization
         // to monitor/copy. Never infer Create merely from dialog closure.
         if (_createRequested) return;
-        // Failsafe for programmatic Click / unusual keyboard actions that
-        // bypass the mouse prefilter: never mark this as a full-batch
-        // Create if native selection contains fewer than saved tags.
+        // The ordinary Create button is intercepted before its native
+        // handler whenever a filtered view hides saved tags. An automatic
+        // invocation is permitted ONLY after all requested names have been
+        // verified in Autodesk's original native checked list.
         if (_native != IntPtr.Zero &&
-            TryGetCreateSelectionMismatch(_native, out string issue))
+            TryGetCreateSelectionMismatch(_native, out _))
         {
-            ShowCreateSelectionWarning(issue);
+            _document?.Editor.WriteMessage(
+                "\nSPTC REV79: unverified direct native Create action; " +
+                "full saved selection was not captured for custom copying.");
             return;
         }
         _createRequested = true;
@@ -514,6 +732,7 @@ internal static class NativeIsoDialogEnhancer
             _createPreflightFilter = null;
         }
         _swallowCreateMouseUp = false;
+        StopAutoCreate();
         if (_nativeCreateButton is { IsDisposed: false } create)
         {
             create.MouseDown -= CaptureBeforeNativeCreate;
