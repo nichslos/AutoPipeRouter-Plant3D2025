@@ -918,8 +918,8 @@ internal static class NativeIsoLineSelectOverlay
                     list.Items.Count == 1 &&
                     ActiveDwgTags.IsNativeFilterCurrent(_dialog) &&
                     before != null &&
-                    before.TryGetValue(clickedTag, out bool wasChecked) &&
-                    !wasChecked && !list.GetItemChecked(0) &&
+                    before.TryGetValue(clickedTag, out bool previouslyChecked) &&
+                    !previouslyChecked && !list.GetItemChecked(0) &&
                     list.GetItemText(list.Items[0]).Trim().Equals(
                         clickedTag, StringComparison.OrdinalIgnoreCase))
                 {
