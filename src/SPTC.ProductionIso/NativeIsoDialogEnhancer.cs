@@ -563,8 +563,18 @@ internal static class NativeIsoDialogEnhancer
                             return cleared;
                         }
 
+                        // REV71: log separately the cost of the first
+                        // physical current-DWG model scan. This is the
+                        // existing scan, not an added model/database pass.
                         if (!ActiveDwgTags.HasScanned)
+                        {
+                            var scanWatch = Stopwatch.StartNew();
                             ActiveDwgTags.Scan(_document);
+                            scanWatch.Stop();
+                            _document.Editor.WriteMessage(
+                                "\nSPTC REV71: first active DWG tag scan " +
+                                scanWatch.ElapsedMilliseconds + " ms.");
+                        }
 
                         if (ActiveDwgTags.Count != 1)
                         {
@@ -586,11 +596,15 @@ internal static class NativeIsoDialogEnhancer
                             NativeIsoExactLineFilter.Begin(
                                 native, ActiveDwgTags.CurrentTags[0], _document);
                             _document.Editor.WriteMessage(
-                                "\nSPTC REV31: Exact match requested for " +
+                                "\nSPTC REV71: Exact match requested for " +
                                 ActiveDwgTags.CurrentTags[0] +
-                                "; preserving the real Autodesk checklist/Create.");
-                            NativeIsoLineSelectOverlay.ScheduleModeChangeRecovery(
-                                native, selectedBefore);
+                                "; waiting for native exact-filter validation.");
+                            // REV71: do NOT schedule 350ms mode-recovery
+                            // timer for Active DWG. NativeIsoExactLineFilter
+                            // notifies the selection overlay the moment the
+                            // single original Autodesk row is validated.
+                            // This eliminates the additional three-poll
+                            // recovery delay and competing checkbox writes.
                         }
                         else
                             NativeIsoLineSelectOverlay.CancelScopeSwitch(native);
