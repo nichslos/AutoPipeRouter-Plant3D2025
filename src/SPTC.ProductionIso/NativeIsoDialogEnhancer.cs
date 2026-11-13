@@ -265,8 +265,13 @@ internal static class NativeIsoDialogEnhancer
         string[] native = NativeCheckedRouteNames(dialog);
         var current = new HashSet<string>(
             native, StringComparer.OrdinalIgnoreCase);
+        var wanted = new HashSet<string>(
+            saved, StringComparer.OrdinalIgnoreCase);
         string[] missing = saved.Where(t => !current.Contains(t)).ToArray();
-        if (missing.Length == 0)
+        string[] unexpected = native.Where(t => !wanted.Contains(t)).ToArray();
+        // REV79: also block extra native checks left over from another
+        // search. Only the exact saved route set may be generated.
+        if (missing.Length == 0 && unexpected.Length == 0)
             return false;
 
         warning = "You selected " + saved.Length +
