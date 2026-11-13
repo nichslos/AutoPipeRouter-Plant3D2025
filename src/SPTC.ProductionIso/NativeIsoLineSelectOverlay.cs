@@ -94,6 +94,11 @@ internal static class NativeIsoLineSelectOverlay
     private static Dictionary<string, bool>? _gestureBefore;
     private static bool _initialNativeSelectionImported;
     private static bool _restoringSelection;
+    // REV68: distinguish a programmatic toolbar/filter transition from
+    // a user's checkbox click. Transition and delayed events must NEVER
+    // remove a previously selected tag such as A-08.
+    private static bool _scopeSwitchPending;
+    private static int _selectionEpoch;
     private static string _lastNativeRowSignature = "";
     private static string _lastRestoredRowSignature = "";
     private static int _stableNativePolls;
@@ -413,15 +418,41 @@ internal static class NativeIsoLineSelectOverlay
 
     private static void OnSearchFilterChanged(object? sender, EventArgs e)
     {
-        // Autodesk may destroy/recreate original checked rows on each key
-        // press. Keep our tag ledger, wait for a stable new visible list,
-        // then restore only matching selected tags in that new list.
+        // REV68: reject deferred click commits from a previous query.
+        // Search is a view change, NOT an uncheck action.
+        _selectionEpoch++;
         _lastNativeRowSignature = "";
         _lastRestoredRowSignature = "";
         _stableNativePolls = 0;
         _gestureIndex = -1;
         _gestureTag = "";
         _gestureBefore = null;
+    }
+
+    public static void BeginScopeSwitch(IntPtr dialog)
+    {
+        if (_dialog != dialog || dialog == IntPtr.Zero) return;
+        _scopeSwitchPending = true;
+        _selectionEpoch++;
+        _gestureIndex = -1;
+        _gestureTag = "";
+        _gestureBefore = null;
+        _lastNativeRowSignature = "";
+        _lastRestoredRowSignature = "";
+        _stableNativePolls = 0;
+        // A deferred Select All first-row retry belongs to the OLD list;
+        // cancel it before Autodesk replaces its native line rows.
+        try { _firstRowRetry?.Stop(); _firstRowRetry?.Dispose(); }
+        catch (Exception) { }
+        _firstRowRetry = null;
+    }
+
+    public static void CancelScopeSwitch(IntPtr dialog)
+    {
+        if (_dialog != dialog || dialog == IntPtr.Zero) return;
+        _scopeSwitchPending = false;
+        _lastNativeRowSignature = "";
+        _stableNativePolls = 0;
     }
 
     private static void BeginUserGesture(CheckedListBox list, int index)
@@ -459,7 +490,8 @@ internal static class NativeIsoLineSelectOverlay
     private static void OnNativeLineItemCheck(
         object? sender, ItemCheckEventArgs e)
     {
-        if (_restoringSelection || sender is not CheckedListBox list ||
+        if (_restoringSelection || _scopeSwitchPending ||
+            sender is not CheckedListBox list ||
             !ReferenceEquals(list, _trackedNativeList) ||
             _gestureIndex < 0 ||
             e.Index < 0 || e.Index >= list.Items.Count ||
@@ -482,6 +514,7 @@ internal static class NativeIsoLineSelectOverlay
         int clicked = _gestureIndex;
         string clickedTag = _gestureTag;
         Dictionary<string, bool>? before = _gestureBefore;
+        int commitEpoch = _selectionEpoch;
         // End the active gesture NOW: any deferred native checkbox refresh
         // must never be classified as a new user check/uncheck.
         _gestureIndex = -1;
@@ -497,7 +530,8 @@ internal static class NativeIsoLineSelectOverlay
             list.BeginInvoke((MethodInvoker)(() =>
             {
                 if (!ReferenceEquals(_trackedNativeList, list) ||
-                    list.IsDisposed ||
+                    list.IsDisposed || _scopeSwitchPending ||
+                    commitEpoch != _selectionEpoch ||
                     ProjectFolderLinePicker.HasVisibleProjection)
                     return;
 
@@ -555,7 +589,8 @@ internal static class NativeIsoLineSelectOverlay
         // Called AFTER a user-selected Select All/Clear All operation has
         // committed to the real native list. Only change route tags that
         // actually appear in the current filter; keep hidden selections.
-        if (list.IsDisposed || !ReferenceEquals(_trackedNativeList, list))
+        if (list.IsDisposed || _scopeSwitchPending ||
+            !ReferenceEquals(_trackedNativeList, list))
             return;
         for (int i = 0; i < list.Items.Count; i++)
         {
@@ -593,7 +628,8 @@ internal static class NativeIsoLineSelectOverlay
 
     private static void ReconcileVisibleNativeSelection()
     {
-        if (_restoringSelection || _gestureIndex >= 0 ||
+        if (_restoringSelection || _scopeSwitchPending ||
+            _gestureIndex >= 0 ||
             ProjectFolderLinePicker.HasVisibleProjection ||
             _trackedNativeList is not { IsDisposed: false } list ||
             list.Items.Count == 0)
@@ -676,26 +712,41 @@ internal static class NativeIsoLineSelectOverlay
         if (dialog == IntPtr.Zero || dialog != _dialog)
             return;
 
+        // REV68: the user only changed which rows are VISIBLE. Snapshot
+        // these actual TAG names; never interpret the mode-change native
+        // ItemCheck events as intentional unchecks.
+        BeginScopeSwitch(dialog);
         foreach (string name in selectedBefore)
             if (!string.IsNullOrWhiteSpace(name))
                 SessionSelectedTags.Add(name);
         var previous = new HashSet<string>(
             SessionSelectedTags, StringComparer.OrdinalIgnoreCase);
-        _lastRestoredRowSignature = "";
-        _lastNativeRowSignature = "";
-        _stableNativePolls = 0;
         try { _modeRecoveryTimer?.Stop(); _modeRecoveryTimer?.Dispose(); }
         catch (Exception) { }
         int serial = ++_modeRecoverySerial;
         int generation = _generation;
         int attempts = 0;
-        var timer = new System.Windows.Forms.Timer { Interval = 480 };
+        int stablePasses = 0;
+        int restoredPasses = 0;
+        string lastVisibleNames = "";
+        var timer = new System.Windows.Forms.Timer { Interval = 350 };
         _modeRecoveryTimer = timer;
+
         void Stop()
         {
-            try { timer.Stop(); timer.Dispose(); } catch (Exception) { }
+            try { timer.Stop(); timer.Dispose(); }
+            catch (Exception) { }
             if (ReferenceEquals(_modeRecoveryTimer, timer))
                 _modeRecoveryTimer = null;
+            if (_dialog == dialog && _generation == generation &&
+                serial == _modeRecoverySerial)
+            {
+                _scopeSwitchPending = false;
+                _lastNativeRowSignature = "";
+                _lastRestoredRowSignature = "";
+                _stableNativePolls = 0;
+                UpdateDisplayedCount();
+            }
         }
 
         timer.Tick += (_, _) =>
@@ -706,85 +757,83 @@ internal static class NativeIsoLineSelectOverlay
                 Stop();
                 return;
             }
-            if (++attempts > 4) { Stop(); return; }
+            if (++attempts > 12)
+            {
+                WriteDiagnostic("REV68: mode switch recovery ended " +
+                    "before native rows stabilized; saved route tags retained.");
+                Stop();
+                return;
+            }
 
             try
             {
-                // Do not modify a temporary folder proxy; it already has
-                // its own proven native checkbox synchronization path.
+                // Folder's own native-backed projection owns selection
+                // updates. Never touch checked rows behind that view.
                 if (ProjectFolderLinePicker.HasVisibleProjection)
                 {
-                    UpdateDisplayedCount();
                     Stop();
                     return;
                 }
 
                 CheckedListBox? list = FindNativeCheckedList(dialog);
                 if (list is null || list.IsDisposed || list.Items.Count == 0)
-                    return; // Autodesk still rebuilding its native list
+                    return;
 
-                // Restore ONLY previously checked tags still visible in
-                // the new scope. Never select hidden, unmatched, or new
-                // routes. Names are verified at their new native indices.
-                bool restored = false;
+                // Native filter and exact-current-route pruning are
+                // asynchronous. Wait until the displayed tag names stabilize
+                // before applying the saved tag-based selection.
+                var names = new StringBuilder();
                 for (int i = 0; i < list.Items.Count; i++)
+                    names.Append(list.GetItemText(list.Items[i]))
+                         .Append('\u001f');
+                string visible = names.ToString();
+                if (!visible.Equals(lastVisibleNames, StringComparison.Ordinal))
                 {
-                    string tag = list.GetItemText(list.Items[i]).Trim();
-                    if (previous.Contains(tag) && !list.GetItemChecked(i))
-                    {
-                        list.SetItemChecked(i, true);
-                        restored = true;
-                    }
+                    lastVisibleNames = visible;
+                    stablePasses = 0;
+                    return;
                 }
+                if (++stablePasses < 2)
+                    return;
 
-                int first = -1;
-                for (int i = 0; i < list.Items.Count; i++)
-                    if (list.GetItemChecked(i))
-                    {
-                        first = i;
-                        break;
-                    }
-
-                Button? create = FindNativeCreateButton(dialog);
-                if (first >= 0 && create is { Enabled: false })
+                int firstChecked = -1;
+                _restoringSelection = true;
+                try
                 {
-                    // Autodesk Create eligibility depends on the real
-                    // checkbox and selection events. Re-select first; if
-                    // necessary replay OFF->ON with native mouse events.
-                    if (list.SelectedIndex == first) list.ClearSelected();
-                    list.SelectedIndex = first;
-                    if (!create.Enabled && attempts >= 2)
+                    for (int i = 0; i < list.Items.Count; i++)
                     {
-                        string tag = list.GetItemText(list.Items[first]).Trim();
-                        list.SetItemChecked(first, false);
-                        ClickNativeCheckedRow(list, first, tag);
-                        // Retain the user's check if Autodesk rejected
-                        // the synthetic event; NEVER force Create.Enabled.
-                        if (first < list.Items.Count &&
-                            list.GetItemText(list.Items[first]).Trim().Equals(
-                                tag, StringComparison.OrdinalIgnoreCase) &&
-                            !list.GetItemChecked(first))
-                            list.SetItemChecked(first, true);
+                        string tag = list.GetItemText(list.Items[i]).Trim();
+                        bool expected = previous.Contains(tag);
+                        if (list.GetItemChecked(i) != expected)
+                            list.SetItemChecked(i, expected);
+                        if (expected && firstChecked < 0 &&
+                            list.GetItemChecked(i))
+                            firstChecked = i;
                     }
+
+                    // Create remains Autodesk-controlled. A real checked
+                    // row/selection change asks Autodesk to revalidate,
+                    // but REV68 NEVER replays a fake MouseDown/MouseUp,
+                    // which previously erased A-08 from our saved ledger.
+                    if (firstChecked >= 0)
+                    {
+                        if (list.SelectedIndex == firstChecked)
+                            list.ClearSelected();
+                        list.SelectedIndex = firstChecked;
+                    }
+                    else if (list.SelectedIndex >= 0)
+                        list.ClearSelected();
                 }
+                finally { _restoringSelection = false; }
 
-                UpdateDisplayedCount();
-                if (create is null || first < 0 || create.Enabled ||
-                    attempts >= 4)
-                {
-                    if (first >= 0 && create is { Enabled: false } &&
-                        attempts >= 4)
-                        WriteDiagnostic("REV65: " +
-                            "checked lines remain, but Autodesk disabled " +
-                            "Create after mode refresh; not force-enabled.");
+                restoredPasses++;
+                UpdateSelectedLabel();
+                if (restoredPasses >= 3)
                     Stop();
-                }
-                else if (restored)
-                    timer.Interval = 260;
             }
             catch (Exception ex)
             {
-                WriteDiagnostic("REV65 mode recovery: " +
+                WriteDiagnostic("REV68 mode recovery: " +
                     ex.GetBaseException().Message);
                 Stop();
             }
@@ -1514,6 +1563,8 @@ internal static class NativeIsoLineSelectOverlay
         catch { }
         _modeRecoveryTimer = null;
         _modeRecoverySerial++;
+        _scopeSwitchPending = false;
+        _selectionEpoch++;
         DetachSelectionTracking();
         SessionSelectedTags.Clear();
         _initialNativeSelectionImported = false;
