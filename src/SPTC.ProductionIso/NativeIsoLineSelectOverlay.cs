@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
 using System.Drawing;
 using System.Runtime.InteropServices;
@@ -66,6 +67,7 @@ internal static class NativeIsoLineSelectOverlay
 
     private static UserControl? _host;
     private static CheckBox? _toggle;
+    private static Label? _selectedCountLabel;
     private static IntPtr _dialog;
     private static bool _setting;
     // REV17: lightweight UI-only count refresh. No PnP/SQL queries and no
@@ -74,6 +76,10 @@ internal static class NativeIsoLineSelectOverlay
     // REV36: diagnostics and deferred actual native selection, no fake Win32 clicks.
     private static int _generation;
     private static System.Windows.Forms.Timer? _firstRowRetry;
+    // REV65: one bounded, UI-thread reconciliation after a native
+    // All/Current/Folder mode switch. Never force Create.Enabled.
+    private static System.Windows.Forms.Timer? _modeRecoveryTimer;
+    private static int _modeRecoverySerial;
 
     public static void Attach(IntPtr dialog)
     {
@@ -86,7 +92,7 @@ internal static class NativeIsoLineSelectOverlay
         _host = new UserControl
         {
             BackColor = SystemColors.Control,
-            Width = 174,
+            Width = 294,
             Height = 31
         };
         _toggle = new CheckBox
@@ -94,13 +100,24 @@ internal static class NativeIsoLineSelectOverlay
             Text = "Select All",
             AutoSize = false,
             Location = new Point(0, 2),
-            Width = 170,
+            Width = 149,
             Height = 25,
             Checked = false,
             Font = SystemFonts.MessageBoxFont
         };
         _toggle.CheckedChanged += ToggleChanged;
         _host.Controls.Add(_toggle);
+        _selectedCountLabel = new Label
+        {
+            Text = "Selected: 0",
+            Location = new Point(154, 4),
+            Width = 136,
+            Height = 23,
+            AutoSize = false,
+            Font = SystemFonts.MessageBoxFont,
+            TextAlign = ContentAlignment.MiddleLeft
+        };
+        _host.Controls.Add(_selectedCountLabel);
 
         _ = _host.Handle;
         SetParent(_host.Handle, dialog);
@@ -113,7 +130,7 @@ internal static class NativeIsoLineSelectOverlay
         _host.Show();
 
         UpdateDisplayedCount();
-        _countTimer = new System.Windows.Forms.Timer { Interval = 1600 };
+        _countTimer = new System.Windows.Forms.Timer { Interval = 800 };
         _countTimer.Tick += (_, _) => UpdateDisplayedCount();
         _countTimer.Start();
     }
@@ -134,7 +151,19 @@ internal static class NativeIsoLineSelectOverlay
             top = Math.Min(dialogRect.Height - 116, listBounds.Bottom + 5);
         }
 
-        SetWindowPos(_host.Handle, IntPtr.Zero, left, top, 174, 29,
+        // REV65: present the selected count beside Select All, inside
+        // the original Display Lines panel; no additional dialog height.
+        int width = Math.Min(294,
+            TryFindLineListBounds(dialog, out RECT currentBounds)
+                ? Math.Max(160, currentBounds.Width) : 294);
+        if (_toggle != null && _selectedCountLabel != null)
+        {
+            int toggleWidth = Math.Min(149, Math.Max(109, width / 2));
+            _toggle.Width = toggleWidth;
+            _selectedCountLabel.Left = toggleWidth + 4;
+            _selectedCountLabel.Width = Math.Max(30, width - toggleWidth - 4);
+        }
+        SetWindowPos(_host.Handle, IntPtr.Zero, left, top, width, 29,
             SWP_NOACTIVATE | SWP_NOZORDER | SWP_SHOWWINDOW);
     }
 
@@ -154,6 +183,20 @@ internal static class NativeIsoLineSelectOverlay
             : "Select All";
         if (!string.Equals(_toggle.Text, caption, StringComparison.Ordinal))
             _toggle.Text = caption;
+
+        // REV65: Selected means actually CHECKED in the current list,
+        // never merely blue-highlighted. Folder mode uses visible
+        // projected native-backed rows, not unrelated hidden project tags.
+        int? checkedCount = ProjectFolderLinePicker.VisibleCheckedCount ??
+                            ReadNativeCheckedCount(_dialog);
+        if (_selectedCountLabel is { IsDisposed: false } selectedLabel)
+        {
+            string selectedText = checkedCount.HasValue
+                ? "Selected: " + checkedCount.Value
+                : "Selected: —";
+            if (selectedLabel.Text != selectedText)
+                selectedLabel.Text = selectedText;
+        }
 
         // REV42: native Active-DWG scope may disable the search edit control
         // after initial attachment; keep the original input editable during
@@ -197,6 +240,230 @@ internal static class NativeIsoLineSelectOverlay
             return true;
         }, IntPtr.Zero);
         return best >= 0 ? best : null;
+    }
+
+    // REV65: read only the original Autodesk checked-list UI. These
+    // queries are in-memory; no PnP/SQL, file or model scan.
+    private static CheckedListBox? FindNativeCheckedList(IntPtr dialog)
+    {
+        CheckedListBox? best = null;
+        int mostItems = -1;
+        EnumChildWindows(dialog, (hwnd, _) =>
+        {
+            if (!IsLeftLineList(dialog, hwnd)) return true;
+            if (Control.FromHandle(hwnd) is CheckedListBox list &&
+                !list.IsDisposed && list.Height > 100 &&
+                list.Items.Count > mostItems)
+            {
+                best = list;
+                mostItems = list.Items.Count;
+            }
+            return true;
+        }, IntPtr.Zero);
+        return best;
+    }
+
+    private static int? ReadNativeCheckedCount(IntPtr dialog)
+    {
+        var list = FindNativeCheckedList(dialog);
+        if (list != null)
+        {
+            int count = 0;
+            for (int i = 0; i < list.Items.Count; i++)
+                if (list.GetItemChecked(i)) count++;
+            return count;
+        }
+        // If Autodesk exposes a native WinForms ListView instead, count
+        // its genuine checked items; don't infer from a search textbox.
+        ListView? best = null;
+        int most = -1;
+        EnumChildWindows(dialog, (hwnd, _) =>
+        {
+            if (!IsLeftLineList(dialog, hwnd)) return true;
+            if (Control.FromHandle(hwnd) is ListView view &&
+                view.CheckBoxes && !view.IsDisposed &&
+                view.Items.Count > most)
+            {
+                best = view;
+                most = view.Items.Count;
+            }
+            return true;
+        }, IntPtr.Zero);
+        return best?.CheckedItems.Count;
+    }
+
+    public static string[] CaptureSelectedTags(IntPtr dialog)
+    {
+        var list = FindNativeCheckedList(dialog);
+        if (list != null)
+        {
+            var tags = new List<string>();
+            for (int i = 0; i < list.Items.Count; i++)
+                if (list.GetItemChecked(i))
+                {
+                    string name = list.GetItemText(list.Items[i]).Trim();
+                    if (name.Length > 0) tags.Add(name);
+                }
+            return tags.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        }
+        return Array.Empty<string>();
+    }
+
+    public static void ScheduleModeChangeRecovery(
+        IntPtr dialog, IEnumerable<string> selectedBefore)
+    {
+        if (dialog == IntPtr.Zero || dialog != _dialog)
+            return;
+
+        var previous = new HashSet<string>(
+            selectedBefore.Where(s => !string.IsNullOrWhiteSpace(s)),
+            StringComparer.OrdinalIgnoreCase);
+        try { _modeRecoveryTimer?.Stop(); _modeRecoveryTimer?.Dispose(); }
+        catch (Exception) { }
+        int serial = ++_modeRecoverySerial;
+        int generation = _generation;
+        int attempts = 0;
+        var timer = new System.Windows.Forms.Timer { Interval = 480 };
+        _modeRecoveryTimer = timer;
+        void Stop()
+        {
+            try { timer.Stop(); timer.Dispose(); } catch (Exception) { }
+            if (ReferenceEquals(_modeRecoveryTimer, timer))
+                _modeRecoveryTimer = null;
+        }
+
+        timer.Tick += (_, _) =>
+        {
+            if (_dialog != dialog || _generation != generation ||
+                serial != _modeRecoverySerial)
+            {
+                Stop();
+                return;
+            }
+            if (++attempts > 4) { Stop(); return; }
+
+            try
+            {
+                // Do not modify a temporary folder proxy; it already has
+                // its own proven native checkbox synchronization path.
+                if (ProjectFolderLinePicker.HasVisibleProjection)
+                {
+                    UpdateDisplayedCount();
+                    Stop();
+                    return;
+                }
+
+                CheckedListBox? list = FindNativeCheckedList(dialog);
+                if (list is null || list.IsDisposed || list.Items.Count == 0)
+                    return; // Autodesk still rebuilding its native list
+
+                // Restore ONLY previously checked tags still visible in
+                // the new scope. Never select hidden, unmatched, or new
+                // routes. Names are verified at their new native indices.
+                bool restored = false;
+                for (int i = 0; i < list.Items.Count; i++)
+                {
+                    string tag = list.GetItemText(list.Items[i]).Trim();
+                    if (previous.Contains(tag) && !list.GetItemChecked(i))
+                    {
+                        list.SetItemChecked(i, true);
+                        restored = true;
+                    }
+                }
+
+                int first = -1;
+                for (int i = 0; i < list.Items.Count; i++)
+                    if (list.GetItemChecked(i))
+                    {
+                        first = i;
+                        break;
+                    }
+
+                Button? create = FindNativeCreateButton(dialog);
+                if (first >= 0 && create is { Enabled: false })
+                {
+                    // Autodesk Create eligibility depends on the real
+                    // checkbox and selection events. Re-select first; if
+                    // necessary replay OFF->ON with native mouse events.
+                    if (list.SelectedIndex == first) list.ClearSelected();
+                    list.SelectedIndex = first;
+                    if (!create.Enabled && attempts >= 2)
+                    {
+                        string tag = list.GetItemText(list.Items[first]).Trim();
+                        list.SetItemChecked(first, false);
+                        ClickNativeCheckedRow(list, first, tag);
+                        // Retain the user's check if Autodesk rejected
+                        // the synthetic event; NEVER force Create.Enabled.
+                        if (first < list.Items.Count &&
+                            list.GetItemText(list.Items[first]).Trim().Equals(
+                                tag, StringComparison.OrdinalIgnoreCase) &&
+                            !list.GetItemChecked(first))
+                            list.SetItemChecked(first, true);
+                    }
+                }
+
+                UpdateDisplayedCount();
+                if (create is null || first < 0 || create.Enabled ||
+                    attempts >= 4)
+                {
+                    if (first >= 0 && create is { Enabled: false } &&
+                        attempts >= 4)
+                        WriteDiagnostic("REV65: " +
+                            "checked lines remain, but Autodesk disabled " +
+                            "Create after mode refresh; not force-enabled.");
+                    Stop();
+                }
+                else if (restored)
+                    timer.Interval = 260;
+            }
+            catch (Exception ex)
+            {
+                WriteDiagnostic("REV65 mode recovery: " +
+                    ex.GetBaseException().Message);
+                Stop();
+            }
+        };
+        timer.Start();
+    }
+
+    private static void ClickNativeCheckedRow(
+        CheckedListBox list, int index, string expectedTag)
+    {
+        if (!list.IsHandleCreated || list.IsDisposed ||
+            index < 0 || index >= list.Items.Count ||
+            list.GetItemChecked(index) ||
+            !list.GetItemText(list.Items[index]).Trim().Equals(
+                expectedTag, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        int originalTop = list.TopIndex;
+        try
+        {
+            list.TopIndex = Math.Min(index, list.Items.Count - 1);
+            Rectangle rectangle = list.GetItemRectangle(index);
+            if (rectangle.Height <= 0 ||
+                list.ClientSize.Width < 22 ||
+                rectangle.Top < 0 ||
+                rectangle.Bottom > list.ClientSize.Height)
+                return;
+
+            if (list.SelectedIndex == index) list.ClearSelected();
+            list.SelectedIndex = index;
+            int x = Math.Clamp(rectangle.Left + 12, 5,
+                list.ClientSize.Width - 6);
+            int y = rectangle.Top + rectangle.Height / 2;
+            IntPtr point = new(((y & 0xFFFF) << 16) |
+                               (x & 0xFFFF));
+            SendMessage(list.Handle, WM_LBUTTONDOWN,
+                new IntPtr(MK_LBUTTON), point);
+            SendMessage(list.Handle, WM_LBUTTONUP, IntPtr.Zero, point);
+        }
+        finally
+        {
+            if (!list.IsDisposed && list.Items.Count > 0)
+                list.TopIndex = Math.Clamp(originalTop, 0,
+                    list.Items.Count - 1);
+        }
     }
 
     private static void ToggleChanged(object? sender, EventArgs e)
@@ -862,6 +1129,10 @@ internal static class NativeIsoLineSelectOverlay
         try { _firstRowRetry?.Stop(); _firstRowRetry?.Dispose(); }
         catch { }
         _firstRowRetry = null;
+        try { _modeRecoveryTimer?.Stop(); _modeRecoveryTimer?.Dispose(); }
+        catch { }
+        _modeRecoveryTimer = null;
+        _modeRecoverySerial++;
         _dialog = IntPtr.Zero;
         try { _countTimer?.Stop(); } catch { }
         try { _countTimer?.Dispose(); } catch { }
@@ -869,6 +1140,7 @@ internal static class NativeIsoLineSelectOverlay
         try { _host?.Dispose(); } catch { }
         _host = null;
         _toggle = null;
+        _selectedCountLabel = null;
         _setting = false;
     }
 }
