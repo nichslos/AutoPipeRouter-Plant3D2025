@@ -51,6 +51,12 @@ internal static class NativeIsoDialogEnhancer
     private static int _fallbackTextboxLeft = -1;
     private static int _fallbackRowTop = -1;
     private static string _destination = "";
+    // REV78: remember the explicitly entered custom folder for the SAME
+    // native ISO output source while Plant 3D remains open. Do not copy to
+    // a destination belonging to a different project/style or when cleared.
+    private static string _rememberedDestination = "";
+    private static string _rememberedSource = "";
+    private static bool _destinationEditedThisDialog;
     private static string? _source;
     private static Document? _document;
     private static int _noWindowTicks;
@@ -80,6 +86,8 @@ internal static class NativeIsoDialogEnhancer
     private static CheckBox? _nativeOverwriteBox;
     private static Button? _nativeCreateButton;
     private static IntPtr _nativeOverwriteHandle;
+    private static CreateClickPreflightFilter? _createPreflightFilter;
+    private static bool _swallowCreateMouseUp;
     private static bool _overwriteFound;
     private static string _overwriteSource = "not detected";
     private static System.Windows.Forms.Timer? _overwriteTracker;
@@ -196,6 +204,145 @@ internal static class NativeIsoDialogEnhancer
         }, IntPtr.Zero);
     }
 
+    // REV78 safety preflight: the Selected:N footer counts user-saved tag
+    // intent across manual searches. Autodesk's native Create button uses
+    // ONLY its REAL currently checked rows. REV77's Current Drawing view
+    // can show "Selected: 6" while only A-08 is native-checked: clicking
+    // Create then produces just one ISO. Never silently treat 6 as 1.
+    private static string[] NativeCheckedRouteNames(IntPtr dialog)
+    {
+        var names = new List<string>();
+        int bestItems = -1;
+        EnumChildWindows(dialog, (hwnd, _) =>
+        {
+            Control? control = Control.FromHandle(hwnd);
+            if (control is CheckedListBox list && !list.IsDisposed &&
+                list.Height > 100 && list.Items.Count > bestItems)
+            {
+                bestItems = list.Items.Count;
+                names.Clear();
+                for (int i = 0; i < list.Items.Count; i++)
+                    if (list.GetItemChecked(i))
+                    {
+                        string tag = list.GetItemText(list.Items[i]).Trim();
+                        if (tag.Length > 0) names.Add(tag);
+                    }
+            }
+            else if (control is ListView view && !view.IsDisposed &&
+                view.CheckBoxes && view.Height > 100 &&
+                view.Items.Count > bestItems)
+            {
+                bestItems = view.Items.Count;
+                names.Clear();
+                foreach (ListViewItem item in view.CheckedItems)
+                {
+                    string tag = item.Text.Trim();
+                    if (tag.Length > 0) names.Add(tag);
+                }
+            }
+            return true;
+        }, IntPtr.Zero);
+        return names.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    private static bool TryGetCreateSelectionMismatch(
+        IntPtr dialog, out string warning)
+    {
+        warning = "";
+        if (dialog == IntPtr.Zero || !IsWindow(dialog))
+            return false;
+
+        string[] saved = NativeIsoLineSelectOverlay.CaptureSelectedTags(dialog);
+        if (saved.Length == 0) return false;
+
+        string[] native = NativeCheckedRouteNames(dialog);
+        var current = new HashSet<string>(
+            native, StringComparer.OrdinalIgnoreCase);
+        string[] missing = saved.Where(t => !current.Contains(t)).ToArray();
+        if (missing.Length == 0)
+            return false;
+
+        warning = "You selected " + saved.Length +
+            " line number(s) across searches, but only " +
+            native.Length + " are currently checked in Autodesk's " +
+            "native ISO list.\n\n" +
+            "Missing from current Create selection: " +
+            string.Join(", ", missing.Take(4)) +
+            (missing.Length > 4 ? ", ..." : "") +
+            "\n\nSwitch to Show All Project, verify every " +
+            "required checkbox and that Create is enabled, then click " +
+            "Create again. No ISO was started by this click.";
+        return true;
+    }
+
+    private static void ShowCreateSelectionWarning(string warning)
+    {
+        _document?.Editor.WriteMessage(
+            "\nSPTC REV78: blocked Create: " +
+            warning.Replace("\r", "").Replace("\n", " "));
+        try
+        {
+            MessageBox.Show(
+                _overlay, warning, "SPTC ISO Selection Mismatch",
+                MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+        catch (Exception) { }
+    }
+
+    private sealed class CreateClickPreflightFilter : IMessageFilter
+    {
+        private const int WM_LBUTTONDOWN = 0x0201;
+        private const int WM_LBUTTONUP = 0x0202;
+        private const int WM_LBUTTONDBLCLK = 0x0203;
+        private const int WM_KEYDOWN = 0x0100;
+        private const int WM_SYSKEYDOWN = 0x0104;
+        private const int WM_COMMAND = 0x0111;
+
+        public bool PreFilterMessage(ref Message m)
+        {
+            if (_native == IntPtr.Zero ||
+                _nativeCreateButton is not { IsDisposed: false } create ||
+                !IsWindow(_native))
+                return false;
+
+            bool buttonMessage = m.HWnd == create.Handle;
+            bool mouseDown = buttonMessage &&
+                (m.Msg == WM_LBUTTONDOWN || m.Msg == WM_LBUTTONDBLCLK);
+            bool buttonKey = buttonMessage &&
+                (m.Msg == WM_KEYDOWN || m.Msg == WM_SYSKEYDOWN) &&
+                ((int)m.WParam == (int)Keys.Enter ||
+                 (int)m.WParam == (int)Keys.Space);
+            // WinForms default-button Enter/Access key may send BN_CLICKED
+            // via WM_COMMAND to the parent rather than to the button.
+            bool parentCommand = m.HWnd == _native &&
+                m.Msg == WM_COMMAND &&
+                m.LParam == create.Handle &&
+                (((long)m.WParam >> 16) & 0xffff) == 0;
+
+            if (buttonMessage && m.Msg == WM_LBUTTONUP &&
+                _swallowCreateMouseUp)
+            {
+                _swallowCreateMouseUp = false;
+                return true;
+            }
+            if (!mouseDown && !buttonKey && !parentCommand)
+                return false;
+
+            if (!TryGetCreateSelectionMismatch(_native, out string warning))
+                return false;
+
+            if (mouseDown) _swallowCreateMouseUp = true;
+            _createRequested = false;
+            // The message filter runs BEFORE Autodesk's managed/native
+            // button handler, so no single-line ISO is launched here.
+            // Defer modal warning to next UI turn after swallowing input.
+            try { create.BeginInvoke((MethodInvoker)(() =>
+                ShowCreateSelectionWarning(warning))); }
+            catch (Exception) { }
+            return true;
+        }
+    }
+
     // REV54: gather ONLY checked route names from the original Autodesk
     // ISO checklist before the native Create dialog closes. The folder
     // projection is not authoritative; prefer the native largest list.
@@ -278,6 +425,15 @@ internal static class NativeIsoDialogEnhancer
         // REV64: treat only an actual Create button action as authorization
         // to monitor/copy. Never infer Create merely from dialog closure.
         if (_createRequested) return;
+        // Failsafe for programmatic Click / unusual keyboard actions that
+        // bypass the mouse prefilter: never mark this as a full-batch
+        // Create if native selection contains fewer than saved tags.
+        if (_native != IntPtr.Zero &&
+            TryGetCreateSelectionMismatch(_native, out string issue))
+        {
+            ShowCreateSelectionWarning(issue);
+            return;
+        }
         _createRequested = true;
         if (_native != IntPtr.Zero && IsWindow(_native))
         {
@@ -316,6 +472,8 @@ internal static class NativeIsoDialogEnhancer
                 button.MouseDown += CaptureBeforeNativeCreate;
                 button.KeyDown += OnNativeCreateKeyDown;
                 button.Click += CaptureBeforeNativeCreate;
+                _createPreflightFilter ??= new CreateClickPreflightFilter();
+                Application.AddMessageFilter(_createPreflightFilter);
                 return false;
             }
             return true;
@@ -347,6 +505,12 @@ internal static class NativeIsoDialogEnhancer
         catch (Exception) { }
         _overwriteTracker = null;
 
+        if (_createPreflightFilter != null)
+        {
+            Application.RemoveMessageFilter(_createPreflightFilter);
+            _createPreflightFilter = null;
+        }
+        _swallowCreateMouseUp = false;
         if (_nativeCreateButton is { IsDisposed: false } create)
         {
             create.MouseDown -= CaptureBeforeNativeCreate;
@@ -387,6 +551,7 @@ internal static class NativeIsoDialogEnhancer
         _document = doc;
         _source = null;
         _destination = "";
+        _destinationEditedThisDialog = false;
         _launchUtc = DateTime.UtcNow;
         _noWindowTicks = 0;
         _nativeSeen = false;
@@ -638,7 +803,30 @@ internal static class NativeIsoDialogEnhancer
                 {
                     _source = ReadSourcePath(native);
                     if (!string.IsNullOrEmpty(_source))
-                        _document?.Editor.WriteMessage("\nSPTC ISO detected native source: " + _source);
+                    {
+                        // Only restore an explicit destination previously
+                        // used for this very same native output path.
+                        // Never automatically reuse another project's folder.
+                        if (!_destinationEditedThisDialog &&
+                            _source.Equals(_rememberedSource,
+                                StringComparison.OrdinalIgnoreCase) &&
+                            !string.IsNullOrWhiteSpace(_rememberedDestination))
+                        {
+                            _destination = _rememberedDestination;
+                            if (_destinationBox is { IsDisposed: false } box)
+                                box.Text = _destination;
+                            _document?.Editor.WriteMessage(
+                                "\nSPTC REV78: restored last custom location " +
+                                "for this ISO output source.");
+                        }
+                        else if (_destinationEditedThisDialog)
+                        {
+                            _rememberedSource = _source;
+                            _rememberedDestination = _destination;
+                        }
+                        _document?.Editor.WriteMessage(
+                            "\nSPTC ISO detected native source: " + _source);
+                    }
                 }
                 return;
             }
@@ -844,7 +1032,16 @@ internal static class NativeIsoDialogEnhancer
                 Height = 24,
                 Font = SystemFonts.MessageBoxFont
             };
-            _destinationBox.TextChanged += (_, _) => _destination = _destinationBox.Text.Trim();
+            _destinationBox.TextChanged += (_, _) =>
+            {
+                _destination = _destinationBox.Text.Trim();
+                _destinationEditedThisDialog = true;
+                if (!string.IsNullOrWhiteSpace(_source))
+                {
+                    _rememberedSource = _source;
+                    _rememberedDestination = _destination;
+                }
+            };
             _destinationBrowse = new Button
             {
                 Text = "...",
