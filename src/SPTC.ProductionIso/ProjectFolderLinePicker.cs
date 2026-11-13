@@ -765,6 +765,9 @@ internal static class ProjectFolderLinePicker
             // Clear hidden selections to avoid generating unexpected ISOs.
             foreach (var row in nativeRows)
                 if (!allowed.Contains(row.Tag)) SetNativeChecked(row, false);
+            // REV66: folder scope intentionally clears off-folder native
+            // selection. Match that behavior in the persistent tag ledger.
+            NativeIsoLineSelectOverlay.RestrictSessionSelectionTo(allowed);
 
             VisibleEntries.AddRange(visible);
             _folder = folder;
@@ -1414,6 +1417,9 @@ internal static class ProjectFolderLinePicker
                     // Preserve the existing bulk Select All handler intact.
                     if (SetNativeChecked(nativeRow, desired, userAction: true))
                     {
+                        if (_nativeChecked != null)
+                            NativeIsoLineSelectOverlay.RecordBulkNativeSelection(
+                                _nativeChecked);
                         ScheduleNativeSelectionCommit();
                         _document?.Editor.WriteMessage(
                             "\nSPTC REV41 folder individual native event: " +
@@ -1549,6 +1555,8 @@ internal static class ProjectFolderLinePicker
                 displayed.SetItemChecked(i, GetNativeChecked(rows[i]));
         }
         finally { _updating = false; }
+        if (_nativeChecked != null)
+            NativeIsoLineSelectOverlay.RecordBulkNativeSelection(_nativeChecked);
 
         if (!allSucceeded)
             _document?.Editor.WriteMessage(
@@ -1622,6 +1630,9 @@ internal static class ProjectFolderLinePicker
                         displayed.SetItemChecked(i, GetNativeChecked(targetRows[i]));
                 }
                 finally { _updating = false; }
+                if (_nativeChecked != null)
+                    NativeIsoLineSelectOverlay.RecordBulkNativeSelection(
+                        _nativeChecked);
 
                 if (!allSucceeded)
                     _document?.Editor.WriteMessage(
