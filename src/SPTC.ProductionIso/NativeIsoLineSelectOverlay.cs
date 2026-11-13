@@ -92,6 +92,9 @@ internal static class NativeIsoLineSelectOverlay
     // REV67: a Shift range can check several native rows in ONE gesture.
     // Remember pre-click state for EVERY visible tag, not only clicked row.
     private static Dictionary<string, bool>? _gestureBefore;
+    // REV76: distinguish an actual checkbox-area click/Space from mere
+    // row highlighting. Only explicit checks can trigger native fallback.
+    private static bool _gestureCheckboxAction;
     private static bool _initialNativeSelectionImported;
     private static bool _restoringSelection;
     // REV68: distinguish a programmatic toolbar/filter transition from
@@ -427,6 +430,7 @@ internal static class NativeIsoLineSelectOverlay
         _gestureIndex = -1;
         _gestureTag = "";
         _gestureBefore = null;
+        _gestureCheckboxAction = false;
     }
 
     private static void EnsureSelectionTracking()
@@ -512,6 +516,7 @@ internal static class NativeIsoLineSelectOverlay
         _gestureIndex = -1;
         _gestureTag = "";
         _gestureBefore = null;
+        _gestureCheckboxAction = false;
     }
 
     public static void BeginScopeSwitch(IntPtr dialog)
@@ -534,6 +539,7 @@ internal static class NativeIsoLineSelectOverlay
         _gestureIndex = -1;
         _gestureTag = "";
         _gestureBefore = null;
+        _gestureCheckboxAction = false;
         _lastNativeRowSignature = "";
         _lastRestoredRowSignature = "";
         _stableNativePolls = 0;
@@ -798,6 +804,7 @@ internal static class NativeIsoLineSelectOverlay
             index < 0 || index >= list.Items.Count) return;
         _gestureIndex = index;
         _gestureTag = list.GetItemText(list.Items[index]).Trim();
+        _gestureCheckboxAction = false;
         _gestureBefore = new Dictionary<string, bool>(
             StringComparer.OrdinalIgnoreCase);
         for (int i = 0; i < list.Items.Count; i++)
@@ -814,6 +821,8 @@ internal static class NativeIsoLineSelectOverlay
         if (sender is not CheckedListBox list ||
             e.Button != MouseButtons.Left) return;
         BeginUserGesture(list, list.IndexFromPoint(e.Location));
+        if (_gestureIndex >= 0 && e.X >= 0 && e.X <= 27)
+            _gestureCheckboxAction = true;
     }
 
     private static void OnNativeLineKeyDown(
@@ -821,7 +830,10 @@ internal static class NativeIsoLineSelectOverlay
     {
         if (sender is CheckedListBox list &&
             e.KeyCode == Keys.Space)
+        {
             BeginUserGesture(list, list.SelectedIndex);
+            if (_gestureIndex >= 0) _gestureCheckboxAction = true;
+        }
     }
 
     private static void OnNativeLineItemCheck(
@@ -851,12 +863,14 @@ internal static class NativeIsoLineSelectOverlay
         int clicked = _gestureIndex;
         string clickedTag = _gestureTag;
         Dictionary<string, bool>? before = _gestureBefore;
+        bool checkboxAction = _gestureCheckboxAction;
         int commitEpoch = _selectionEpoch;
         // End the active gesture NOW: any deferred native checkbox refresh
         // must never be classified as a new user check/uncheck.
         _gestureIndex = -1;
         _gestureTag = "";
         _gestureBefore = null;
+        _gestureCheckboxAction = false;
         if (clicked < 0) return;
 
         // Autodesk can commit Shift-range check state after MouseUp.
@@ -896,6 +910,45 @@ internal static class NativeIsoLineSelectOverlay
                     else
                         SessionSelectedTags.Remove(clickedTag);
                 }
+                // REV76: if Autodesk swallowed a REAL user's check
+                // of the only active native route, use one checked-row
+                // event on the SAME route. Never act on a row highlight,
+                // Search/Scope refresh, or a user-initiated uncheck.
+                if (checkboxAction && clicked == 0 &&
+                    list.Items.Count == 1 &&
+                    ActiveDwgTags.IsNativeFilterCurrent(_dialog) &&
+                    before != null &&
+                    before.TryGetValue(clickedTag, out bool wasChecked) &&
+                    !wasChecked && !list.GetItemChecked(0) &&
+                    list.GetItemText(list.Items[0]).Trim().Equals(
+                        clickedTag, StringComparison.OrdinalIgnoreCase))
+                {
+                    _restoringSelection = true;
+                    _scopeSwitchPending = true;
+                    _selectionEpoch++;
+                    try
+                    {
+                        ClickNativeCheckedRow(list, 0, clickedTag);
+                    }
+                    catch (Exception ex)
+                    {
+                        WriteDiagnostic("REV76 manual active click: " +
+                            ex.GetBaseException().Message);
+                    }
+                    finally
+                    {
+                        _restoringSelection = false;
+                        _scopeSwitchPending = false;
+                        _selectionEpoch++;
+                    }
+                    if (list.Items.Count == 1 &&
+                        list.GetItemChecked(0))
+                        SessionSelectedTags.Add(clickedTag);
+                    else
+                        WriteDiagnostic("REV76: native active route " +
+                            clickedTag + " rejected checkbox click.");
+                }
+
                 _lastNativeRowSignature = "";
                 _stableNativePolls = 0;
                 UpdateSelectedLabel();
