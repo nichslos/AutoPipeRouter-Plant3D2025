@@ -1011,11 +1011,28 @@ internal static class ProjectFolderLinePicker
             return false;
         }
 
-        // Important: don't generate ISOs for old lines hidden by this overlay.
+        // REV77: preserve Autodesk's unmodified native list/item INDEX
+        // mapping. Earlier exact filtering physically removed four
+        // substring results (A-08 vs A-088 etc.). Autodesk's native
+        // checkbox handler still referenced its original row data, so
+        // every click on the surviving index 0 was rejected.
+        //
+        // The folder projection already relays real checkbox clicks to
+        // original native indices without removing any Autodesk row.
+        // Reuse it for Active Drawing. Check ONLY the saved exact tag,
+        // leave unrelated substring matches unchecked to avoid accidental
+        // ISO generation, and keep other selected tags in the session
+        // ledger so Show All can restore them later.
+        bool nativeExactChecked = false;
         foreach (NativeEntry row in nativeRows)
         {
-            if (!allowed.Contains(row.Tag) && GetNativeChecked(row))
-                SetNativeChecked(row, false);
+            bool desired = allowed.Contains(row.Tag) &&
+                NativeIsoLineSelectOverlay.IsSessionTagSelected(row.Tag);
+            bool actual = GetNativeChecked(row);
+            if (actual != desired)
+                SetNativeChecked(row, desired, userAction: desired);
+            if (allowed.Contains(row.Tag) && GetNativeChecked(row))
+                nativeExactChecked = true;
         }
 
         VisibleEntries.AddRange(matches);
@@ -1029,8 +1046,11 @@ internal static class ProjectFolderLinePicker
         PositionList(_dialog);
         NativeIsoLineSelectOverlay.UpdateDisplayedCount();
         doc?.Editor.WriteMessage(
-            "\nSPTC REV22: Showing exact current DWG line tags (" +
-            matches.Count + "): " + string.Join(", ", actualTags));
+            "\nSPTC REV77: Exact native-backed current DWG routes (" +
+            matches.Count + " of " + nativeRows.Count +
+            " Autodesk rows; original native indices untouched), " +
+            "checked=" + nativeExactChecked + ": " +
+            string.Join(", ", actualTags));
         return true;
     }
 
