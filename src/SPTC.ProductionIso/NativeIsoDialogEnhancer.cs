@@ -427,9 +427,23 @@ internal static class NativeIsoDialogEnhancer
                 int stableSamples = 0;
                 int matched = 0;
                 int checkedCount = 0;
+                int afterAppliedPolls = 0;
+                int readySamples = 0;
+                bool appliedOnce = false;
+                bool nudgedOnce = false;
                 string lastNativeSignature = "";
-                var timer = new System.Windows.Forms.Timer { Interval = 200 };
+                // REV80: one native selection write, not a 432-checkbox
+                // reconciliation repeated 35 times on the UI thread.
+                // Scope preparation is bounded and fully canceled on X/Esc.
+                var timer = new System.Windows.Forms.Timer { Interval = 180 };
                 _autoCreateTimer = timer;
+
+                void Fail(string issue)
+                {
+                    AbortAutoCreate();
+                    NativeIsoLineSelectOverlay.CancelScopeSwitch(dialog);
+                    ShowAutoCreateFailure(issue);
+                }
 
                 timer.Tick += (_, _) =>
                 {
@@ -446,25 +460,17 @@ internal static class NativeIsoDialogEnhancer
                         AbortAutoCreate();
                         return;
                     }
-                    if (++polls > 35) // bounded: no background looping
+                    if (++polls > 23)
                     {
-                        string issue = "Found " + matched + "/" +
-                            requested.Length + " route(s); native checked=" +
+                        Fail("Found " + matched + "/" +
+                            requested.Length + " route(s), native checked=" +
                             checkedCount + "/" + requested.Length +
-                            "; Autodesk Create.Enabled=" + create.Enabled +
-                            ". Stopped automatic batch preparation.";
-                        AbortAutoCreate();
-                        NativeIsoLineSelectOverlay.CancelScopeSwitch(dialog);
-                        ShowAutoCreateFailure(issue);
+                            ", Autodesk Create.Enabled=" + create.Enabled +
+                            ". Canceled the batch (no background watcher).");
                         return;
                     }
-
                     try
                     {
-                        // If the user changed their saved selection during
-                        // the native list rebuild, do not submit a stale
-                        // batch. The Create click applies ONLY to the exact
-                        // user selection captured when they pressed it.
                         string[] current = NativeIsoLineSelectOverlay
                             .CaptureSelectedTags(dialog);
                         if (current.Length != requested.Length ||
@@ -472,23 +478,25 @@ internal static class NativeIsoDialogEnhancer
                                 current, StringComparer.OrdinalIgnoreCase)
                                 .SetEquals(requested))
                         {
-                            AbortAutoCreate();
-                            NativeIsoLineSelectOverlay.CancelScopeSwitch(dialog);
-                            ShowAutoCreateFailure(
-                                "Selected line numbers changed during Create.");
+                            Fail("Saved selection changed during native " +
+                                "list reconstruction.");
                             return;
                         }
 
-                        // Wait for the Autodesk list names to remain stable,
-                        // instead of clicking Create while a native
-                        // Filter.TextChanged refresh is still in progress.
+                        // Wait for the native original-list names to
+                        // stabilize. No selection writes while list changes.
                         string nativeSignature = NativeIsoLineSelectOverlay
                             .NativeRouteNameSignature(dialog);
-                        if (string.IsNullOrEmpty(nativeSignature))
-                            return;
+                        if (string.IsNullOrEmpty(nativeSignature)) return;
                         if (!nativeSignature.Equals(lastNativeSignature,
                                 StringComparison.Ordinal))
                         {
+                            if (appliedOnce)
+                            {
+                                Fail("Autodesk line list changed after " +
+                                    "batch selection was prepared.");
+                                return;
+                            }
                             lastNativeSignature = nativeSignature;
                             stableSamples = 0;
                             return;
@@ -496,45 +504,76 @@ internal static class NativeIsoDialogEnhancer
                         if (++stableSamples < 2)
                             return;
 
-                        bool exact = NativeIsoLineSelectOverlay
-                            .TryApplySavedBatchToNative(dialog, requested,
-                                out matched, out checkedCount);
-                        if (!exact || checkedCount != requested.Length ||
-                            !create.Enabled)
-                            return;
+                        if (!appliedOnce)
+                        {
+                            bool exact = NativeIsoLineSelectOverlay
+                                .TryApplySavedBatchToNative(dialog, requested,
+                                    out matched, out checkedCount);
+                            if (!exact || checkedCount != requested.Length)
+                                return;
 
-                        // Second native UI turn proves the full checked set
-                        // remained stable after Autodesk selection handlers.
-                        if (++stableSamples < 4)
+                            appliedOnce = true;
+                            afterAppliedPolls = 0;
+                            // Release plugin scope guard so native Autodesk
+                            // and normal checked-list events can settle.
+                            NativeIsoLineSelectOverlay.CancelScopeSwitch(dialog);
+                            _document?.Editor.WriteMessage(
+                                "\nSPTC REV80: Full native batch applied " +
+                                matched + "/" + requested.Length +
+                                "; waiting for Autodesk Create validation.");
                             return;
+                        }
+
+                        afterAppliedPolls++;
                         string[] verified = NativeCheckedRouteNames(dialog);
-                        if (verified.Length != requested.Length ||
+                        checkedCount = verified.Length;
+                        if (checkedCount != requested.Length ||
                             !new HashSet<string>(
                                 verified, StringComparer.OrdinalIgnoreCase)
                                 .SetEquals(requested))
+                        {
+                            if (afterAppliedPolls > 3)
+                                Fail("Native checked selection changed " +
+                                    "after preparation (" + checkedCount +
+                                    "/" + requested.Length + ").");
                             return;
+                        }
 
-                        // End the guard: PerformClick calls the ORIGINAL
-                        // Autodesk Create handler with its real checked
-                        // rows now containing ALL selected route names.
-                        try { timer.Stop(); timer.Dispose(); } catch (Exception) { }
+                        if (!create.Enabled)
+                        {
+                            if (!nudgedOnce)
+                            {
+                                nudgedOnce = true;
+                                NativeIsoLineSelectOverlay
+                                    .TryNudgeNativeBatchCreateEligibility(
+                                        dialog, requested);
+                            }
+                            if (afterAppliedPolls >= 7)
+                                Fail("All " + requested.Length +
+                                    " routes are checked, but native " +
+                                    "Autodesk Create remains disabled.");
+                            return;
+                        }
+
+                        if (++readySamples < 2) return;
+                        // Submit ONCE only when exact native check set and
+                        // Autodesk eligibility both remain verified.
+                        try { timer.Stop(); timer.Dispose(); }
+                        catch (Exception) { }
                         _autoCreateTimer = null;
                         _autoCreatePending = false;
+                        _batchPreparationFailed = false;
                         _autoCreateSubmitting = true;
-                        NativeIsoLineSelectOverlay.CancelScopeSwitch(dialog);
                         _document?.Editor.WriteMessage(
-                            "\nSPTC REV79: verified full native Create batch " +
-                            "(" + verified.Length + " selected route(s)); " +
-                            "submitting original Autodesk Create.");
+                            "\nSPTC REV80: verified exact native batch " +
+                            verified.Length + "/" + requested.Length +
+                            ", Create=True; invoking native Create once.");
                         try { create.PerformClick(); }
                         finally { _autoCreateSubmitting = false; }
                     }
                     catch (Exception ex)
                     {
-                        AbortAutoCreate();
-                        NativeIsoLineSelectOverlay.CancelScopeSwitch(dialog);
-                        ShowAutoCreateFailure(
-                            "Native Create validation failed: " +
+                        Fail("Automatic batch validation exception: " +
                             ex.GetBaseException().Message);
                     }
                 };
