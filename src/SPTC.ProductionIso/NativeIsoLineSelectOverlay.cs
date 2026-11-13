@@ -1156,6 +1156,45 @@ internal static class NativeIsoLineSelectOverlay
     // user chose the routes. Never fabricate list items or force Create.
     // Caller first switches to the real All Project source. This routine
     // operates on the existing native WinForms checked rows ONLY.
+    // REV80: Autodesk's Create eligibility sometimes updates only after
+    // a real native SelectedIndexChanged event. Nudge ONE checked original
+    // item once, after all saved tags are verified; never force-enable
+    // the Create button, and never synthesize checkbox mouse clicks.
+    public static bool TryNudgeNativeBatchCreateEligibility(
+        IntPtr dialog, IReadOnlyCollection<string> expectedTags)
+    {
+        if (_dialog != dialog || dialog == IntPtr.Zero ||
+            ProjectFolderLinePicker.HasVisibleProjection)
+            return false;
+        CheckedListBox? list = FindNativeCheckedList(dialog);
+        if (list is null || list.IsDisposed) return false;
+        var wanted = new HashSet<string>(expectedTags,
+            StringComparer.OrdinalIgnoreCase);
+        int index = -1;
+        for (int i = 0; i < list.Items.Count; i++)
+        {
+            if (!list.GetItemChecked(i)) continue;
+            if (!wanted.Contains(list.GetItemText(list.Items[i]).Trim()))
+                return false;
+            if (index < 0) index = i;
+        }
+        if (index < 0) return false;
+        try
+        {
+            // Single focus/selection change, not a repeating checkbox
+            // toggle or 432-item reset; preserves exactly checked routes.
+            if (list.SelectedIndex == index) list.ClearSelected();
+            list.SelectedIndex = index;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            WriteDiagnostic("REV80 native Create nudge: " +
+                ex.GetBaseException().Message);
+            return false;
+        }
+    }
+
     public static bool TryApplySavedBatchToNative(
         IntPtr dialog, IReadOnlyCollection<string> wantedNames,
         out int matched, out int checkedCount)
