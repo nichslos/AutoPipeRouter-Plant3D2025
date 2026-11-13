@@ -677,13 +677,15 @@ internal static class NativeIsoLineSelectOverlay
                 list.ClearSelected();
             if (firstChecked >= 0)
             {
+                // REV69: do not ClearSelected()+SelectedIndex on EVERY
+                // 800ms count tick. That continuous focus oscillation
+                // made the one-route Active DWG checkbox visibly blink,
+                // despite its checked state and Selected: N being correct.
+                // Prime selection at most once when there is NO selected row.
                 Button? create = FindNativeCreateButton(_dialog);
-                if (create is { Enabled: false })
-                {
-                    if (list.SelectedIndex == firstChecked)
-                        list.ClearSelected();
+                if (create is { Enabled: false } &&
+                    list.SelectedIndex < 0)
                     list.SelectedIndex = firstChecked;
-                }
             }
         }
         catch (Exception ex)
@@ -727,7 +729,6 @@ internal static class NativeIsoLineSelectOverlay
         int generation = _generation;
         int attempts = 0;
         int stablePasses = 0;
-        int restoredPasses = 0;
         string lastVisibleNames = "";
         var timer = new System.Windows.Forms.Timer { Interval = 350 };
         _modeRecoveryTimer = timer;
@@ -811,25 +812,26 @@ internal static class NativeIsoLineSelectOverlay
                             firstChecked = i;
                     }
 
-                    // Create remains Autodesk-controlled. A real checked
-                    // row/selection change asks Autodesk to revalidate,
-                    // but REV68 NEVER replays a fake MouseDown/MouseUp,
-                    // which previously erased A-08 from our saved ledger.
-                    if (firstChecked >= 0)
-                    {
-                        if (list.SelectedIndex == firstChecked)
-                            list.ClearSelected();
+                    // REV69: restoring the original native check state is
+                    // enough. Never clear/reselect a row which is already
+                    // focused. Doing it three times at 350ms intervals
+                    // was causing repeated visible blinking in Active DWG.
+                    // Keep Autodesk's Create eligibility authoritative.
+                    if (firstChecked >= 0 && list.SelectedIndex < 0)
                         list.SelectedIndex = firstChecked;
-                    }
-                    else if (list.SelectedIndex >= 0)
+                    else if (firstChecked < 0 && list.SelectedIndex >= 0)
                         list.ClearSelected();
                 }
                 finally { _restoringSelection = false; }
 
-                restoredPasses++;
+                // REV69: once the native list names have stabilized and
+                // all exact-tag checks have been reconciled, finish this
+                // mode change immediately. The normal, lightweight
+                // selection tracker can handle any later actual list
+                // replacement; a second/third mode recovery repaint is
+                // neither necessary nor desirable.
                 UpdateSelectedLabel();
-                if (restoredPasses >= 3)
-                    Stop();
+                Stop();
             }
             catch (Exception ex)
             {
