@@ -319,6 +319,7 @@ internal static class NativeIsoDialogEnhancer
         if (_autoCreatePending)
         {
             AbortAutoCreate();
+            NativeIsoLineSelectOverlay.CancelScopeSwitch(_native);
             _document?.Editor.WriteMessage(
                 "\nSPTC REV80: canceled pending ISO batch selection; " +
                 "auto-create timer stopped; no custom-copy watcher.");
