@@ -598,17 +598,28 @@ internal static class NativeIsoLineSelectOverlay
     // REV73: SINGLE deferred native check for an exact, user-selected
     // current-DWG tag. Existing Autodesk control and Click handlers remain
     // authoritative; never assign Create.Enabled or invent a route row.
+    // REV76: Autodesk can invalidate a checked native item after the
+    // exact Current Drawing filter appears. A single early click (REV73)
+    // may be lost, leaving "Selected: N" correct while its original
+    // checkbox is unchecked and Autodesk's Create button stays disabled.
+    // Verify AFTER committing, permit one bounded corrective native
+    // event if necessary, and never enable Create directly.
     private static void ScheduleFinalActiveCheckboxCommit(
         IntPtr dialog, string exactTag)
     {
         CancelActiveCommit();
         int serial = _activeCommitSerial;
         int generation = _generation;
-        int attempts = 0;
-        string lastTag = "";
-        bool lastChecked = false;
-        int stableSamples = 0;
-        var timer = new System.Windows.Forms.Timer { Interval = 160 };
+        int samples = 0;
+        int ticks = 0;
+        int checkAttempts = 0;
+        bool eligibilityReplayed = false;
+        bool awaitingNativeCommit = false;
+        string previousName = "";
+        bool previousChecked = false;
+        object? previousRow = null;
+
+        var timer = new System.Windows.Forms.Timer { Interval = 180 };
         _activeCommitTimer = timer;
         void Stop()
         {
@@ -619,90 +630,153 @@ internal static class NativeIsoLineSelectOverlay
         }
         timer.Tick += (_, _) =>
         {
-            if (_dialog != dialog || generation != _generation ||
-                _activeCommitSerial != serial ||
+            if (_dialog != dialog || _generation != generation ||
+                serial != _activeCommitSerial ||
                 !ActiveDwgTags.IsNativeFilterCurrent(dialog) ||
                 ProjectFolderLinePicker.HasVisibleProjection)
             {
                 Stop();
                 return;
             }
-            if (++attempts > 8) // Bounded; never hang/repaint indefinitely.
+            if (++ticks > 14)
             {
-                WriteDiagnostic("REV73: active route native check did " +
-                    "not stabilize; no automatic click performed.");
+                WriteDiagnostic("REV76: " + exactTag +
+                    " native check validation timed out; " +
+                    "use All Project if Create is disabled.");
                 Stop();
                 return;
             }
+
             CheckedListBox? list = FindNativeCheckedList(dialog);
-            if (list is null || list.IsDisposed || list.Items.Count != 1)
+            if (list is null || list.IsDisposed || !list.IsHandleCreated ||
+                list.Items.Count != 1)
                 return;
-            string visibleTag = list.GetItemText(list.Items[0]).Trim();
-            if (!visibleTag.Equals(exactTag, StringComparison.OrdinalIgnoreCase))
+            object row = list.Items[0]!;
+            string name = list.GetItemText(row).Trim();
+            if (!name.Equals(exactTag, StringComparison.OrdinalIgnoreCase))
                 return;
             bool checkedNow = list.GetItemChecked(0);
-            if (!string.Equals(lastTag, visibleTag, StringComparison.Ordinal) ||
-                checkedNow != lastChecked)
+
+            // Native TextChanged and Items.RemoveAt can briefly replace
+            // the same-looking route row. Require two successive samples
+            // of the same ORIGINAL row and checked state before clicking.
+            if (!ReferenceEquals(row, previousRow) ||
+                !name.Equals(previousName, StringComparison.Ordinal) ||
+                checkedNow != previousChecked)
             {
-                lastTag = visibleTag;
-                lastChecked = checkedNow;
-                stableSamples = 0;
+                previousRow = row;
+                previousName = name;
+                previousChecked = checkedNow;
+                samples = 0;
                 return;
             }
-            if (++stableSamples < 2) return;
+            if (++samples < 2) return;
 
-            Stop();
-            // The route may have been manually unchecked while this
-            // timer was waiting. Read the real saved intent NOW.
-            bool shouldCheck = SessionSelectedTags.Contains(exactTag);
-            if (shouldCheck == checkedNow)
+            bool desired = SessionSelectedTags.Contains(exactTag);
+            Button? create = FindNativeCreateButton(dialog);
+            if (!desired)
             {
-                // Checkbox is already correct. Leave it untouched.
-                Button? existingCreate = FindNativeCreateButton(dialog);
-                WriteDiagnostic("REV73: active " + exactTag +
-                    " native checked=" + checkedNow +
-                    ", Create=" +
-                    (existingCreate?.Enabled.ToString() ?? "unknown") +
-                    " (no checkbox mutation).");
+                // A route not selected by the user must stay unchecked.
+                // Never turn on a line just to enable Autodesk Create.
+                WriteDiagnostic("REV76: active " + exactTag +
+                    " has no saved selection; native checked=" + checkedNow);
+                Stop();
                 return;
             }
 
-            _restoringSelection = true;
-            _scopeSwitchPending = true;
-            _selectionEpoch++;
-            try
+            if (checkedNow && create?.Enabled == true)
             {
-                if (shouldCheck)
+                WriteDiagnostic("REV76: active " + exactTag +
+                    " verified checked=True, Create=True.");
+                Stop();
+                return;
+            }
+
+            if (awaitingNativeCommit)
+            {
+                // The prior click was not accepted into Autodesk's
+                // checked selection or Create eligibility; one further
+                // native correction is allowed, not an endless blink.
+                awaitingNativeCommit = false;
+            }
+
+            if (!checkedNow && checkAttempts < 2)
+            {
+                checkAttempts++;
+                _restoringSelection = true;
+                _scopeSwitchPending = true;
+                _selectionEpoch++;
+                try
                 {
-                    // Use ONE original native checkbox mouse action.
-                    // SetItemChecked alone can appear checked without
-                    // engaging Autodesk's Create validation; an actual
-                    // checkbox event is required on this dialog.
                     ClickNativeCheckedRow(list, 0, exactTag);
                 }
-                else
-                    list.SetItemChecked(0, false);
+                catch (Exception ex)
+                {
+                    WriteDiagnostic("REV76 native click: " +
+                        ex.GetBaseException().Message);
+                }
+                finally
+                {
+                    _restoringSelection = false;
+                    _scopeSwitchPending = false;
+                    _selectionEpoch++;
+                }
+                awaitingNativeCommit = true;
+                previousChecked = list.GetItemChecked(0);
+                samples = 0;
+                WriteDiagnostic("REV76: active " + exactTag +
+                    " check attempt " + checkAttempts +
+                    ", checked=" + previousChecked +
+                    ", Create=" +
+                    (FindNativeCreateButton(dialog)?.Enabled.ToString() ??
+                     "unknown"));
+                return;
             }
-            catch (Exception ex)
+
+            if (checkedNow && create is { Enabled: false } &&
+                !eligibilityReplayed)
             {
-                WriteDiagnostic("REV73 final native check: " +
-                    ex.GetBaseException().Message);
-            }
-            finally
-            {
-                _gestureIndex = -1;
-                _gestureTag = "";
-                _gestureBefore = null;
+                // A visible check icon without native Create eligibility
+                // needs an actual Autodesk ItemCheck/Click transition.
+                // Replay it only ONCE for this exact tagged item.
+                eligibilityReplayed = true;
+                _restoringSelection = true;
+                _scopeSwitchPending = true;
                 _selectionEpoch++;
-                _scopeSwitchPending = false;
-                _restoringSelection = false;
+                try
+                {
+                    list.SetItemChecked(0, false);
+                    if (list.Items.Count == 1 &&
+                        list.GetItemText(list.Items[0]).Trim().Equals(
+                            exactTag, StringComparison.OrdinalIgnoreCase))
+                        ClickNativeCheckedRow(list, 0, exactTag);
+                }
+                catch (Exception ex)
+                {
+                    WriteDiagnostic("REV76 Create validation: " +
+                        ex.GetBaseException().Message);
+                }
+                finally
+                {
+                    _restoringSelection = false;
+                    _scopeSwitchPending = false;
+                    _selectionEpoch++;
+                }
+                previousChecked = list.GetItemChecked(0);
+                samples = 0;
+                awaitingNativeCommit = true;
+                return;
             }
-            Button? create = FindNativeCreateButton(dialog);
-            WriteDiagnostic("REV73: active " + exactTag +
-                " native checked=" + list.GetItemChecked(0) +
-                ", Create=" + (create?.Enabled.ToString() ?? "unknown") +
-                " after one native validation click.");
-            UpdateSelectedLabel();
+
+            if (ticks >= 8 || (checkAttempts >= 2 && !checkedNow) ||
+                (eligibilityReplayed && checkedNow))
+            {
+                WriteDiagnostic("REV76 final active " + exactTag +
+                    ": native checked=" + checkedNow +
+                    ", Create=" + (create?.Enabled.ToString() ?? "unknown") +
+                    ". No Create override.");
+                Stop();
+            }
         };
         timer.Start();
     }
