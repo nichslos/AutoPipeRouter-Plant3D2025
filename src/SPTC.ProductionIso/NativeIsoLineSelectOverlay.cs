@@ -511,6 +511,7 @@ internal static class NativeIsoLineSelectOverlay
 
     public static void RecordBulkNativeSelection(CheckedListBox list)
     {
+        EnsureSelectionTracking();
         // Called AFTER a user-selected Select All/Clear All operation has
         // committed to the real native list. Only change route tags that
         // actually appear in the current filter; keep hidden selections.
@@ -980,6 +981,7 @@ internal static class NativeIsoLineSelectOverlay
         // checked native row was cleared programmatically.
         if (!desired && !actual)
             EnsureCreateDisabledForEmptyNativeList(list, dialog, "single-line");
+        RecordBulkNativeSelection(list);
         Button? create = FindNativeCreateButton(dialog);
         WriteDiagnostic("REV42 single-line search Select All: " +
             tag + ", desired=" + desired + ", checked=" + actual +
@@ -1131,6 +1133,7 @@ internal static class NativeIsoLineSelectOverlay
                         // actually differs. Do not synthesize clicks or alter Create.
                         if (native.Items.Count > 0)
                             ScheduleFirstRowRetry(native, parent, generation, selected);
+                        RecordBulkNativeSelection(native);
 
                         Button? create = FindNativeCreateButton(parent);
                         WriteDiagnostic("REV38 Select All: desired=" + selected +
@@ -1239,6 +1242,7 @@ internal static class NativeIsoLineSelectOverlay
                     try { toggle.Checked = allChecked; }
                     finally { _setting = false; }
                 }
+                RecordBulkNativeSelection(native);
                 Button? create = FindNativeCreateButton(parent);
                 WriteDiagnostic("REV38 first-row retry: checked=" +
                     native.GetItemChecked(0) + ", total=" +
