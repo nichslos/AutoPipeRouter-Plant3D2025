@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
@@ -46,6 +47,8 @@ internal static class NativeIsoExactLineFilter
     private static int _attempts;
     private static bool _working;
     private static bool _diagnosticWritten;
+    private static Stopwatch? _activeFilterWatch;
+    private static bool _readyReported;
     // REV46: one bounded alternative text query; still validate and retain
     // ONLY the exact full line number from Autodesk's original checklist.
     private static bool _fallbackApplied;
@@ -61,6 +64,8 @@ internal static class NativeIsoExactLineFilter
         _diagnosticWritten = false;
         _fallbackApplied = false;
         _fallbackQuery = "";
+        _readyReported = false;
+        _activeFilterWatch = Stopwatch.StartNew();
 
         if (_dialog == IntPtr.Zero || _tag.Length == 0) return;
 
@@ -180,6 +185,21 @@ internal static class NativeIsoExactLineFilter
 
             _attempts = 0;
             if (_timer != null) _timer.Interval = 1200;
+            // REV71: the exact Autodesk native checklist is ready NOW.
+            // Restore its saved checked state immediately instead of
+            // waiting for the separate 350ms/350ms/350ms mode timer.
+            // Method is a no-op if this was already finalized.
+            NativeIsoLineSelectOverlay.CompleteActiveScopeAfterExactFilter(
+                _dialog, _tag);
+            if (!_readyReported)
+            {
+                _readyReported = true;
+                _activeFilterWatch?.Stop();
+                _document?.Editor.WriteMessage(
+                    "\nSPTC REV71: active exact line ready in " +
+                    (_activeFilterWatch?.ElapsedMilliseconds ?? 0) +
+                    " ms (native filter + SPTC exact validation).");
+            }
             // REV70: on steady exact-filter ticks do NOT unnecessarily
             // retrigger the Selected counter / checkbox reconciliation
             // while Autodesk is painting the same single-row results.
@@ -259,6 +279,9 @@ internal static class NativeIsoExactLineFilter
         IntPtr dialog = _dialog;
         Document? doc = _document;
         End(restore: true);
+        // When an active exact match cannot be verified, release the
+        // selection-scope guard rather than leaving the native UI frozen.
+        NativeIsoLineSelectOverlay.CancelScopeSwitch(dialog);
         ActiveDwgTags.ClearOneTag(dialog, doc);
         NativeIsoToolbarClickFilter.MarkAllLinesRestored(dialog);
         NativeIsoLineSelectOverlay.UpdateDisplayedCount();
