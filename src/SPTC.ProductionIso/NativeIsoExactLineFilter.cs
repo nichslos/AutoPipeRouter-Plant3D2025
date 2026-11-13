@@ -129,6 +129,7 @@ internal static class NativeIsoExactLineFilter
                 rows.Where(r => !r.Text.Equals(_tag,
                     StringComparison.OrdinalIgnoreCase)).ToList();
 
+            bool viewChanged = extras.Count > 0 || _state == null;
             if (extras.Count > 0)
             {
                 // If native TextChanged regenerated the collection, abandon
@@ -179,7 +180,13 @@ internal static class NativeIsoExactLineFilter
 
             _attempts = 0;
             if (_timer != null) _timer.Interval = 1200;
-            NativeIsoLineSelectOverlay.UpdateDisplayedCount();
+            // REV70: on steady exact-filter ticks do NOT unnecessarily
+            // retrigger the Selected counter / checkbox reconciliation
+            // while Autodesk is painting the same single-row results.
+            // If Autodesk actually repopulates/prunes the native list,
+            // the update still runs for the changed view.
+            if (viewChanged)
+                NativeIsoLineSelectOverlay.UpdateDisplayedCount();
         }
         catch (Exception ex)
         {
