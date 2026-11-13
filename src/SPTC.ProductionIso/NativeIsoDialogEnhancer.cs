@@ -525,6 +525,11 @@ internal static class NativeIsoDialogEnhancer
                         // Autodesk can replace its original checklist rows.
                         string[] selectedBefore =
                             NativeIsoLineSelectOverlay.CaptureSelectedTags(native);
+                        // REV68: forbid programmatic native checkbox events
+                        // during toolbar scope changes from being counted as
+                        // intentional user unchecks. The A-08 tag must remain
+                        // selected while its checklist is being rebuilt.
+                        NativeIsoLineSelectOverlay.BeginScopeSwitch(native);
 
                         // A previous folder projection may still be present.
                         // Remove it so the user's pointer reaches Autodesk's
@@ -553,6 +558,8 @@ internal static class NativeIsoDialogEnhancer
                                 NativeIsoLineSelectOverlay.ScheduleModeChangeRecovery(
                                     native, selectedBefore);
                             }
+                            else
+                                NativeIsoLineSelectOverlay.CancelScopeSwitch(native);
                             return cleared;
                         }
 
@@ -565,6 +572,7 @@ internal static class NativeIsoDialogEnhancer
                                 "\nSPTC REV30: Native active filtering needs exactly " +
                                 "one verified physical line tag. Found " +
                                 ActiveDwgTags.Count + ". Full list was left unchanged.");
+                            NativeIsoLineSelectOverlay.CancelScopeSwitch(native);
                             return false;
                         }
 
@@ -584,6 +592,8 @@ internal static class NativeIsoDialogEnhancer
                             NativeIsoLineSelectOverlay.ScheduleModeChangeRecovery(
                                 native, selectedBefore);
                         }
+                        else
+                            NativeIsoLineSelectOverlay.CancelScopeSwitch(native);
                         return applied;
                     });
 
