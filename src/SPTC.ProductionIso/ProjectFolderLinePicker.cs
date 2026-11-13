@@ -116,6 +116,20 @@ internal static class ProjectFolderLinePicker
             ? _folderLineList.Items.Count
             : null;
 
+    // REV65: count the actual checked *native* lines in the current
+    // folder projection. Do not count focus/highlight or hidden routes.
+    public static int? VisibleCheckedCount
+    {
+        get
+        {
+            if (!HasVisibleProjection ||
+                _folderLineList is not { IsDisposed: false })
+                return null;
+            try { return VisibleEntries.Count(GetNativeChecked); }
+            catch (Exception) { return null; }
+        }
+    }
+
     public static void Attach(IntPtr dialog, Document? document)
     {
         if (dialog == IntPtr.Zero) return;
@@ -1624,11 +1638,24 @@ internal static class ProjectFolderLinePicker
 
     public static void ClearFolder()
     {
+        // REV65: preserve actual checked tag names before Autodesk
+        // rebuilds its All Project list; indices may change after refresh.
+        IntPtr dialog = _dialog;
+        string[] selected = dialog == IntPtr.Zero
+            ? Array.Empty<string>()
+            : NativeIsoLineSelectOverlay.CaptureSelectedTags(dialog);
+
         CancelPendingScan();
-        if (_dialog != IntPtr.Zero)
-            ActiveDwgTags.ClearOneTag(_dialog, null);
+        if (dialog != IntPtr.Zero)
+            ActiveDwgTags.ClearOneTag(dialog, null);
         ClearVisibleProjection();
-        _document?.Editor.WriteMessage("\nSPTC REV22: Original native line list restored.");
+
+        if (dialog != IntPtr.Zero)
+            NativeIsoLineSelectOverlay.ScheduleModeChangeRecovery(
+                dialog, selected);
+        _document?.Editor.WriteMessage(
+            "\nSPTC REV65: All Project restored; checked lines will be " +
+            "revalidated against the native Create button.");
     }
 
     private static void DestroyProjection()
