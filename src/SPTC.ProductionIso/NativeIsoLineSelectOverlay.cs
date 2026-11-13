@@ -1133,6 +1133,79 @@ internal static class NativeIsoLineSelectOverlay
         finally { _restoringSelection = false; }
     }
 
+    // REV79: prepare the ORIGINAL Autodesk selection for a single Create
+    // click, regardless of the search/Active/Folder view used while the
+    // user chose the routes. Never fabricate list items or force Create.
+    // Caller first switches to the real All Project source. This routine
+    // operates on the existing native WinForms checked rows ONLY.
+    public static bool TryApplySavedBatchToNative(
+        IntPtr dialog, IReadOnlyCollection<string> wantedNames,
+        out int matched, out int checkedCount)
+    {
+        matched = 0;
+        checkedCount = 0;
+        if (dialog == IntPtr.Zero || dialog != _dialog ||
+            ProjectFolderLinePicker.HasVisibleProjection ||
+            wantedNames.Count == 0)
+            return false;
+
+        CheckedListBox? list = FindNativeCheckedList(dialog);
+        if (list == null || list.IsDisposed || list.Items.Count == 0)
+            return false;
+
+        var wanted = new HashSet<string>(wantedNames,
+            StringComparer.OrdinalIgnoreCase);
+        var indices = new List<int>(list.Items.Count);
+        var names = new List<string>(list.Items.Count);
+        for (int i = 0; i < list.Items.Count; i++)
+        {
+            string tag = list.GetItemText(list.Items[i]).Trim();
+            names.Add(tag);
+            if (wanted.Contains(tag))
+                indices.Add(i);
+        }
+
+        matched = indices.Select(i => names[i])
+            .Distinct(StringComparer.OrdinalIgnoreCase).Count();
+        if (matched != wanted.Count)
+            return false;  // native source not ready; do not create subset
+
+        _restoringSelection = true;
+        try
+        {
+            // Clear ONLY extras checked by an old filtered/indexed view.
+            // User intent in wantedNames always remains authoritative.
+            for (int i = 0; i < list.Items.Count; i++)
+            {
+                bool desired = wanted.Contains(names[i]);
+                if (list.GetItemChecked(i) != desired)
+                    list.SetItemChecked(i, desired);
+            }
+            for (int i = 0; i < list.Items.Count; i++)
+            {
+                if (!list.GetItemChecked(i)) continue;
+                if (!wanted.Contains(names[i])) return false;
+                checkedCount++;
+            }
+            if (checkedCount != wanted.Count)
+                return false;
+
+            // A focused checked row can trigger Autodesk's own native
+            // Create eligibility refresh without fake checkbox clicks.
+            if (list.SelectedIndex < 0 && indices.Count > 0)
+                list.SelectedIndex = indices[0];
+
+            return true;
+        }
+        catch (Exception ex)
+        {
+            WriteDiagnostic("REV79: native batch restore failed: " +
+                ex.GetBaseException().Message);
+            return false;
+        }
+        finally { _restoringSelection = false; }
+    }
+
     public static string[] CaptureSelectedTags(IntPtr dialog)
     {
         if (dialog != _dialog || dialog == IntPtr.Zero)
