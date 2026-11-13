@@ -442,6 +442,13 @@ internal static class NativeIsoLineSelectOverlay
         if (_dialog != dialog || dialog == IntPtr.Zero) return;
         _scopeSwitchPending = true;
         _settledActiveRoute = "";
+        // REV71: abort any obsolete recovery window when changing scope.
+        // Active mode will be finalized directly when its exact native
+        // route is verified, not via 3 x 350ms repaint polling.
+        try { _modeRecoveryTimer?.Stop(); _modeRecoveryTimer?.Dispose(); }
+        catch (Exception) { }
+        _modeRecoveryTimer = null;
+        _modeRecoverySerial++;
         _selectionEpoch++;
         _gestureIndex = -1;
         _gestureTag = "";
@@ -463,6 +470,55 @@ internal static class NativeIsoLineSelectOverlay
         _settledActiveRoute = "";
         _lastNativeRowSignature = "";
         _stableNativePolls = 0;
+    }
+
+    // REV71: single-shot fast path for the Active-DWG view. The exact
+    // filter already verified the original native Autodesk list has ONE
+    // matching tag, so no second stabilization timer is needed. This
+    // method NEVER creates a fake row, scans files or changes the ledger.
+    public static void CompleteActiveScopeAfterExactFilter(
+        IntPtr dialog, string exactTag)
+    {
+        if (dialog == IntPtr.Zero || dialog != _dialog ||
+            !_scopeSwitchPending ||
+            ProjectFolderLinePicker.HasVisibleProjection ||
+            string.IsNullOrWhiteSpace(exactTag) ||
+            !ActiveDwgTags.IsNativeFilterCurrent(dialog))
+            return;
+
+        CheckedListBox? list = FindNativeCheckedList(dialog);
+        if (list is null || list.IsDisposed || list.Items.Count != 1 ||
+            !list.GetItemText(list.Items[0]).Trim().Equals(
+                exactTag, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        bool selected = SessionSelectedTags.Contains(exactTag);
+        try
+        {
+            _restoringSelection = true;
+            if (list.GetItemChecked(0) != selected)
+                list.SetItemChecked(0, selected);
+            // Do not clear and reselect an already focused native row;
+            // this was visible as blinking in REV68-REV70.
+            if (selected && list.SelectedIndex < 0)
+                list.SelectedIndex = 0;
+            else if (!selected && list.SelectedIndex >= 0)
+                list.ClearSelected();
+        }
+        catch (Exception ex)
+        {
+            WriteDiagnostic("REV71 fast active restore: " +
+                ex.GetBaseException().Message);
+            return; // keep pending for the next exact-filter retry
+        }
+        finally { _restoringSelection = false; }
+
+        // Done; later count-timer ticks are read-only for this exact row.
+        _settledActiveRoute = exactTag;
+        _scopeSwitchPending = false;
+        _lastNativeRowSignature = "";
+        _stableNativePolls = 0;
+        UpdateDisplayedCount();
     }
 
     private static void BeginUserGesture(CheckedListBox list, int index)
