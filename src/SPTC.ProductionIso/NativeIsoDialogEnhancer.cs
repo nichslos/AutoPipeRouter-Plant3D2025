@@ -520,6 +520,12 @@ internal static class NativeIsoDialogEnhancer
                     {
                         if (_document is null) return false;
 
+                        // REV65: snapshot CHECKED tag names, never item
+                        // indices, before the native toolbar changes mode.
+                        // Autodesk can replace its original checklist rows.
+                        string[] selectedBefore =
+                            NativeIsoLineSelectOverlay.CaptureSelectedTags(native);
+
                         // A previous folder projection may still be present.
                         // Remove it so the user's pointer reaches Autodesk's
                         // genuine line list, never an overlaid WinForms copy.
@@ -544,6 +550,8 @@ internal static class NativeIsoDialogEnhancer
                                     "\nSPTC REV38: All Project native refresh=" +
                                     refreshed + "; line filter cleared.");
                                 NativeIsoLineSelectOverlay.UpdateDisplayedCount();
+                                NativeIsoLineSelectOverlay.ScheduleModeChangeRecovery(
+                                    native, selectedBefore);
                             }
                             return cleared;
                         }
@@ -573,6 +581,8 @@ internal static class NativeIsoDialogEnhancer
                                 "\nSPTC REV31: Exact match requested for " +
                                 ActiveDwgTags.CurrentTags[0] +
                                 "; preserving the real Autodesk checklist/Create.");
+                            NativeIsoLineSelectOverlay.ScheduleModeChangeRecovery(
+                                native, selectedBefore);
                         }
                         return applied;
                     });
