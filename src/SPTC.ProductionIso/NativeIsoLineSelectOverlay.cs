@@ -89,6 +89,10 @@ internal static class NativeIsoLineSelectOverlay
     private static TextBoxBase? _trackedNativeSearch;
     private static int _gestureIndex = -1;
     private static string _gestureTag = "";
+    // REV67: a Shift range can check several native rows in ONE gesture.
+    // Remember pre-click state for EVERY visible tag, not only clicked row.
+    private static Dictionary<string, bool>? _gestureBefore;
+    private static bool _initialNativeSelectionImported;
     private static bool _restoringSelection;
     private static string _lastNativeRowSignature = "";
     private static string _lastRestoredRowSignature = "";
@@ -341,6 +345,7 @@ internal static class NativeIsoLineSelectOverlay
         _trackedNativeSearch = null;
         _gestureIndex = -1;
         _gestureTag = "";
+        _gestureBefore = null;
     }
 
     private static void EnsureSelectionTracking()
@@ -359,11 +364,16 @@ internal static class NativeIsoLineSelectOverlay
             list.KeyDown += OnNativeLineKeyDown;
             list.KeyUp += OnNativeLineKeyUp;
             list.ItemCheck += OnNativeLineItemCheck;
-            // Import checked items the FIRST time a native list appears.
-            // Rebuilt lists may contain legitimate existing user checks too,
-            // but never discard earlier selected route names on a filter.
-            foreach (string tag in ReadCheckedTags(list))
-                SessionSelectedTags.Add(tag);
+            // REV67: ONLY import checked rows when opening this dialog.
+            // Autodesk reuses checkbox INDEX state when it rebuilds a filtered
+            // list, which can mark unrelated names as checked. Importing
+            // those as NEW selections caused the 08 search to select all.
+            if (!_initialNativeSelectionImported && list.Items.Count > 0)
+            {
+                foreach (string tag in ReadCheckedTags(list))
+                    SessionSelectedTags.Add(tag);
+                _initialNativeSelectionImported = true;
+            }
             _lastNativeRowSignature = "";
             _lastRestoredRowSignature = "";
             _stableNativePolls = 0;
@@ -409,6 +419,9 @@ internal static class NativeIsoLineSelectOverlay
         _lastNativeRowSignature = "";
         _lastRestoredRowSignature = "";
         _stableNativePolls = 0;
+        _gestureIndex = -1;
+        _gestureTag = "";
+        _gestureBefore = null;
     }
 
     private static void BeginUserGesture(CheckedListBox list, int index)
@@ -417,6 +430,14 @@ internal static class NativeIsoLineSelectOverlay
             index < 0 || index >= list.Items.Count) return;
         _gestureIndex = index;
         _gestureTag = list.GetItemText(list.Items[index]).Trim();
+        _gestureBefore = new Dictionary<string, bool>(
+            StringComparer.OrdinalIgnoreCase);
+        for (int i = 0; i < list.Items.Count; i++)
+        {
+            string tag = list.GetItemText(list.Items[i]).Trim();
+            if (tag.Length > 0)
+                _gestureBefore[tag] = list.GetItemChecked(i);
+        }
     }
 
     private static void OnNativeLineMouseDown(
@@ -440,15 +461,15 @@ internal static class NativeIsoLineSelectOverlay
     {
         if (_restoringSelection || sender is not CheckedListBox list ||
             !ReferenceEquals(list, _trackedNativeList) ||
-            _gestureIndex != e.Index ||
+            _gestureIndex < 0 ||
             e.Index < 0 || e.Index >= list.Items.Count ||
             ProjectFolderLinePicker.HasVisibleProjection)
             return;
 
+        // A single Shift-click can fire ItemCheck for five different
+        // indices. Treat ALL these native events as one user gesture.
         string tag = list.GetItemText(list.Items[e.Index]).Trim();
-        if (tag.Length == 0 ||
-            !tag.Equals(_gestureTag, StringComparison.OrdinalIgnoreCase))
-            return;
+        if (tag.Length == 0) return;
 
         if (e.NewValue == CheckState.Checked)
             SessionSelectedTags.Add(tag);
@@ -458,39 +479,58 @@ internal static class NativeIsoLineSelectOverlay
 
     private static void CommitUserGesture(CheckedListBox list)
     {
-        int index = _gestureIndex;
-        string name = _gestureTag;
-        // The checkbox may settle after MouseUp/KeyUp. Read its REAL
-        // committed state on the next UI turn, never the clicked highlight.
+        int clicked = _gestureIndex;
+        string clickedTag = _gestureTag;
+        Dictionary<string, bool>? before = _gestureBefore;
+        // End the active gesture NOW: any deferred native checkbox refresh
+        // must never be classified as a new user check/uncheck.
+        _gestureIndex = -1;
+        _gestureTag = "";
+        _gestureBefore = null;
+        if (clicked < 0) return;
+
+        // Autodesk can commit Shift-range check state after MouseUp.
+        // Compare the checked state of every VISIBLE tag against its
+        // pre-click state. Update the saved ledger only for real deltas.
         try
         {
             list.BeginInvoke((MethodInvoker)(() =>
             {
-                if (ReferenceEquals(_trackedNativeList, list) &&
-                    !list.IsDisposed && index >= 0 &&
-                    index < list.Items.Count &&
-                    list.GetItemText(list.Items[index]).Trim().Equals(
-                        name, StringComparison.OrdinalIgnoreCase) &&
-                    !ProjectFolderLinePicker.HasVisibleProjection)
+                if (!ReferenceEquals(_trackedNativeList, list) ||
+                    list.IsDisposed ||
+                    ProjectFolderLinePicker.HasVisibleProjection)
+                    return;
+
+                for (int i = 0; i < list.Items.Count; i++)
                 {
-                    if (list.GetItemChecked(index))
-                        SessionSelectedTags.Add(name);
+                    string tag = list.GetItemText(list.Items[i]).Trim();
+                    if (tag.Length == 0 || before == null ||
+                        !before.TryGetValue(tag, out bool wasChecked))
+                        continue;
+                    bool nowChecked = list.GetItemChecked(i);
+                    if (nowChecked == wasChecked) continue;
+                    if (nowChecked) SessionSelectedTags.Add(tag);
+                    else SessionSelectedTags.Remove(tag);
+                }
+
+                // The clicked row is always an explicitly initiated user
+                // action; capture its final committed state even if native
+                // handlers fired before our MouseDown event registration.
+                if (clicked < list.Items.Count &&
+                    list.GetItemText(list.Items[clicked]).Trim().Equals(
+                        clickedTag, StringComparison.OrdinalIgnoreCase))
+                {
+                    if (list.GetItemChecked(clicked))
+                        SessionSelectedTags.Add(clickedTag);
                     else
-                        SessionSelectedTags.Remove(name);
+                        SessionSelectedTags.Remove(clickedTag);
                 }
-                if (_gestureIndex == index && _gestureTag == name)
-                {
-                    _gestureIndex = -1;
-                    _gestureTag = "";
-                }
+                _lastNativeRowSignature = "";
+                _stableNativePolls = 0;
                 UpdateSelectedLabel();
             }));
         }
-        catch (InvalidOperationException)
-        {
-            _gestureIndex = -1;
-            _gestureTag = "";
-        }
+        catch (InvalidOperationException) { }
     }
 
     private static void OnNativeLineMouseUp(
@@ -556,7 +596,7 @@ internal static class NativeIsoLineSelectOverlay
         if (_restoringSelection || _gestureIndex >= 0 ||
             ProjectFolderLinePicker.HasVisibleProjection ||
             _trackedNativeList is not { IsDisposed: false } list ||
-            list.Items.Count == 0 || SessionSelectedTags.Count == 0)
+            list.Items.Count == 0)
             return;
 
         // Include the exact native list contents and editable search term.
@@ -574,11 +614,12 @@ internal static class NativeIsoLineSelectOverlay
             _stableNativePolls = 0;
             return;
         }
-        if (_stableNativePolls++ < 1 ||
-            value.Equals(_lastRestoredRowSignature, StringComparison.Ordinal))
+        if (_stableNativePolls++ < 1)
             return;
 
-        _lastRestoredRowSignature = value;
+        // REV67: Do NOT skip this list forever merely because the text
+        // signature is unchanged. Autodesk can later recheck stale INDEX
+        // values while the visible names remain identical.
         _restoringSelection = true;
         try
         {
@@ -586,12 +627,18 @@ internal static class NativeIsoLineSelectOverlay
             for (int i = 0; i < list.Items.Count; i++)
             {
                 string tag = list.GetItemText(list.Items[i]).Trim();
-                if (SessionSelectedTags.Contains(tag) &&
-                    !list.GetItemChecked(i))
-                    list.SetItemChecked(i, true);
+                bool shouldCheck = SessionSelectedTags.Contains(tag);
+                bool isChecked = list.GetItemChecked(i);
+                // Enforce BOTH sides of exact tag membership. REV66 only
+                // checked remembered tags and left phantom rows selected
+                // when Autodesk reused old check indices during searches.
+                if (shouldCheck != isChecked)
+                    list.SetItemChecked(i, shouldCheck);
                 if (firstChecked == -1 && list.GetItemChecked(i))
                     firstChecked = i;
             }
+            if (firstChecked < 0 && list.SelectedIndex >= 0)
+                list.ClearSelected();
             if (firstChecked >= 0)
             {
                 Button? create = FindNativeCreateButton(_dialog);
@@ -616,10 +663,10 @@ internal static class NativeIsoLineSelectOverlay
         if (dialog != _dialog || dialog == IntPtr.Zero)
             return Array.Empty<string>();
         EnsureSelectionTracking();
-        var list = FindNativeCheckedList(dialog);
-        if (list != null)
-            foreach (var tag in ReadCheckedTags(list))
-                SessionSelectedTags.Add(tag);
+        // REV67: never re-import current UI checks on a mode switch.
+        // Current UI may have temporary phantom checkboxes after search
+        // rebuild. The tag ledger changes ONLY on a user gesture or an
+        // explicit verified Select All/Folder operation.
         return SessionSelectedTags.ToArray();
     }
 
@@ -1210,6 +1257,13 @@ internal static class NativeIsoLineSelectOverlay
     {
         try { _firstRowRetry?.Stop(); _firstRowRetry?.Dispose(); }
         catch { }
+        // REV67: delayed row-zero retry belongs ONLY to this native
+        // filter result. If Autodesk repopulates the list meanwhile,
+        // it must not check an unrelated line by the same row INDEX.
+        string firstTagAtSchedule = native.Items.Count > 0
+            ? native.GetItemText(native.Items[0]).Trim() : "";
+        int countAtSchedule = native.Items.Count;
+        string searchAtSchedule = _trackedNativeSearch?.Text ?? "";
         var timer = new System.Windows.Forms.Timer { Interval = 160 };
         _firstRowRetry = timer;
         timer.Tick += (_, _) =>
@@ -1218,7 +1272,12 @@ internal static class NativeIsoLineSelectOverlay
             timer.Dispose();
             if (ReferenceEquals(_firstRowRetry, timer)) _firstRowRetry = null;
             if (_generation != generation || _dialog != parent ||
-                native.IsDisposed || native.Items.Count == 0)
+                native.IsDisposed || native.Items.Count == 0 ||
+                native.Items.Count != countAtSchedule ||
+                !native.GetItemText(native.Items[0]).Trim().Equals(
+                    firstTagAtSchedule, StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(_trackedNativeSearch?.Text ?? "",
+                    searchAtSchedule, StringComparison.Ordinal))
                 return;
             try
             {
@@ -1457,6 +1516,7 @@ internal static class NativeIsoLineSelectOverlay
         _modeRecoverySerial++;
         DetachSelectionTracking();
         SessionSelectedTags.Clear();
+        _initialNativeSelectionImported = false;
         _lastNativeRowSignature = "";
         _lastRestoredRowSignature = "";
         _stableNativePolls = 0;
