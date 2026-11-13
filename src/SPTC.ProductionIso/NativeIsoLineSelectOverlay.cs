@@ -113,6 +113,39 @@ internal static class NativeIsoLineSelectOverlay
     // checked/unchecked writes: stops blink and validates Create normally.
     private static System.Windows.Forms.Timer? _activeCommitTimer;
     private static int _activeCommitSerial;
+    // REV74: batch Autodesk's SHOW ALL checklist redraw until its
+    // project-wide rows have been refreshed and exact tag checks restored.
+    // Prevents a temporary unchecked frame from flashing on-screen.
+    // Only the original native CheckedListBox is suspended.
+    private static CheckedListBox? _projectRedrawBatchList;
+
+    public static void BeginProjectRedrawBatch(IntPtr dialog)
+    {
+        EndProjectRedrawBatch();
+        if (_dialog != dialog || dialog == IntPtr.Zero) return;
+        CheckedListBox? list = FindNativeCheckedList(dialog);
+        if (list is null || list.IsDisposed || !list.IsHandleCreated)
+            return;
+        try
+        {
+            list.BeginUpdate();
+            _projectRedrawBatchList = list;
+        }
+        catch (Exception) { _projectRedrawBatchList = null; }
+    }
+
+    public static void EndProjectRedrawBatch()
+    {
+        CheckedListBox? list = _projectRedrawBatchList;
+        _projectRedrawBatchList = null;
+        if (list is null) return;
+        try
+        {
+            if (!list.IsDisposed)
+                list.EndUpdate();
+        }
+        catch (Exception) { }
+    }
 
     private static void CancelActiveCommit()
     {
@@ -446,6 +479,9 @@ internal static class NativeIsoLineSelectOverlay
         _stableNativePolls = 0;
         _settledActiveRoute = "";
         CancelActiveCommit();
+        // A manual search may interrupt the Show All recovery. Never
+        // hold the native list in BeginUpdate after that interaction.
+        if (!_scopeSwitchPending) EndProjectRedrawBatch();
         // REV72: a manual query change resumes the regular selection
         // tracker. Active-only idle mode must never affect a new search.
         if (_countTimer is { Enabled: false }) _countTimer.Start();
@@ -490,6 +526,7 @@ internal static class NativeIsoLineSelectOverlay
         _scopeSwitchPending = false;
         _settledActiveRoute = "";
         CancelActiveCommit();
+        EndProjectRedrawBatch();
         if (_countTimer is { Enabled: false }) _countTimer.Start();
         _lastNativeRowSignature = "";
         _stableNativePolls = 0;
@@ -960,6 +997,11 @@ internal static class NativeIsoLineSelectOverlay
                 _lastNativeRowSignature = "";
                 _lastRestoredRowSignature = "";
                 _stableNativePolls = 0;
+                // REV74: Autodesk has repopulated the project-wide
+                // checklist and checked states are now accurate. Paint
+                // once, rather than first drawing temporarily unchecked
+                // entries then visibly checking them again.
+                EndProjectRedrawBatch();
                 UpdateDisplayedCount();
             }
         }
@@ -1780,6 +1822,7 @@ internal static class NativeIsoLineSelectOverlay
     {
         _generation++;
         CancelActiveCommit();
+        EndProjectRedrawBatch();
         try { _firstRowRetry?.Stop(); _firstRowRetry?.Dispose(); }
         catch { }
         _firstRowRetry = null;
