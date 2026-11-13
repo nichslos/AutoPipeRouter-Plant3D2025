@@ -471,9 +471,11 @@ internal static class NativeIsoResultsOverlay
         }
     }
 
-    // REV60: add two compact, clickable lines under each original result:
-    // Custom: <DWG path> and the same Open drawing folder link as Autodesk.
-    // The native TreeView still owns its ONE original scrollbar.
+    // REV62: one Explorer folder link PER native line-number result.
+    // For a route that outputs three DWGs, list all 3 Custom DWG links
+    // followed by a single Explorer link, exactly like Autodesk's original.
+    // This also handles files arriving one at a time: the folder link is
+    // always last, even when a subsequent ISO split sheet finishes later.
     private static void RefreshManagedPerLine(TreeView tree)
     {
         var desired = new Dictionary<TreeNode, List<string>>();
@@ -484,77 +486,87 @@ internal static class NativeIsoResultsOverlay
             List<string> matched = CopiedPaths.Where(p =>
                 File.Exists(p) &&
                 MatchesIsoName(Path.GetFileName(p), tag)).ToList();
-            // View -> Only Errors: Autodesk removes successful result rows.
             if (matched.Count > 0) desired[parent] = matched;
         }
 
-        bool IsDesired(TreeNode node)
+        // A canonical ordered list per route: N custom DWGs, ONE folder.
+        List<CustomResultLink> Expected(List<string> paths)
         {
-            if (node.Parent is null ||
-                !desired.TryGetValue(node.Parent, out var paths) ||
-                node.Tag is not CustomResultLink link)
-                return false;
-            return paths.Any(path => CustomLinkTarget(path, link.OpenFolder)
-                .Equals(link.Path, StringComparison.OrdinalIgnoreCase));
+            var items = paths.Select(p =>
+                new CustomResultLink(p, false)).ToList();
+            if (paths.Count > 0)
+                items.Add(new CustomResultLink(
+                    CustomLinkTarget(paths[0], true), true));
+            return items;
         }
 
-        bool HasLink(TreeNode parent, string path, bool openFolder)
-        {
-            string target = CustomLinkTarget(path, openFolder);
-            return _managedCustomLinks.Any(node =>
-                ReferenceEquals(node.Parent, parent) &&
-                node.Tag is CustomResultLink link &&
-                link.OpenFolder == openFolder &&
-                link.Path.Equals(target, StringComparison.OrdinalIgnoreCase));
-        }
+        bool SameLink(CustomResultLink a, CustomResultLink b) =>
+            a.OpenFolder == b.OpenFolder &&
+            a.Path.Equals(b.Path, StringComparison.OrdinalIgnoreCase);
 
-        List<TreeNode> deleted = _managedCustomLinks
-            .Where(node => node.TreeView != tree || !IsDesired(node))
-            .ToList();
-        bool changed = deleted.Count > 0 || desired.Any(kv =>
-            kv.Value.Any(path =>
-                !HasLink(kv.Key, path, false) ||
-                !HasLink(kv.Key, path, true)));
+        bool changed = _managedCustomLinks.Any(node =>
+            node.TreeView != tree || node.Parent is null ||
+            !desired.ContainsKey(node.Parent));
+        if (!changed)
+        {
+            foreach (var (parent, paths) in desired)
+            {
+                var actual = parent.Nodes.Cast<TreeNode>()
+                    .Where(_managedCustomLinks.Contains)
+                    .Select(node => node.Tag as CustomResultLink)
+                    .ToList();
+                var expected = Expected(paths);
+                if (actual.Count != expected.Count ||
+                    actual.Where((item, index) =>
+                        item is null || !SameLink(item, expected[index]))
+                        .Any())
+                {
+                    changed = true;
+                    break;
+                }
+            }
+        }
         if (!changed) return;
 
         TreeNode? previousTop = tree.TopNode;
         tree.BeginUpdate();
         try
         {
-            foreach (TreeNode node in deleted)
+            // Only remove OUR injected children; never change native rows.
+            foreach (TreeNode item in _managedCustomLinks.ToList())
             {
-                if (node.TreeView != null) node.Remove();
-                node.NodeFont?.Dispose();
-                _managedCustomLinks.Remove(node);
+                try
+                {
+                    if (item.TreeView != null) item.Remove();
+                    item.NodeFont?.Dispose();
+                }
+                catch (Exception) { }
             }
+            _managedCustomLinks.Clear();
+
             foreach (var (parent, paths) in desired)
             {
-                foreach (string path in paths)
+                foreach (CustomResultLink link in Expected(paths))
                 {
-                    // Add in this order, directly beneath the two original
-                    // File/Explorer rows, without extra heading or padding.
-                    foreach (bool openFolder in new[] { false, true })
+                    var item = new TreeNode(
+                        link.OpenFolder
+                            ? CustomFolderLabel
+                            : CustomLabel(link.Path))
                     {
-                        if (HasLink(parent, path, openFolder)) continue;
-                        string target = CustomLinkTarget(path, openFolder);
-                        var item = new TreeNode(
-                            NativeLinkLabel(path, openFolder))
-                        {
-                            ForeColor = Color.Blue,
-                            ToolTipText = target,
-                            Tag = new CustomResultLink(target, openFolder),
-                            NodeFont = openFolder
-                                ? new Font(tree.Font.FontFamily,
-                                    tree.Font.SizeInPoints,
-                                    FontStyle.Regular | FontStyle.Underline,
-                                    GraphicsUnit.Point)
-                                : null
-                        };
-                        parent.Nodes.Add(item);
-                        _managedCustomLinks.Add(item);
-                    }
-                    if (!parent.IsExpanded) parent.Expand();
+                        ForeColor = Color.Blue,
+                        ToolTipText = link.Path,
+                        Tag = link,
+                        NodeFont = link.OpenFolder
+                            ? new Font(tree.Font.FontFamily,
+                                tree.Font.SizeInPoints,
+                                FontStyle.Regular | FontStyle.Underline,
+                                GraphicsUnit.Point)
+                            : null
+                    };
+                    parent.Nodes.Add(item);
+                    _managedCustomLinks.Add(item);
                 }
+                if (!parent.IsExpanded) parent.Expand();
             }
         }
         finally
@@ -896,20 +908,22 @@ internal static class NativeIsoResultsOverlay
             if (paths.Count > 0) required[parent] = paths;
         }
 
+        // Preserve native originals; only consider SPTC-injected handles.
+        // A folder link belongs to the FIRST custom sheet for its route,
+        // not to each individual DWG. This keeps exactly one folder row.
         foreach (NativeCustomLink link in _winLinks.Values.ToList())
         {
             string text = NativeItemText(tree, link.Item);
             bool sameItem = text.Equals(
                 NativeLinkLabel(link.Path, link.OpenFolder),
                 StringComparison.Ordinal);
+            bool expected = required.TryGetValue(link.Parent, out var paths) &&
+                (link.OpenFolder
+                    ? paths.Count > 0 &&
+                      link.Path.Equals(paths[0], StringComparison.OrdinalIgnoreCase)
+                    : paths.Contains(link.Path, StringComparer.OrdinalIgnoreCase));
+            if (sameItem && expected) continue;
 
-            if (sameItem &&
-                required.TryGetValue(link.Parent, out var paths) &&
-                paths.Contains(link.Path, StringComparer.OrdinalIgnoreCase))
-                continue;
-
-            // Never delete a native Autodesk item if a stale handle has
-            // been reused by the original Results tree.
             if (sameItem)
                 SendNative(tree, TVM_DELETEITEM, IntPtr.Zero, link.Item);
             _winLinks.Remove(link.Item);
@@ -918,31 +932,58 @@ internal static class NativeIsoResultsOverlay
 
         foreach (var (parent, paths) in required)
         {
+            bool HasLink(string path, bool openFolder) =>
+                _winLinks.Values.Any(link =>
+                    link.Parent == parent &&
+                    link.OpenFolder == openFolder &&
+                    link.Path.Equals(path, StringComparison.OrdinalIgnoreCase));
+
+            // If more split sheets appear after the first custom DWG,
+            // move the existing folder row to the bottom of the group.
+            // Without this, it would stay between two custom DWG links.
+            bool missingFile = paths.Any(path => !HasLink(path, false));
+            var folders = _winLinks.Values
+                .Where(link => link.Parent == parent && link.OpenFolder)
+                .ToList();
+            if (missingFile || folders.Count > 1)
+            {
+                foreach (NativeCustomLink folder in folders)
+                {
+                    if (NativeItemText(tree, folder.Item).Equals(
+                            NativeLinkLabel(folder.Path, true),
+                            StringComparison.Ordinal))
+                        SendNative(tree, TVM_DELETEITEM, IntPtr.Zero, folder.Item);
+                    _winLinks.Remove(folder.Item);
+                    itemsChanged = true;
+                }
+            }
+
+            // N custom DWGs first; all use original native formatting.
             foreach (string path in paths)
             {
-                // REV60: each copied ISO gets both a custom DWG link and
-                // its own Explorer-folder link, directly underneath it.
-                foreach (bool openFolder in new[] { false, true })
-                {
-                    if (_winLinks.Values.Any(link =>
-                        link.Parent == parent &&
-                        link.OpenFolder == openFolder &&
-                        link.Path.Equals(path,
-                            StringComparison.OrdinalIgnoreCase)))
-                        continue;
+                if (HasLink(path, false)) continue;
+                IntPtr created = InsertNativeLink(tree, parent, path, false);
+                if (created == IntPtr.Zero) continue;
+                _winLinks[created] = new NativeCustomLink(
+                    created, parent, path, false);
+                itemsChanged = true;
+            }
 
-                    IntPtr created = InsertNativeLink(
-                        tree, parent, path, openFolder);
-                    if (created != IntPtr.Zero)
-                    {
-                        _winLinks[created] = new NativeCustomLink(
-                            created, parent, path, openFolder);
-                        itemsChanged = true;
-                    }
+            // Exactly one clickable Explorer folder link at the end,
+            // for one or many split-sheet DWGs from the same route.
+            if (!HasLink(paths[0], true))
+            {
+                IntPtr created = InsertNativeLink(
+                    tree, parent, paths[0], true);
+                if (created != IntPtr.Zero)
+                {
+                    _winLinks[created] = new NativeCustomLink(
+                        created, parent, paths[0], true);
+                    itemsChanged = true;
                 }
             }
         }
-        // Keep REV59's paint optimization: don't overpaint every 550ms.
+
         if (itemsChanged)
             DrawNativeCustomLabels(tree);
     }
