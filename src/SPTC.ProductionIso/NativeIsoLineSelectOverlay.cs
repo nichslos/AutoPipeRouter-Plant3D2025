@@ -80,6 +80,19 @@ internal static class NativeIsoLineSelectOverlay
     // All/Current/Folder mode switch. Never force Create.Enabled.
     private static System.Windows.Forms.Timer? _modeRecoveryTimer;
     private static int _modeRecoverySerial;
+    // REV66: preserve selected ROUTE NAMES across Autodesk's manual filter
+    // rebuilds. The old REV65 counter only counted current visible rows,
+    // and Autodesk dropped checked state while replacing its filtered list.
+    private static readonly HashSet<string> SessionSelectedTags =
+        new(StringComparer.OrdinalIgnoreCase);
+    private static CheckedListBox? _trackedNativeList;
+    private static TextBoxBase? _trackedNativeSearch;
+    private static int _gestureIndex = -1;
+    private static string _gestureTag = "";
+    private static bool _restoringSelection;
+    private static string _lastNativeRowSignature = "";
+    private static string _lastRestoredRowSignature = "";
+    private static int _stableNativePolls;
 
     public static void Attach(IntPtr dialog)
     {
@@ -129,6 +142,7 @@ internal static class NativeIsoLineSelectOverlay
         Position(dialog);
         _host.Show();
 
+        EnsureSelectionTracking();
         UpdateDisplayedCount();
         _countTimer = new System.Windows.Forms.Timer { Interval = 800 };
         _countTimer.Tick += (_, _) => UpdateDisplayedCount();
@@ -184,11 +198,16 @@ internal static class NativeIsoLineSelectOverlay
         if (!string.Equals(_toggle.Text, caption, StringComparison.Ordinal))
             _toggle.Text = caption;
 
-        // REV65: Selected means actually CHECKED in the current list,
-        // never merely blue-highlighted. Folder mode uses visible
-        // projected native-backed rows, not unrelated hidden project tags.
+        // REV66: the actual selected route TAGS persist across search
+        // views. Current screen may show 0 checks even though earlier
+        // searches selected other routes. Folder projections retain their
+        // existing visible-only selection semantics for ISO safety.
+        EnsureSelectionTracking();
+        ReconcileVisibleNativeSelection();
         int? checkedCount = ProjectFolderLinePicker.VisibleCheckedCount ??
-                            ReadNativeCheckedCount(_dialog);
+            (_trackedNativeList is { IsDisposed: false }
+                ? SessionSelectedTags.Count
+                : ReadNativeCheckedCount(_dialog));
         if (_selectedCountLabel is { IsDisposed: false } selectedLabel)
         {
             string selectedText = checkedCount.HasValue
@@ -292,21 +311,316 @@ internal static class NativeIsoLineSelectOverlay
         return best?.CheckedItems.Count;
     }
 
+    // REV66: tag-keyed selection persists for the lifetime of THIS dialog
+    // only. Never retain check states by Autodesk's disposable row indices.
+    private static List<string> ReadCheckedTags(CheckedListBox list)
+    {
+        var names = new List<string>();
+        for (int i = 0; i < list.Items.Count; i++)
+        {
+            if (!list.GetItemChecked(i)) continue;
+            string name = list.GetItemText(list.Items[i]).Trim();
+            if (name.Length > 0) names.Add(name);
+        }
+        return names;
+    }
+
+    private static void DetachSelectionTracking()
+    {
+        if (_trackedNativeList is { IsDisposed: false } old)
+        {
+            old.MouseDown -= OnNativeLineMouseDown;
+            old.MouseUp -= OnNativeLineMouseUp;
+            old.KeyDown -= OnNativeLineKeyDown;
+            old.KeyUp -= OnNativeLineKeyUp;
+            old.ItemCheck -= OnNativeLineItemCheck;
+        }
+        if (_trackedNativeSearch is { IsDisposed: false } edit)
+            edit.TextChanged -= OnSearchFilterChanged;
+        _trackedNativeList = null;
+        _trackedNativeSearch = null;
+        _gestureIndex = -1;
+        _gestureTag = "";
+    }
+
+    private static void EnsureSelectionTracking()
+    {
+        if (_dialog == IntPtr.Zero) return;
+        CheckedListBox? list = FindNativeCheckedList(_dialog);
+        if (list == null || list.IsDisposed)
+            return;
+
+        if (!ReferenceEquals(_trackedNativeList, list))
+        {
+            DetachSelectionTracking();
+            _trackedNativeList = list;
+            list.MouseDown += OnNativeLineMouseDown;
+            list.MouseUp += OnNativeLineMouseUp;
+            list.KeyDown += OnNativeLineKeyDown;
+            list.KeyUp += OnNativeLineKeyUp;
+            list.ItemCheck += OnNativeLineItemCheck;
+            // Import checked items the FIRST time a native list appears.
+            // Rebuilt lists may contain legitimate existing user checks too,
+            // but never discard earlier selected route names on a filter.
+            foreach (string tag in ReadCheckedTags(list))
+                SessionSelectedTags.Add(tag);
+            _lastNativeRowSignature = "";
+            _lastRestoredRowSignature = "";
+            _stableNativePolls = 0;
+        }
+
+        if (_trackedNativeSearch == null)
+        {
+            if (!GetWindowRect(list.Handle, out RECT listRect)) return;
+            TextBoxBase? edit = null;
+            EnumChildWindows(_dialog, (hwnd, _) =>
+            {
+                if (Control.FromHandle(hwnd) is not TextBoxBase candidate ||
+                    candidate.IsDisposed ||
+                    !GetWindowRect(hwnd, out RECT rect))
+                    return true;
+                // Search edit is directly ABOVE the native line list.
+                // Never hook Revision / Custom Location on the right.
+                bool above = rect.Bottom <= listRect.Top + 3 &&
+                    rect.Bottom >= listRect.Top - 135;
+                bool aligned = rect.Left < listRect.Right &&
+                    rect.Right > listRect.Left;
+                if (above && aligned && rect.Height <= 44 &&
+                    rect.Width >= 80)
+                {
+                    edit = candidate;
+                    return false;
+                }
+                return true;
+            }, IntPtr.Zero);
+            if (edit != null)
+            {
+                _trackedNativeSearch = edit;
+                edit.TextChanged += OnSearchFilterChanged;
+            }
+        }
+    }
+
+    private static void OnSearchFilterChanged(object? sender, EventArgs e)
+    {
+        // Autodesk may destroy/recreate original checked rows on each key
+        // press. Keep our tag ledger, wait for a stable new visible list,
+        // then restore only matching selected tags in that new list.
+        _lastNativeRowSignature = "";
+        _lastRestoredRowSignature = "";
+        _stableNativePolls = 0;
+    }
+
+    private static void BeginUserGesture(CheckedListBox list, int index)
+    {
+        if (!ReferenceEquals(_trackedNativeList, list) ||
+            index < 0 || index >= list.Items.Count) return;
+        _gestureIndex = index;
+        _gestureTag = list.GetItemText(list.Items[index]).Trim();
+    }
+
+    private static void OnNativeLineMouseDown(
+        object? sender, MouseEventArgs e)
+    {
+        if (sender is not CheckedListBox list ||
+            e.Button != MouseButtons.Left) return;
+        BeginUserGesture(list, list.IndexFromPoint(e.Location));
+    }
+
+    private static void OnNativeLineKeyDown(
+        object? sender, KeyEventArgs e)
+    {
+        if (sender is CheckedListBox list &&
+            e.KeyCode == Keys.Space)
+            BeginUserGesture(list, list.SelectedIndex);
+    }
+
+    private static void OnNativeLineItemCheck(
+        object? sender, ItemCheckEventArgs e)
+    {
+        if (_restoringSelection || sender is not CheckedListBox list ||
+            !ReferenceEquals(list, _trackedNativeList) ||
+            _gestureIndex != e.Index ||
+            e.Index < 0 || e.Index >= list.Items.Count ||
+            ProjectFolderLinePicker.HasVisibleProjection)
+            return;
+
+        string tag = list.GetItemText(list.Items[e.Index]).Trim();
+        if (tag.Length == 0 ||
+            !tag.Equals(_gestureTag, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        if (e.NewValue == CheckState.Checked)
+            SessionSelectedTags.Add(tag);
+        else if (e.NewValue == CheckState.Unchecked)
+            SessionSelectedTags.Remove(tag);
+    }
+
+    private static void CommitUserGesture(CheckedListBox list)
+    {
+        int index = _gestureIndex;
+        string name = _gestureTag;
+        // The checkbox may settle after MouseUp/KeyUp. Read its REAL
+        // committed state on the next UI turn, never the clicked highlight.
+        try
+        {
+            list.BeginInvoke((MethodInvoker)(() =>
+            {
+                if (ReferenceEquals(_trackedNativeList, list) &&
+                    !list.IsDisposed && index >= 0 &&
+                    index < list.Items.Count &&
+                    list.GetItemText(list.Items[index]).Trim().Equals(
+                        name, StringComparison.OrdinalIgnoreCase) &&
+                    !ProjectFolderLinePicker.HasVisibleProjection)
+                {
+                    if (list.GetItemChecked(index))
+                        SessionSelectedTags.Add(name);
+                    else
+                        SessionSelectedTags.Remove(name);
+                }
+                if (_gestureIndex == index && _gestureTag == name)
+                {
+                    _gestureIndex = -1;
+                    _gestureTag = "";
+                }
+                UpdateSelectedLabel();
+            }));
+        }
+        catch (InvalidOperationException)
+        {
+            _gestureIndex = -1;
+            _gestureTag = "";
+        }
+    }
+
+    private static void OnNativeLineMouseUp(
+        object? sender, MouseEventArgs e)
+    {
+        if (sender is CheckedListBox list &&
+            e.Button == MouseButtons.Left)
+            CommitUserGesture(list);
+    }
+
+    private static void OnNativeLineKeyUp(
+        object? sender, KeyEventArgs e)
+    {
+        if (sender is CheckedListBox list &&
+            e.KeyCode == Keys.Space)
+            CommitUserGesture(list);
+    }
+
+    public static void RecordBulkNativeSelection(CheckedListBox list)
+    {
+        EnsureSelectionTracking();
+        // Called AFTER a user-selected Select All/Clear All operation has
+        // committed to the real native list. Only change route tags that
+        // actually appear in the current filter; keep hidden selections.
+        if (list.IsDisposed || !ReferenceEquals(_trackedNativeList, list))
+            return;
+        for (int i = 0; i < list.Items.Count; i++)
+        {
+            string tag = list.GetItemText(list.Items[i]).Trim();
+            if (tag.Length == 0) continue;
+            if (list.GetItemChecked(i))
+                SessionSelectedTags.Add(tag);
+            else
+                SessionSelectedTags.Remove(tag);
+        }
+        UpdateSelectedLabel();
+    }
+
+    public static void RestrictSessionSelectionTo(
+        IEnumerable<string> visibleFolderTags)
+    {
+        // Folder mode intentionally clears outside-folder native checks.
+        // Match that safety behavior instead of resurrecting old hidden
+        // routes when the user switches back to All Project.
+        SessionSelectedTags.IntersectWith(visibleFolderTags);
+        UpdateSelectedLabel();
+    }
+
+    private static void UpdateSelectedLabel()
+    {
+        if (_selectedCountLabel is { IsDisposed: false } label)
+        {
+            string caption = "Selected: " +
+                (ProjectFolderLinePicker.VisibleCheckedCount ??
+                    SessionSelectedTags.Count);
+            if (label.Text != caption)
+                label.Text = caption;
+        }
+    }
+
+    private static void ReconcileVisibleNativeSelection()
+    {
+        if (_restoringSelection || _gestureIndex >= 0 ||
+            ProjectFolderLinePicker.HasVisibleProjection ||
+            _trackedNativeList is not { IsDisposed: false } list ||
+            list.Items.Count == 0 || SessionSelectedTags.Count == 0)
+            return;
+
+        // Include the exact native list contents and editable search term.
+        // Wait for two matching lightweight polls before restoring. This
+        // avoids fighting Autodesk's asynchronous Filter.TextChanged rebuild.
+        var signature = new StringBuilder(list.Items.Count * 12);
+        signature.Append(_trackedNativeSearch?.Text ?? "").Append('|');
+        for (int i = 0; i < list.Items.Count; i++)
+            signature.Append(list.GetItemText(list.Items[i])).Append('\u001f');
+        string value = signature.ToString();
+
+        if (!value.Equals(_lastNativeRowSignature, StringComparison.Ordinal))
+        {
+            _lastNativeRowSignature = value;
+            _stableNativePolls = 0;
+            return;
+        }
+        if (_stableNativePolls++ < 1 ||
+            value.Equals(_lastRestoredRowSignature, StringComparison.Ordinal))
+            return;
+
+        _lastRestoredRowSignature = value;
+        _restoringSelection = true;
+        try
+        {
+            int firstChecked = -1;
+            for (int i = 0; i < list.Items.Count; i++)
+            {
+                string tag = list.GetItemText(list.Items[i]).Trim();
+                if (SessionSelectedTags.Contains(tag) &&
+                    !list.GetItemChecked(i))
+                    list.SetItemChecked(i, true);
+                if (firstChecked == -1 && list.GetItemChecked(i))
+                    firstChecked = i;
+            }
+            if (firstChecked >= 0)
+            {
+                Button? create = FindNativeCreateButton(_dialog);
+                if (create is { Enabled: false })
+                {
+                    if (list.SelectedIndex == firstChecked)
+                        list.ClearSelected();
+                    list.SelectedIndex = firstChecked;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            WriteDiagnostic("REV66 restore: " +
+                ex.GetBaseException().Message);
+        }
+        finally { _restoringSelection = false; }
+    }
+
     public static string[] CaptureSelectedTags(IntPtr dialog)
     {
+        if (dialog != _dialog || dialog == IntPtr.Zero)
+            return Array.Empty<string>();
+        EnsureSelectionTracking();
         var list = FindNativeCheckedList(dialog);
         if (list != null)
-        {
-            var tags = new List<string>();
-            for (int i = 0; i < list.Items.Count; i++)
-                if (list.GetItemChecked(i))
-                {
-                    string name = list.GetItemText(list.Items[i]).Trim();
-                    if (name.Length > 0) tags.Add(name);
-                }
-            return tags.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-        }
-        return Array.Empty<string>();
+            foreach (var tag in ReadCheckedTags(list))
+                SessionSelectedTags.Add(tag);
+        return SessionSelectedTags.ToArray();
     }
 
     public static void ScheduleModeChangeRecovery(
@@ -315,9 +629,14 @@ internal static class NativeIsoLineSelectOverlay
         if (dialog == IntPtr.Zero || dialog != _dialog)
             return;
 
+        foreach (string name in selectedBefore)
+            if (!string.IsNullOrWhiteSpace(name))
+                SessionSelectedTags.Add(name);
         var previous = new HashSet<string>(
-            selectedBefore.Where(s => !string.IsNullOrWhiteSpace(s)),
-            StringComparer.OrdinalIgnoreCase);
+            SessionSelectedTags, StringComparer.OrdinalIgnoreCase);
+        _lastRestoredRowSignature = "";
+        _lastNativeRowSignature = "";
+        _stableNativePolls = 0;
         try { _modeRecoveryTimer?.Stop(); _modeRecoveryTimer?.Dispose(); }
         catch (Exception) { }
         int serial = ++_modeRecoverySerial;
@@ -662,6 +981,7 @@ internal static class NativeIsoLineSelectOverlay
         // checked native row was cleared programmatically.
         if (!desired && !actual)
             EnsureCreateDisabledForEmptyNativeList(list, dialog, "single-line");
+        RecordBulkNativeSelection(list);
         Button? create = FindNativeCreateButton(dialog);
         WriteDiagnostic("REV42 single-line search Select All: " +
             tag + ", desired=" + desired + ", checked=" + actual +
@@ -813,6 +1133,7 @@ internal static class NativeIsoLineSelectOverlay
                         // actually differs. Do not synthesize clicks or alter Create.
                         if (native.Items.Count > 0)
                             ScheduleFirstRowRetry(native, parent, generation, selected);
+                        RecordBulkNativeSelection(native);
 
                         Button? create = FindNativeCreateButton(parent);
                         WriteDiagnostic("REV38 Select All: desired=" + selected +
@@ -921,6 +1242,7 @@ internal static class NativeIsoLineSelectOverlay
                     try { toggle.Checked = allChecked; }
                     finally { _setting = false; }
                 }
+                RecordBulkNativeSelection(native);
                 Button? create = FindNativeCreateButton(parent);
                 WriteDiagnostic("REV38 first-row retry: checked=" +
                     native.GetItemChecked(0) + ", total=" +
@@ -1133,6 +1455,11 @@ internal static class NativeIsoLineSelectOverlay
         catch { }
         _modeRecoveryTimer = null;
         _modeRecoverySerial++;
+        DetachSelectionTracking();
+        SessionSelectedTags.Clear();
+        _lastNativeRowSignature = "";
+        _lastRestoredRowSignature = "";
+        _stableNativePolls = 0;
         _dialog = IntPtr.Zero;
         try { _countTimer?.Stop(); } catch { }
         try { _countTimer?.Dispose(); } catch { }
