@@ -94,6 +94,11 @@ internal static class NativeIsoLineSelectOverlay
     private static Dictionary<string, bool>? _gestureBefore;
     private static bool _initialNativeSelectionImported;
     private static bool _restoringSelection;
+    // REV68: distinguish a programmatic toolbar/filter transition from
+    // a user's checkbox click. Transition and delayed events must NEVER
+    // remove a previously selected tag such as A-08.
+    private static bool _scopeSwitchPending;
+    private static int _selectionEpoch;
     private static string _lastNativeRowSignature = "";
     private static string _lastRestoredRowSignature = "";
     private static int _stableNativePolls;
@@ -413,15 +418,41 @@ internal static class NativeIsoLineSelectOverlay
 
     private static void OnSearchFilterChanged(object? sender, EventArgs e)
     {
-        // Autodesk may destroy/recreate original checked rows on each key
-        // press. Keep our tag ledger, wait for a stable new visible list,
-        // then restore only matching selected tags in that new list.
+        // REV68: reject deferred click commits from a previous query.
+        // Search is a view change, NOT an uncheck action.
+        _selectionEpoch++;
         _lastNativeRowSignature = "";
         _lastRestoredRowSignature = "";
         _stableNativePolls = 0;
         _gestureIndex = -1;
         _gestureTag = "";
         _gestureBefore = null;
+    }
+
+    public static void BeginScopeSwitch(IntPtr dialog)
+    {
+        if (_dialog != dialog || dialog == IntPtr.Zero) return;
+        _scopeSwitchPending = true;
+        _selectionEpoch++;
+        _gestureIndex = -1;
+        _gestureTag = "";
+        _gestureBefore = null;
+        _lastNativeRowSignature = "";
+        _lastRestoredRowSignature = "";
+        _stableNativePolls = 0;
+        // A deferred Select All first-row retry belongs to the OLD list;
+        // cancel it before Autodesk replaces its native line rows.
+        try { _firstRowRetry?.Stop(); _firstRowRetry?.Dispose(); }
+        catch (Exception) { }
+        _firstRowRetry = null;
+    }
+
+    public static void CancelScopeSwitch(IntPtr dialog)
+    {
+        if (_dialog != dialog || dialog == IntPtr.Zero) return;
+        _scopeSwitchPending = false;
+        _lastNativeRowSignature = "";
+        _stableNativePolls = 0;
     }
 
     private static void BeginUserGesture(CheckedListBox list, int index)
@@ -459,7 +490,8 @@ internal static class NativeIsoLineSelectOverlay
     private static void OnNativeLineItemCheck(
         object? sender, ItemCheckEventArgs e)
     {
-        if (_restoringSelection || sender is not CheckedListBox list ||
+        if (_restoringSelection || _scopeSwitchPending ||
+            sender is not CheckedListBox list ||
             !ReferenceEquals(list, _trackedNativeList) ||
             _gestureIndex < 0 ||
             e.Index < 0 || e.Index >= list.Items.Count ||
@@ -482,6 +514,7 @@ internal static class NativeIsoLineSelectOverlay
         int clicked = _gestureIndex;
         string clickedTag = _gestureTag;
         Dictionary<string, bool>? before = _gestureBefore;
+        int commitEpoch = _selectionEpoch;
         // End the active gesture NOW: any deferred native checkbox refresh
         // must never be classified as a new user check/uncheck.
         _gestureIndex = -1;
@@ -497,7 +530,8 @@ internal static class NativeIsoLineSelectOverlay
             list.BeginInvoke((MethodInvoker)(() =>
             {
                 if (!ReferenceEquals(_trackedNativeList, list) ||
-                    list.IsDisposed ||
+                    list.IsDisposed || _scopeSwitchPending ||
+                    commitEpoch != _selectionEpoch ||
                     ProjectFolderLinePicker.HasVisibleProjection)
                     return;
 
@@ -555,7 +589,8 @@ internal static class NativeIsoLineSelectOverlay
         // Called AFTER a user-selected Select All/Clear All operation has
         // committed to the real native list. Only change route tags that
         // actually appear in the current filter; keep hidden selections.
-        if (list.IsDisposed || !ReferenceEquals(_trackedNativeList, list))
+        if (list.IsDisposed || _scopeSwitchPending ||
+            !ReferenceEquals(_trackedNativeList, list))
             return;
         for (int i = 0; i < list.Items.Count; i++)
         {
@@ -593,7 +628,8 @@ internal static class NativeIsoLineSelectOverlay
 
     private static void ReconcileVisibleNativeSelection()
     {
-        if (_restoringSelection || _gestureIndex >= 0 ||
+        if (_restoringSelection || _scopeSwitchPending ||
+            _gestureIndex >= 0 ||
             ProjectFolderLinePicker.HasVisibleProjection ||
             _trackedNativeList is not { IsDisposed: false } list ||
             list.Items.Count == 0)
@@ -1514,6 +1550,8 @@ internal static class NativeIsoLineSelectOverlay
         catch { }
         _modeRecoveryTimer = null;
         _modeRecoverySerial++;
+        _scopeSwitchPending = false;
+        _selectionEpoch++;
         DetachSelectionTracking();
         SessionSelectedTags.Clear();
         _initialNativeSelectionImported = false;
