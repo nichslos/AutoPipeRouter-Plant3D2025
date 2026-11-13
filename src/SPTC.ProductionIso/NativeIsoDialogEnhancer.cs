@@ -24,6 +24,7 @@ internal static class NativeIsoDialogEnhancer
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetWindowText(IntPtr hwnd, StringBuilder text, int max);
     [DllImport("user32.dll")] private static extern int GetWindowTextLength(IntPtr hwnd);
     [DllImport("user32.dll")] private static extern IntPtr SetParent(IntPtr child, IntPtr parent);
+    [DllImport("user32.dll")] private static extern bool IsWindow(IntPtr hwnd);
     [DllImport("user32.dll")] private static extern bool GetClientRect(IntPtr hwnd, out Rectangle rect);
     [DllImport("user32.dll")] private static extern bool SetWindowPos(IntPtr hwnd, IntPtr insertAfter, int x, int y, int cx, int cy, uint flags);
     [DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr hwnd, out WinRect rect);
@@ -67,6 +68,9 @@ internal static class NativeIsoDialogEnhancer
     private static bool _nativeSeen;
     private static bool _resultsSeen;
     private static DateTime _nativeClosedAt;
+    // REV64: native dialog close is NOT proof that the user clicked Create.
+    // Cancel and top-right X must never start a 10-minute background scan.
+    private static bool _createRequested;
     // REV50: follow the real native Overwrite-if-existing checkbox.
     // REV49 could miss Autodesk's managed checkbox when its HWND had no
     // caption, and then silently skip the preexisting custom DWG.
@@ -271,15 +275,27 @@ internal static class NativeIsoDialogEnhancer
 
     private static void CaptureBeforeNativeCreate(object? sender, EventArgs e)
     {
-        if (_native != IntPtr.Zero)
+        // REV64: treat only an actual Create button action as authorization
+        // to monitor/copy. Never infer Create merely from dialog closure.
+        if (_createRequested) return;
+        _createRequested = true;
+        if (_native != IntPtr.Zero && IsWindow(_native))
         {
             CaptureNativeOverwrite(_native);
             CaptureSelectedIsoTags(_native);
         }
         _document?.Editor.WriteMessage(
-            "\nSPTC REV50: Create pressed; custom overwrite=" +
+            "\nSPTC REV64: Create requested; custom overwrite=" +
             (_overwriteRequested ? "YES" : "NO") +
             " (source: " + _overwriteSource + ").");
+    }
+
+    private static void OnNativeCreateKeyDown(object? sender, KeyEventArgs e)
+    {
+        // WinForms default-button activation by Enter/Space may not raise
+        // MouseDown. Capture before Autodesk's own Click closes the form.
+        if (e.KeyCode == Keys.Enter || e.KeyCode == Keys.Space)
+            CaptureBeforeNativeCreate(sender, e);
     }
 
     private static void TrackNativeCreateButton(IntPtr dialog)
@@ -295,8 +311,11 @@ internal static class NativeIsoDialogEnhancer
                     StringComparison.OrdinalIgnoreCase))
             {
                 _nativeCreateButton = button;
-                // MouseDown runs BEFORE the original native Click/Close.
+                // MouseDown runs BEFORE native Click/Close. Include keyboard
+                // and programmatic Click so non-mouse activation still works.
                 button.MouseDown += CaptureBeforeNativeCreate;
+                button.KeyDown += OnNativeCreateKeyDown;
+                button.Click += CaptureBeforeNativeCreate;
                 return false;
             }
             return true;
@@ -329,7 +348,11 @@ internal static class NativeIsoDialogEnhancer
         _overwriteTracker = null;
 
         if (_nativeCreateButton is { IsDisposed: false } create)
+        {
             create.MouseDown -= CaptureBeforeNativeCreate;
+            create.KeyDown -= OnNativeCreateKeyDown;
+            create.Click -= CaptureBeforeNativeCreate;
+        }
         _nativeCreateButton = null;
         if (_nativeOverwriteBox is { IsDisposed: false } box)
             box.CheckedChanged -= OnNativeOverwriteChanged;
@@ -369,6 +392,7 @@ internal static class NativeIsoDialogEnhancer
         _nativeSeen = false;
         _resultsSeen = false;
         _nativeClosedAt = DateTime.MinValue;
+        _createRequested = false;
         // REV09: discover active DWG line-group tags but do not filter
         // the native list until the user explicitly clicks a top mode icon.
         // REV22: do not scan every model component while opening the dialog.
@@ -573,8 +597,28 @@ internal static class NativeIsoDialogEnhancer
             {
                 DetachNativeOverwriteTracker();
                 RemoveOverlay();
+
+                // REV64: Cancel / X / Esc closes exactly the same Autodesk
+                // dialog as Create. Never run the custom copier if Create
+                // was not explicitly requested. This closes all UI timers,
+                // folder scans and native hooks, and prevents stale DWG
+                // enumeration after the ISO selection was abandoned.
+                if (!_createRequested)
+                {
+                    Detach();
+                    NativeIsoResultsOverlay.Reset();
+                    _selectedIsoTags.Clear();
+                    while (_copyProgress.TryDequeue(out _)) { }
+                    _nativeClosedAt = DateTime.MinValue;
+                    _copyState = "Canceled before Create — no ISO copy started";
+                    _document?.Editor.WriteMessage(
+                        "\nSPTC REV64: Production Iso canceled; " +
+                        "all plugin monitors stopped. No DWG copy started.");
+                    return;
+                }
+
                 _nativeClosedAt = DateTime.UtcNow;
-                _copyState = "Native dialog closed; watching for completed DWGs";
+                _copyState = "Create requested; watching for completed DWGs";
             }
 
             // Autodesk may display a notification first and open this dialog
