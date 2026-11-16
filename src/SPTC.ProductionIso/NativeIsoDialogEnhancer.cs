@@ -572,15 +572,22 @@ internal static class NativeIsoDialogEnhancer
                         return;
                     }
 
-                    bool refreshed =
-                        NativeIsoToolbarClickFilter.TryRefreshNativeProjectList(
-                            dialog);
+                    // REV100: when all native rows are already present
+                    // (e.g. Show All after a full-source Active projection),
+                    // do not click Autodesk's Project icon again. That
+                    // unnecessary rebuild intermittently clears A-08 even
+                    // though all six were checked before the user clicked.
+                    bool alreadyFull = NativeIsoLineSelectOverlay
+                        .HasCompleteUnfilteredProjectSource(dialog);
+                    bool refreshed = !alreadyFull &&
+                        NativeIsoToolbarClickFilter
+                            .TryRefreshNativeProjectList(dialog);
                     NativeIsoToolbarClickFilter.MarkAllLinesRestored(dialog);
                     _document?.Editor.WriteMessage(
-                        "\nSPTC REV79: Create clicked with " +
-                        requested.Length + " saved route(s); restoring " +
-                        "All Project native selection (refresh=" +
-                        refreshed + ").");
+                        "\nSPTC REV100: Create clicked with " +
+                        requested.Length + " saved route(s); native " +
+                        "source already complete=" + alreadyFull +
+                        ", refresh=" + refreshed + ".");
                 }
                 catch (Exception ex)
                 {
@@ -1304,41 +1311,77 @@ internal static class NativeIsoDialogEnhancer
 
                         if (!showActive)
                         {
-                            // REV74: Autodesk rebuilds the ORIGINAL list
-                            // several times when switching Current -> All.
-                            // Hold its native checkbox redraw while the
-                            // project data and exact tag checks reconcile,
-                            // so the temporary unchecked frame isn't shown.
-                            NativeIsoLineSelectOverlay.BeginProjectRedrawBatch(native);
+                            // REV100: Active is only an exact-tag
+                            // presentation of the full native project source.
+                            // If all six checks AND original Create are
+                            // already valid, switching to Show All must
+                            // NEVER click Project again or recheck rows.
+                            NativeIsoExactLineFilter.End(restore: true);
+                            bool cleared = ActiveDwgTags.ClearOneTag(
+                                native, _document);
+                            if (!cleared)
+                            {
+                                NativeIsoLineSelectOverlay.CancelScopeSwitch(native);
+                                return false;
+                            }
+
+                            bool fullSource = NativeIsoLineSelectOverlay
+                                .HasCompleteUnfilteredProjectSource(native);
+                            var wanted = new HashSet<string>(
+                                selectedBefore, StringComparer.OrdinalIgnoreCase);
+                            string[] nativeChecked = fullSource
+                                ? NativeCheckedRouteNames(native)
+                                : Array.Empty<string>();
+                            bool nativeExact = fullSource &&
+                                nativeChecked.Length == wanted.Count &&
+                                new HashSet<string>(nativeChecked,
+                                    StringComparer.OrdinalIgnoreCase)
+                                    .SetEquals(wanted);
+
+                            if (nativeExact &&
+                                _nativeCreateButton is { IsDisposed: false,
+                                                         Enabled: true })
+                            {
+                                // No Autodesk source mutation: preserve exact
+                                // checked routes and existing Create state.
+                                NativeIsoLineSelectOverlay.CancelScopeSwitch(native);
+                                NativeIsoLineSelectOverlay.UpdateDisplayedCount();
+                                _document.Editor.WriteMessage(
+                                    "\nSPTC REV100: Show All native fast path; " +
+                                    nativeChecked.Length + "/" + wanted.Count +
+                                    " checked, Create.Enabled=True, " +
+                                    "no project refresh or checkbox replay.");
+                                return true;
+                            }
+
+                            // Fallback only when the source/selection really
+                            // needs reconstruction. A full source with a
+                            // missing tag does not need an additional native
+                            // Project click; the guarded repair will validate
+                            // exact names before any checkbox changes.
                             bool recoveryScheduled = false;
+                            if (!fullSource)
+                                NativeIsoLineSelectOverlay.BeginProjectRedrawBatch(
+                                    native);
                             try
                             {
-                                // Restore original native row objects before
-                                // Autodesk's Filter and Project list rebuild.
-                                NativeIsoExactLineFilter.End(restore: true);
-                                bool cleared = ActiveDwgTags.ClearOneTag(
-                                    native, _document);
-                                if (cleared)
-                                {
-                                    bool refreshed =
-                                        NativeIsoToolbarClickFilter.TryRefreshNativeProjectList(native);
-                                    _document.Editor.WriteMessage(
-                                        "\nSPTC REV74: All Project native refresh=" +
-                                        refreshed + "; restoring selected route tags.");
-                                    NativeIsoLineSelectOverlay.UpdateDisplayedCount();
-                                    NativeIsoLineSelectOverlay.ScheduleModeChangeRecovery(
+                                bool refreshed = !fullSource &&
+                                    NativeIsoToolbarClickFilter
+                                        .TryRefreshNativeProjectList(native);
+                                _document.Editor.WriteMessage(
+                                    "\nSPTC REV100: Show All recovery (fullSource=" +
+                                    fullSource + ", refresh=" + refreshed +
+                                    ", checked=" + nativeChecked.Length + "/" +
+                                    wanted.Count + ").");
+                                NativeIsoLineSelectOverlay.UpdateDisplayedCount();
+                                NativeIsoLineSelectOverlay
+                                    .ScheduleModeChangeRecovery(
                                         native, selectedBefore);
-                                    recoveryScheduled = true;
-                                }
-                                else
-                                    NativeIsoLineSelectOverlay.CancelScopeSwitch(native);
-                                return cleared;
+                                recoveryScheduled = true;
+                                return true;
                             }
                             finally
                             {
-                                // Failed/missing native list must NEVER stay
-                                // frozen. Successful recovery releases it on
-                                // completion (or bounded timeout / Cancel).
                                 if (!recoveryScheduled)
                                     NativeIsoLineSelectOverlay.EndProjectRedrawBatch();
                             }
