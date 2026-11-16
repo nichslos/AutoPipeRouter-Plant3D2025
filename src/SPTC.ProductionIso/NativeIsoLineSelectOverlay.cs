@@ -883,12 +883,12 @@ internal static class NativeIsoLineSelectOverlay
         !string.IsNullOrWhiteSpace(tag) && SessionSelectedTags.Contains(tag);
 
     public static void CompleteActiveProjectionScope(
-        IntPtr dialog, string exactTag)
+        IntPtr dialog, IReadOnlyCollection<string> exactTags)
     {
         if (_dialog != dialog || dialog == IntPtr.Zero ||
             !ProjectFolderLinePicker.ActiveDwgView ||
             !ProjectFolderLinePicker.HasVisibleProjection ||
-            string.IsNullOrWhiteSpace(exactTag))
+            exactTags.Count == 0)
             return;
 
         CancelActiveCommit();
@@ -898,8 +898,10 @@ internal static class NativeIsoLineSelectOverlay
         _stableNativePolls = 0;
         _countTimer?.Stop();
         UpdateDisplayedCount();
-        WriteDiagnostic("REV77: native-backed exact active view " +
-            exactTag + "; original checklist row indices preserved.");
+        WriteDiagnostic("REV105: native-backed exact Active DWG view (" +
+            ProjectFolderLinePicker.VisibleLineCount + " eligible of " +
+            exactTags.Count + " physical route tags); native checklist " +
+            "row indices preserved: " + string.Join(", ", exactTags));
     }
 
     public static void ResumeNativeSelectionPolling(IntPtr dialog)
