@@ -188,6 +188,10 @@ internal static class NativeIsoExactLineFilter
             // synthetic checkbox-click attempts on a reindexed native list.
             NativeIsoLineSelectOverlay.CompleteActiveProjectionScope(
                 _dialog, _tag);
+            // REV97: the native Create state must be revalidated AFTER
+            // exact row mapping has become steady, not only while the
+            // Active projection is initially created.
+            ProjectFolderLinePicker.RevalidateNativeCreateAfterActiveReady();
 
             if (!_readyReported)
             {
