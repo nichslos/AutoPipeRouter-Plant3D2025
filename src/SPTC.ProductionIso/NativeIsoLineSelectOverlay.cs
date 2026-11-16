@@ -1338,6 +1338,8 @@ internal static class NativeIsoLineSelectOverlay
         int generation = _generation;
         int ticks = 0;
         int stable = 0;
+        bool redrawReleased = false;
+        bool readinessLogged = false;
         int confirmed = 0;
         int readsAfterCommit = 0;
         // REV87: after Active -> All, Autodesk can show a checked A-08
@@ -1370,7 +1372,7 @@ internal static class NativeIsoLineSelectOverlay
             EndProjectRedrawBatch();
             UpdateDisplayedCount();
             if (!string.IsNullOrEmpty(reason))
-                WriteDiagnostic("REV86: " + reason);
+                WriteDiagnostic("REV88: " + reason);
         }
 
         timer.Tick += (_, _) =>
@@ -1381,11 +1383,21 @@ internal static class NativeIsoLineSelectOverlay
                 Finish();
                 return;
             }
-            if (++ticks > 25)
+            // REV88: REV87 stopped after 25 x 140ms (3.5 seconds).
+            // Large project lists can take >5 seconds to repopulate.
+            // Keep polling asynchronously up to ~12 seconds, but finish
+            // immediately as soon as the native list is valid.
+            if (++ticks > 86)
             {
-                Finish("All Project selection recovery timed out; " +
-                    "saved tags retained, native checks require validation.");
+                Finish("All Project native list not validated within " +
+                    "12 seconds; saved routes retained, Create not forced.");
                 return;
+            }
+            if (ticks == 26 && !readinessLogged)
+            {
+                readinessLogged = true;
+                WriteDiagnostic("REV88: waiting for complete Autodesk " +
+                    "All Project list before restoring saved checks.");
             }
             try
             {
@@ -1445,7 +1457,7 @@ internal static class NativeIsoLineSelectOverlay
                         }
                     }
                     finally { _restoringSelection = false; }
-                    WriteDiagnostic("REV86: Show All native commit once; " +
+                    WriteDiagnostic("REV88: Show All native commit once; " +
                         "changed=" + changed + ", expected=" + expected.Count +
                         ", rows=" + list.Items.Count + ".");
                     return;
@@ -1477,6 +1489,20 @@ internal static class NativeIsoLineSelectOverlay
                     return;
                 }
                 if (++confirmed < 2) return;
+
+                // REV88: release the native BeginUpdate redraw hold only
+                // after exact checked names have passed verification.
+                // Autodesk may not refresh the Create eligibility UI
+                // until the original checklist is repainted. This does
+                // NOT remove the scope/selection guard.
+                if (!redrawReleased)
+                {
+                    redrawReleased = true;
+                    EndProjectRedrawBatch();
+                    WriteDiagnostic("REV88: native All Project selection " +
+                        "confirmed; redraw hold released for Create validation.");
+                    return;
+                }
 
                 // REV87: require Autodesk's own Create eligibility to
                 // recognize the saved checked routes. Do not set
@@ -1566,7 +1592,7 @@ internal static class NativeIsoLineSelectOverlay
                     Finish("native Create remains disabled with no saved routes.");
                     return;
                 }
-                WriteDiagnostic("REV87: Show All native checked routes " +
+                WriteDiagnostic("REV88: Show All native checked routes " +
                     expected.Count + "/" + expected.Count +
                     ", Create.Enabled=True.");
                 Finish();
