@@ -1367,6 +1367,11 @@ internal static class NativeIsoLineSelectOverlay
         int lastObservedRows = 0;
         int confirmed = 0;
         int readsAfterCommit = 0;
+        int nativeRebuildRetries = 0;
+        const int maxNativeRebuildRetries = 2;
+        // REV90: Autodesk can reset the just-checked A-08 when its
+        // background route list update finishes. Permit only two
+        // controlled recovery attempts, never a repeating checkbox loop.
         // REV87: after Active -> All, Autodesk can show a checked A-08
         // without enabling native Create. The checked icon alone is not
         // proof that the native Create eligibility event was received.
@@ -1397,7 +1402,7 @@ internal static class NativeIsoLineSelectOverlay
             EndProjectRedrawBatch();
             UpdateDisplayedCount();
             if (!string.IsNullOrEmpty(reason))
-                WriteDiagnostic("REV89: " + reason);
+                WriteDiagnostic("REV90: " + reason);
         }
 
         timer.Tick += (_, _) =>
@@ -1457,15 +1462,32 @@ internal static class NativeIsoLineSelectOverlay
                 {
                     if (committed)
                     {
-                        Finish("Autodesk changed native rows after checkbox " +
-                            "commit; no repeated writes performed.");
-                        return;
+                        if (nativeRebuildRetries >= maxNativeRebuildRetries)
+                        {
+                            Finish("Autodesk replaced native rows after " +
+                                "bounded REV90 recovery (" +
+                                nativeRebuildRetries + " retries).");
+                            return;
+                        }
+                        nativeRebuildRetries++;
+                        committed = false;
+                        confirmed = 0;
+                        readsAfterCommit = 0;
+                        createFocusNudged = false;
+                        createEligibilityReplayed = false;
+                        eligibilityValidationPolls = 0;
+                        WriteDiagnostic("REV90: native row collection rebuilt; " +
+                            "scheduling one bounded revalidation #" +
+                            nativeRebuildRetries + ".");
                     }
                     lastNames = signature;
                     stable = 0;
                     return;
                 }
-                if (++stable < 2) return;
+                // REV90: the 432-row names can appear before Autodesk has
+                // finished changing their underlying checked state. Wait
+                // six identical UI ticks (~0.84s) before first commit.
+                if (++stable < 6) return;
 
                 if (!redrawReleased)
                 {
@@ -1477,7 +1499,7 @@ internal static class NativeIsoLineSelectOverlay
                     redrawReleased = true;
                     EndProjectRedrawBatch();
                     stable = 0;
-                    WriteDiagnostic("REV89: complete native project source " +
+                    WriteDiagnostic("REV90: complete native project source " +
                         list.Items.Count + "/" + requiredRows +
                         "; releasing redraw before checkbox commit.");
                     return;
@@ -1503,7 +1525,8 @@ internal static class NativeIsoLineSelectOverlay
                         }
                     }
                     finally { _restoringSelection = false; }
-                    WriteDiagnostic("REV89: Show All native commit once; " +
+                    WriteDiagnostic("REV90: Show All native commit #" +
+                        (nativeRebuildRetries + 1) + "; " +
                         "changed=" + changed + ", expected=" + expected.Count +
                         ", rows=" + list.Items.Count + ", actual checked=" +
                         string.Join(", ", Enumerable.Range(0, list.Items.Count)
@@ -1527,17 +1550,33 @@ internal static class NativeIsoLineSelectOverlay
                 }
                 if (!exact)
                 {
-                    if (readsAfterCommit >= 4)
+                    confirmed = 0;
+                    if (readsAfterCommit >= 5)
                     {
                         missing = expected.Where(t => !checkedNames.Contains(t))
                             .ToArray();
-                        Finish("Autodesk reset native selection after one " +
-                            "commit; missing=" + string.Join(", ", missing) +
-                            ". No endless rechecking.");
+                        if (nativeRebuildRetries < maxNativeRebuildRetries)
+                        {
+                            nativeRebuildRetries++;
+                            committed = false;
+                            stable = 0;
+                            readsAfterCommit = 0;
+                            createFocusNudged = false;
+                            createEligibilityReplayed = false;
+                            eligibilityValidationPolls = 0;
+                            WriteDiagnostic("REV90: Autodesk reset checked " +
+                                "state; missing=" + string.Join(", ", missing) +
+                                ". Bounded retry #" + nativeRebuildRetries +
+                                ", no partial Create.");
+                            return;
+                        }
+                        Finish("Autodesk reset checked state after REV90 " +
+                            "bounded retries; missing=" +
+                            string.Join(", ", missing) + ".");
                     }
                     return;
                 }
-                if (++confirmed < 2) return;
+                if (++confirmed < 3) return;
 
                 // REV89: native redraw was already released before checkbox
                 // commit; Autodesk has now had the chance to process real
@@ -1630,7 +1669,7 @@ internal static class NativeIsoLineSelectOverlay
                     Finish("native Create remains disabled with no saved routes.");
                     return;
                 }
-                WriteDiagnostic("REV89: Show All native checked routes " +
+                WriteDiagnostic("REV90: Show All native checked routes " +
                     expected.Count + "/" + expected.Count +
                     ", Create.Enabled=True.");
                 Finish();
