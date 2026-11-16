@@ -1340,6 +1340,12 @@ internal static class NativeIsoLineSelectOverlay
         int stable = 0;
         int confirmed = 0;
         int readsAfterCommit = 0;
+        // REV87: after Active -> All, Autodesk can show a checked A-08
+        // without enabling native Create. The checked icon alone is not
+        // proof that the native Create eligibility event was received.
+        bool createFocusNudged = false;
+        bool createEligibilityReplayed = false;
+        int eligibilityValidationPolls = 0;
         bool committed = false;
         string lastNames = "";
         var timer = new System.Windows.Forms.Timer { Interval = 140 };
@@ -1471,6 +1477,98 @@ internal static class NativeIsoLineSelectOverlay
                     return;
                 }
                 if (++confirmed < 2) return;
+
+                // REV87: require Autodesk's own Create eligibility to
+                // recognize the saved checked routes. Do not set
+                // Create.Enabled, fabricate routes, or submit an ISO here.
+                Button? nativeCreate = FindNativeCreateButton(dialog);
+                if (nativeCreate is null)
+                {
+                    Finish("native Create button unavailable after Show All.");
+                    return;
+                }
+                if (!nativeCreate.Enabled && expected.Count > 0)
+                {
+                    int selectedRow = -1;
+                    for (int i = 0; i < list.Items.Count; i++)
+                    {
+                        string tag = list.GetItemText(list.Items[i]).Trim();
+                        if (expected.Contains(tag) && list.GetItemChecked(i))
+                        {
+                            selectedRow = i;
+                            break;
+                        }
+                    }
+                    if (selectedRow < 0)
+                    {
+                        Finish("no saved checked route available to validate Create.");
+                        return;
+                    }
+
+                    if (!createFocusNudged)
+                    {
+                        // First try only the original Autodesk selection
+                        // event. No checkbox state changes or blink.
+                        createFocusNudged = true;
+                        if (list.SelectedIndex == selectedRow)
+                            list.ClearSelected();
+                        list.SelectedIndex = selectedRow;
+                        WriteDiagnostic("REV87: Show All native Create " +
+                            "eligibility focus nudge: " +
+                            list.GetItemText(list.Items[selectedRow]).Trim() +
+                            ", Create=" + nativeCreate.Enabled + ".");
+                        return;
+                    }
+
+                    if (!createEligibilityReplayed)
+                    {
+                        // Native item checkbox is checked, yet Autodesk
+                        // still rejects Create. Replay exactly ONE genuine
+                        // native off/on click sequence while BeginUpdate
+                        // is active; preserve all other selected routes.
+                        createEligibilityReplayed = true;
+                        string tag = list.GetItemText(
+                            list.Items[selectedRow]).Trim();
+                        bool off = false;
+                        bool on = false;
+                        _restoringSelection = true;
+                        try
+                        {
+                            off = ProjectFolderLinePicker.ClickNativeCheckedRow(
+                                list, selectedRow, false);
+                            if (off && selectedRow < list.Items.Count &&
+                                list.GetItemText(list.Items[selectedRow])
+                                    .Trim().Equals(tag,
+                                        StringComparison.OrdinalIgnoreCase))
+                                on = ProjectFolderLinePicker.ClickNativeCheckedRow(
+                                    list, selectedRow, true);
+                        }
+                        finally { _restoringSelection = false; }
+                        WriteDiagnostic("REV87: one-time native Create " +
+                            "checkbox event: " + tag +
+                            ", off=" + off + ", on=" + on +
+                            ", Create=" + nativeCreate.Enabled + ".");
+                        confirmed = 0;
+                        return;
+                    }
+
+                    // Allow Autodesk's asynchronous handlers to settle,
+                    // but NEVER toggle the checkbox a second time.
+                    if (++eligibilityValidationPolls < 5)
+                        return;
+                    Finish("native Create remained disabled after the " +
+                        "REV87 single eligibility replay; saved routes " +
+                        "retained and no ISO was submitted.");
+                    return;
+                }
+                if (!nativeCreate.Enabled)
+                {
+                    Finish("native Create remains disabled with no saved routes.");
+                    return;
+                }
+                WriteDiagnostic("REV87: Show All native checked routes " +
+                    expected.Count + "/" + expected.Count +
+                    ", Create.Enabled=True.");
                 Finish();
             }
             catch (Exception ex)
