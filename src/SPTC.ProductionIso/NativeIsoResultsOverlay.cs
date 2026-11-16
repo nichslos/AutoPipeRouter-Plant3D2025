@@ -523,15 +523,12 @@ internal static class NativeIsoResultsOverlay
         // A canonical ordered list per route: N custom DWGs, ONE folder.
         List<CustomResultLink> Expected(List<string> paths)
         {
-            // REV101: exactly ONE blank tree row between Autodesk's
-            // original Explorer folder link and the FIRST Custom: row.
-            // No extra spacing between custom file links or ISO groups.
-            var items = new List<CustomResultLink>
-            {
-                new CustomResultLink("", false, IsSeparator: true)
-            };
-            items.AddRange(paths.Select(p =>
-                new CustomResultLink(p, false)));
+            // REV102: the full blank-row separator introduced in REV101
+            // was too tall in Results. Reuse the TreeView's natural
+            // inter-row gap instead; no global ItemHeight or link spacing
+            // changes and no blank selectable/clickable tree item.
+            var items = paths.Select(p =>
+                new CustomResultLink(p, false)).ToList();
             if (paths.Count > 0)
                 items.Add(new CustomResultLink(
                     CustomLinkTarget(paths[0], true), true));
@@ -978,16 +975,13 @@ internal static class NativeIsoResultsOverlay
             // for missing links (REV62) left earlier lexical ordering intact,
             // even when PathsForRoute was subsequently natural-sorted.
             // Compare ACTUAL child order against expected numeric order.
-            // REV101: only ONE extra blank ROW between native Autodesk
-            // folder hyperlink and the custom group. File-to-file spacing
-            // stays at the original TreeView.ItemHeight.
-            var expectedItems = new List<(string Path, bool OpenFolder,
-                bool IsSeparator)>
-            {
-                ("", false, true)
-            };
-            expectedItems.AddRange(paths.Select(path =>
-                (Path: path, OpenFolder: false, IsSeparator: false)));
+            // REV102: remove the full-height blank row separating native
+            // Autodesk links and Custom links. Standard TreeView row
+            // spacing remains unchanged everywhere, including each
+            // custom file and the separate ISO result groups.
+            var expectedItems = paths.Select(path =>
+                (Path: path, OpenFolder: false,
+                 IsSeparator: false)).ToList();
             expectedItems.Add((Path: paths[0], OpenFolder: true,
                 IsSeparator: false));
 
@@ -1025,13 +1019,8 @@ internal static class NativeIsoResultsOverlay
                 _winLinks.Remove(old.Item);
             }
 
-            // Blank separator is a real unclickable TreeView row, not
-            // a changed item height or extra padding between file links.
-            IntPtr spacer = InsertNativeLink(tree, parent, "", false, true);
-            if (spacer != IntPtr.Zero)
-                _winLinks[spacer] = new NativeCustomLink(
-                    spacer, parent, "", false, IsSeparator: true);
-
+            // REV102: no separate full-row spacer. The Results links
+            // follow the normal native per-row rhythm without excess gap.
             // N custom DWG links in Windows Explorer numeric order.
             foreach (string path in paths)
             {
