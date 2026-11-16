@@ -877,7 +877,7 @@ internal static class NativeIsoResultsOverlay
     // link and the first injected Custom link, then move all injected
     // group labels by the SAME pixel delta to target 20px top-to-top.
     // Does not move native tree items or alter their individual spacing.
-    private const int TargetOriginalToFirstCustomTopPx = 20;
+    private const int TargetOriginalToFirstCustomTopPx = 25;
 
     private static int CustomGroupVerticalShiftPx(IntPtr tree, IntPtr parent)
     {
@@ -908,14 +908,15 @@ internal static class NativeIsoResultsOverlay
             if (original is not null && custom is not null)
             {
                 int measured = custom.Value.Top - original.Value.Top;
-                // A 17px native separation normally means +3px here.
-                // Limit correction if Windows DPI/theme reports an
-                // unexpected rectangle, avoiding overlap with other UI.
+                // REV105: target exactly 25px TEXT-TOP to TEXT-TOP
+                // between the original Explorer link and first Custom.
+                // Native row height remains unchanged for individual
+                // links; the adjustment is bounded for high-DPI themes.
                 return Math.Clamp(
-                    TargetOriginalToFirstCustomTopPx - measured, -4, 6);
+                    TargetOriginalToFirstCustomTopPx - measured, -5, 12);
             }
         }
-        return 3; // REV102 screenshot baseline: approximately 17px
+        return 8; // usual native top spacing ~17px => 25px target
     }
 
     private static void DrawNativeCustomLabels(IntPtr tree)
