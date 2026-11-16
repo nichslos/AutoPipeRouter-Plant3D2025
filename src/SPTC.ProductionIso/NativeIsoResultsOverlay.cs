@@ -239,7 +239,12 @@ internal static class NativeIsoResultsOverlay
 
         // Keep listening even if Autodesk closes and reopens Results from
         // its completion notification. Launch() resets for the next ISO run.
-        _timer = new System.Windows.Forms.Timer { Interval = 550 };
+        // REV104: avoid traversing/repainting the Autodesk results tree
+        // on the AutoCAD UI thread every 550ms during ISO generation.
+        // New completed DWGs still update immediately from ReportCopied;
+        // this timer is only the low-frequency fallback for native
+        // Results opening/reopening and Autodesk result-tree changes.
+        _timer = new System.Windows.Forms.Timer { Interval = 2500 };
         _timer.Tick += (_, _) => OnTick();
         _timer.Start();
         OnTick();
@@ -268,9 +273,14 @@ internal static class NativeIsoResultsOverlay
     private static readonly IComparer<string> NaturalIsoFileOrder =
         Comparer<string>.Create(CompareIsoDwgPaths);
 
+    // REV104: CopiedPaths is populated exclusively by ReportCopied(),
+    // which already validated File.Exists at the custom destination.
+    // Rechecking every path via File.Exists for every native route on
+    // each UI timer tick can block AutoCAD's main thread on SMB/network
+    // drives. Trust the verified session snapshot for DISPLAY only;
+    // actual OpenDrawing continues to validate at click time.
     private static List<string> ResultsForRoute(string tag) =>
         CopiedPaths.Where(path =>
-            File.Exists(path) &&
             MatchesIsoName(Path.GetFileName(path), tag))
         .OrderBy(path => path, NaturalIsoFileOrder)
         .ToList();
