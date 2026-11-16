@@ -414,6 +414,20 @@ internal static class NativeIsoDialogEnhancer
                     return;
                 }
 
+                // REV98: avoid presenting a misleading checked Active route
+                // with grey Autodesk Create. Require native Create to be
+                // genuinely eligible in the complete project source for
+                // two separate UI ticks before switching presentation.
+                // No artificial enabling, proxy button or ISO submission.
+                if (expected.Length > 0 &&
+                    _nativeCreateButton is not { IsDisposed: false,
+                                                Enabled: true })
+                {
+                    ready = 0;
+                    return;
+                }
+                if (++ready < 2) return;
+
                 if (!ProjectFolderLinePicker.ShowExactActiveDwgTags(
                     new[] { exactTag }, _document,
                     preserveOtherCheckedNativeRoutes: true))
