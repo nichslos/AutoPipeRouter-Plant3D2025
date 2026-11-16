@@ -1320,16 +1320,24 @@ internal static class NativeIsoLineSelectOverlay
             // requested route through the same original native mouse path
             // used by individual folder/active selection. Never change
             // rows not explicitly requested or allow a partial Create.
+            // REV94: avoid six synchronous native mouse events in one UI
+            // turn. Autodesk may asynchronously discard the Active route
+            // check while handling later clicks (the REV80-REV93 5/6
+            // failure). Commit at most ONE missing route per 180ms caller
+            // tick; return incomplete until the exact full set is stable.
             foreach (int index in indices)
             {
-                if (!list.GetItemChecked(index))
-                {
-                    bool clicked = ProjectFolderLinePicker
-                        .ClickNativeCheckedRow(list, index, true);
-                    WriteDiagnostic("REV83 native route commit: " +
-                        names[index] + ", clicked=" + clicked +
-                        ", checked=" + list.GetItemChecked(index));
-                }
+                if (list.GetItemChecked(index)) continue;
+                if (index < 0 || index >= list.Items.Count ||
+                    !list.GetItemText(list.Items[index]).Trim().Equals(
+                        names[index], StringComparison.OrdinalIgnoreCase))
+                    return false;
+                bool clicked = ProjectFolderLinePicker
+                    .ClickNativeCheckedRow(list, index, true);
+                WriteDiagnostic("REV94 staged native route commit: " +
+                    names[index] + ", clicked=" + clicked +
+                    ", checked=" + list.GetItemChecked(index));
+                break;
             }
             // The exact final result is checked again on later timer ticks.
             checkedCount = 0;
