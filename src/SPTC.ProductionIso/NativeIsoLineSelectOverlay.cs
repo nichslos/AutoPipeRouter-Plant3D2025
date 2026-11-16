@@ -101,6 +101,10 @@ internal static class NativeIsoLineSelectOverlay
     // a user's checkbox click. Transition and delayed events must NEVER
     // remove a previously selected tag such as A-08.
     private static bool _scopeSwitchPending;
+    // REV86: never let the 800ms counter poll repeatedly rewrite native
+    // checkmarks while Autodesk is rebuilding the All Project checklist.
+    // Selection restoration is owned solely by the bounded mode transition.
+    private static bool _suspendPeriodicNativeWrites;
     private static int _selectionEpoch;
     private static string _lastNativeRowSignature = "";
     private static string _lastRestoredRowSignature = "";
@@ -170,6 +174,7 @@ internal static class NativeIsoLineSelectOverlay
         _generation++;
         _dialog = dialog;
         _lastProjectWideRowCount = 0;
+        _suspendPeriodicNativeWrites = false;
         _host = new UserControl
         {
             BackColor = SystemColors.Control,
@@ -525,6 +530,9 @@ internal static class NativeIsoLineSelectOverlay
         _stableNativePolls = 0;
         _settledActiveRoute = "";
         CancelActiveCommit();
+        // A manual search after the scope transition is a new explicit
+        // operation and may use the existing manual-filter reconciliation.
+        if (!_scopeSwitchPending) _suspendPeriodicNativeWrites = false;
         // A manual search may interrupt the Show All recovery. Never
         // hold the native list in BeginUpdate after that interaction.
         if (!_scopeSwitchPending) EndProjectRedrawBatch();
@@ -541,6 +549,7 @@ internal static class NativeIsoLineSelectOverlay
     {
         if (_dialog != dialog || dialog == IntPtr.Zero) return;
         _scopeSwitchPending = true;
+        _suspendPeriodicNativeWrites = true;
         _settledActiveRoute = "";
         CancelActiveCommit();
         // Re-enable regular monitoring before the All/Current button
@@ -1066,7 +1075,7 @@ internal static class NativeIsoLineSelectOverlay
     private static void ReconcileVisibleNativeSelection()
     {
         if (_restoringSelection || _scopeSwitchPending ||
-            _gestureIndex >= 0 ||
+            _suspendPeriodicNativeWrites || _gestureIndex >= 0 ||
             ProjectFolderLinePicker.HasVisibleProjection ||
             _trackedNativeList is not { IsDisposed: false } list ||
             list.Items.Count == 0)
@@ -1305,52 +1314,57 @@ internal static class NativeIsoLineSelectOverlay
         return SessionSelectedTags.ToArray();
     }
 
+    // REV86: one controlled restoration, never a repeated 432-item write.
+    // Autodesk may replace checked-row indices after native Filter.TextChanged.
+    // Wait until the full Project checklist is stable, perform one native
+    // commit, then ONLY read to verify. If it fails, leave the dialog open
+    // and report the issue without blinking the checkbox indefinitely.
     public static void ScheduleModeChangeRecovery(
         IntPtr dialog, IEnumerable<string> selectedBefore)
     {
-        if (dialog == IntPtr.Zero || dialog != _dialog)
-            return;
+        if (dialog == IntPtr.Zero || dialog != _dialog) return;
 
-        // REV84: preserve the original tag ledger, not Autodesk's filtered
-        // row indices. The project list can be rebuilt after a delay.
         BeginScopeSwitch(dialog);
         foreach (string name in selectedBefore)
             if (!string.IsNullOrWhiteSpace(name))
                 SessionSelectedTags.Add(name);
-        var previous = new HashSet<string>(
+        var expected = new HashSet<string>(
             SessionSelectedTags, StringComparer.OrdinalIgnoreCase);
-        int requiredProjectRows = _lastProjectWideRowCount;
+        int requiredRows = _lastProjectWideRowCount;
 
         try { _modeRecoveryTimer?.Stop(); _modeRecoveryTimer?.Dispose(); }
         catch (Exception) { }
         int serial = ++_modeRecoverySerial;
         int generation = _generation;
-        int attempts = 0;
-        int stablePasses = 0;
-        int exactConfirmationPasses = 0;
-        string lastVisibleNames = "";
-        // REV85: reduce unnecessary 250ms UI polling during Active -> All.
-        // Autodesk's real list readiness is still verified by names/counts;
-        // no speculative checkmarks or native Create overrides.
-        var timer = new System.Windows.Forms.Timer { Interval = 120 };
+        int ticks = 0;
+        int stable = 0;
+        int confirmed = 0;
+        int readsAfterCommit = 0;
+        bool committed = false;
+        string lastNames = "";
+        var timer = new System.Windows.Forms.Timer { Interval = 140 };
         _modeRecoveryTimer = timer;
 
-        void Stop()
+        void Finish(string? reason = null)
         {
             try { timer.Stop(); timer.Dispose(); }
             catch (Exception) { }
             if (ReferenceEquals(_modeRecoveryTimer, timer))
                 _modeRecoveryTimer = null;
-            if (_dialog == dialog && _generation == generation &&
-                serial == _modeRecoverySerial)
-            {
-                _scopeSwitchPending = false;
-                _lastNativeRowSignature = "";
-                _lastRestoredRowSignature = "";
-                _stableNativePolls = 0;
-                EndProjectRedrawBatch();
-                UpdateDisplayedCount();
-            }
+            if (_dialog != dialog || _generation != generation ||
+                serial != _modeRecoverySerial)
+                return;
+            _scopeSwitchPending = false;
+            // REV86 intentionally keeps _suspendPeriodicNativeWrites=true
+            // until a new manual search/scope action. Otherwise the 800ms
+            // counter immediately recreates the original checkbox blink.
+            _lastNativeRowSignature = "";
+            _lastRestoredRowSignature = "";
+            _stableNativePolls = 0;
+            EndProjectRedrawBatch();
+            UpdateDisplayedCount();
+            if (!string.IsNullOrEmpty(reason))
+                WriteDiagnostic("REV86: " + reason);
         }
 
         timer.Tick += (_, _) =>
@@ -1358,120 +1372,111 @@ internal static class NativeIsoLineSelectOverlay
             if (_dialog != dialog || _generation != generation ||
                 serial != _modeRecoverySerial)
             {
-                Stop();
+                Finish();
                 return;
             }
-            // Bounded: never hang the Autodesk dialog if source rows do
-            // not load, and never rewrite DWG/SQL/PnP data.
-            if (++attempts > 30)
+            if (++ticks > 25)
             {
-                WriteDiagnostic("REV85: All Project recovery timed out; " +
-                    "saved route names retained; native checkboxes not confirmed.");
-                Stop();
+                Finish("All Project selection recovery timed out; " +
+                    "saved tags retained, native checks require validation.");
                 return;
             }
-
             try
             {
                 if (ProjectFolderLinePicker.HasVisibleProjection)
                 {
-                    Stop();
+                    Finish();
                     return;
                 }
                 CheckedListBox? list = FindNativeCheckedList(dialog);
                 if (list is null || list.IsDisposed || list.Items.Count == 0)
                     return;
-
-                // REV84: do not commit A-08 to the original Active-DWG
-                // partial source while Autodesk is rebuilding 432 rows.
-                if (requiredProjectRows > 0 &&
-                    list.Items.Count < requiredProjectRows)
+                if (requiredRows > 0 && list.Items.Count < requiredRows)
                     return;
 
                 var names = new StringBuilder();
-                var visibleTags = new HashSet<string>(
+                var visible = new HashSet<string>(
                     StringComparer.OrdinalIgnoreCase);
                 for (int i = 0; i < list.Items.Count; i++)
                 {
                     string tag = list.GetItemText(list.Items[i]).Trim();
                     names.Append(tag).Append('\u001f');
-                    visibleTags.Add(tag);
+                    visible.Add(tag);
                 }
-                // Every saved tag must exist in the actual project source;
-                // never silently accept a partial filtered list.
-                if (!previous.IsSubsetOf(visibleTags))
-                    return;
-                string visible = names.ToString();
-                if (!visible.Equals(lastVisibleNames,
-                        StringComparison.Ordinal))
+                if (!expected.IsSubsetOf(visible)) return;
+                string signature = names.ToString();
+                if (!signature.Equals(lastNames, StringComparison.Ordinal))
                 {
-                    lastVisibleNames = visible;
-                    stablePasses = 0;
-                    exactConfirmationPasses = 0;
-                    return;
-                }
-                if (++stablePasses < 2)
-                    return;
-
-                int firstChecked = -1;
-                int repaired = 0;
-                bool exact = true;
-                _restoringSelection = true;
-                try
-                {
-                    for (int i = 0; i < list.Items.Count; i++)
+                    if (committed)
                     {
-                        string tag = list.GetItemText(list.Items[i]).Trim();
-                        bool wanted = previous.Contains(tag);
-                        if (list.GetItemChecked(i) != wanted)
+                        Finish("Autodesk changed native rows after checkbox " +
+                            "commit; no repeated writes performed.");
+                        return;
+                    }
+                    lastNames = signature;
+                    stable = 0;
+                    return;
+                }
+                if (++stable < 2) return;
+
+                if (!committed)
+                {
+                    committed = true;
+                    int changed = 0;
+                    _restoringSelection = true;
+                    try
+                    {
+                        for (int i = 0; i < list.Items.Count; i++)
                         {
-                            repaired++;
+                            string tag = list.GetItemText(list.Items[i]).Trim();
+                            bool wanted = expected.Contains(tag);
+                            if (list.GetItemChecked(i) == wanted) continue;
+                            changed++;
                             if (wanted)
-                            {
-                                // REV84: send the real native mouse/ItemCheck
-                                // sequence so Autodesk retains checked A-08
-                                // after returning from Active DWG.
                                 ProjectFolderLinePicker.ClickNativeCheckedRow(
                                     list, i, true);
-                            }
                             else list.SetItemChecked(i, false);
                         }
-                        bool checkedNow = list.GetItemChecked(i);
-                        if (checkedNow != wanted) exact = false;
-                        if (firstChecked < 0 && wanted && checkedNow)
-                            firstChecked = i;
                     }
-                    if (firstChecked >= 0 && list.SelectedIndex < 0)
-                        list.SelectedIndex = firstChecked;
-                    else if (firstChecked < 0 && list.SelectedIndex >= 0)
-                        list.ClearSelected();
+                    finally { _restoringSelection = false; }
+                    WriteDiagnostic("REV86: Show All native commit once; " +
+                        "changed=" + changed + ", expected=" + expected.Count +
+                        ", rows=" + list.Items.Count + ".");
+                    return;
                 }
-                finally { _restoringSelection = false; }
 
-                if (repaired > 0)
-                    WriteDiagnostic("REV85: All Project native checks " +
-                        "recommitted for " + repaired + " row(s); exact=" +
-                        exact + ".");
-                // Do NOT stop after the first write. Autodesk may update
-                // the underlying list/check state on subsequent UI ticks.
-                // REV85: verify one later unmodified UI tick, instead
-                // of holding the complete native list invisible for
-                // multiple extra update cycles.
-                if (!exact || repaired > 0)
+                // Read-only after commit: do not fight Autodesk timers.
+                readsAfterCommit++;
+                bool exact = true;
+                string[] missing = Array.Empty<string>();
+                var checkedNames = new HashSet<string>(
+                    StringComparer.OrdinalIgnoreCase);
+                for (int i = 0; i < list.Items.Count; i++)
                 {
-                    exactConfirmationPasses = 0;
+                    string tag = list.GetItemText(list.Items[i]).Trim();
+                    bool check = list.GetItemChecked(i);
+                    if (check) checkedNames.Add(tag);
+                    if (check != expected.Contains(tag)) exact = false;
+                }
+                if (!exact)
+                {
+                    if (readsAfterCommit >= 4)
+                    {
+                        missing = expected.Where(t => !checkedNames.Contains(t))
+                            .ToArray();
+                        Finish("Autodesk reset native selection after one " +
+                            "commit; missing=" + string.Join(", ", missing) +
+                            ". No endless rechecking.");
+                    }
                     return;
                 }
-                if (++exactConfirmationPasses < 2)
-                    return;
-                UpdateSelectedLabel();
-                Stop();
+                if (++confirmed < 2) return;
+                Finish();
             }
             catch (Exception ex)
             {
-                WriteDiagnostic("REV84 Show All recovery: " +
+                Finish("selection recovery error: " +
                     ex.GetBaseException().Message);
-                Stop();
             }
         };
         timer.Start();
@@ -2193,6 +2198,7 @@ internal static class NativeIsoLineSelectOverlay
     {
         _generation++;
         _lastProjectWideRowCount = 0;
+        _suspendPeriodicNativeWrites = false;
         CancelActiveCommit();
         EndProjectRedrawBatch();
         try { _firstRowRetry?.Stop(); _firstRowRetry?.Dispose(); }
