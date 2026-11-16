@@ -897,92 +897,136 @@ internal static class NativeIsoDialogEnhancer
         }, IntPtr.Zero);
     }
 
-    // REV93: the filtered Active/Folder view can display a valid checked
-    // route while Autodesk disables its Create because the other selected
-    // routes are outside the current native list. Never force-enable the
-    // Autodesk control. The SPTC button in its place restores the full
-    // project list and validates exact saved checkboxes before triggering
-    // the genuine native Create once. On failure, no partial ISO is sent.
+
+    // REV96: REV93-REV95 attempted to cover Autodesk's disabled Create
+    // using a child of original.Parent at the identical coordinates.
+    // Depending on Autodesk layout/window reparenting the child did not
+    // remain hit-testable/visible in All Project (reported with Selected:6).
+    // Show a DISTINCT SPTC action in the native dialog's own client area,
+    // immediately ABOVE the disabled native button, never on top of it.
+    // No native Enabled property is modified. Clicking the SPTC action
+    // calls the existing exact-tag, no-partial-ISO batch preparation.
     private static void UpdateScopedCreateButton(IntPtr dialog)
     {
-        if (_native != dialog || dialog == IntPtr.Zero ||
-            !IsWindow(dialog) ||
-            _nativeCreateButton is not { IsDisposed: false } original ||
-            original.Parent is not { IsDisposed: false } parent)
+        try
         {
-            if (_scopedCreateButton is { IsDisposed: false } stale)
-                stale.Visible = false;
-            return;
-        }
-
-        bool pending = _autoCreatePending && !_autoCreateSubmitting;
-        int savedCount = NativeIsoLineSelectOverlay
-            .CaptureSelectedTags(dialog).Length;
-        // REV95: show the guarded SPTC Create action whenever the actual
-        // Autodesk Create is disabled but saved route intent is nonempty.
-        // REV94 incorrectly gated the All Project fallback on a separate
-        // selected-row mismatch probe. That probe can return false while
-        // Autodesk still disables Create after a filter transition.
-        // This is only UI availability, not authorization to create:
-        // BeginAutomaticBatchCreate still requires exact real native
-        // checked tags AND original.Enabled before invoking Autodesk.
-        bool show = pending || (!original.Enabled && savedCount > 0);
-        if (!show)
-        {
-            if (_scopedCreateButton is { IsDisposed: false } existing)
-                existing.Visible = false;
-            return;
-        }
-
-        if (_scopedCreateButton is null || _scopedCreateButton.IsDisposed ||
-            !ReferenceEquals(_scopedCreateButton.Parent, parent))
-        {
-            try { _scopedCreateButton?.Dispose(); }
-            catch (Exception) { }
-            _scopedCreateButton = new Button
+            if (_native != dialog || dialog == IntPtr.Zero ||
+                !IsWindow(dialog) ||
+                _nativeCreateButton is not { IsDisposed: false } original)
             {
-                Name = "SPTCScopedBatchCreate",
-                Text = "Create",
-                AutoSize = false,
-                TabStop = false,
-                UseVisualStyleBackColor = true,
-                Anchor = original.Anchor,
-                Bounds = original.Bounds
-            };
-            Button scopedButton = _scopedCreateButton;
-            scopedButton.Click += (_, _) =>
+                if (_scopedCreateButton is { IsDisposed: false } stale)
+                    stale.Visible = false;
+                return;
+            }
+
+            int selectedCount = NativeIsoLineSelectOverlay
+                .CaptureSelectedTags(dialog).Length;
+            bool pending = _autoCreatePending && !_autoCreateSubmitting;
+            bool show = pending || (!original.Enabled && selectedCount > 0);
+            if (!show)
             {
-                if (_native != dialog || !IsWindow(dialog) ||
-                    _autoCreatePending || _autoCreateSubmitting ||
-                    NativeIsoLineSelectOverlay.CaptureSelectedTags(dialog)
-                        .Length == 0)
-                    return;
+                if (_scopedCreateButton is { IsDisposed: false } unused)
+                    unused.Visible = false;
+                return;
+            }
+
+            // Prefer the managed Autodesk dialog itself, not the native
+            // button's immediate panel, which may be disabled or replaced
+            // when switching Active/All. This also prevents z-order races
+            // with Autodesk's bottom-button panel.
+            Control? host = Control.FromHandle(dialog);
+            if (host is null || host.IsDisposed)
+                host = original.FindForm();
+            if (host is null || host.IsDisposed)
+                host = original.Parent;
+            if (host is null || host.IsDisposed)
+                return;
+
+            if (_scopedCreateButton is null || _scopedCreateButton.IsDisposed ||
+                !ReferenceEquals(_scopedCreateButton.Parent, host))
+            {
+                try { _scopedCreateButton?.Dispose(); }
+                catch (Exception) { }
+                Button action = new Button
+                {
+                    Name = "SPTCVerifiedBatchCreateREV96",
+                    Text = "SPTC Create (" + selectedCount + ")",
+                    AutoSize = false,
+                    TabStop = false,
+                    UseVisualStyleBackColor = true,
+                    Size = new Size(138, 28),
+                    Anchor = AnchorStyles.Bottom | AnchorStyles.Right
+                };
+                _scopedCreateButton = action;
+                action.Click += (_, _) =>
+                {
+                    if (_native != dialog || !IsWindow(dialog) ||
+                        _autoCreatePending || _autoCreateSubmitting)
+                        return;
+                    string[] saved = NativeIsoLineSelectOverlay
+                        .CaptureSelectedTags(dialog);
+                    if (saved.Length == 0) return;
+                    _document?.Editor.WriteMessage(
+                        "\nSPTC REV96: explicit verified Create for " +
+                        saved.Length + " saved route(s), restoring " +
+                        "Autodesk All Project native selection first.");
+                    BeginAutomaticBatchCreate(dialog);
+                    UpdateScopedCreateButton(dialog);
+                };
+                host.Controls.Add(action);
+                _scopedCreateTip ??= new ToolTip();
+                _scopedCreateTip.SetToolTip(action,
+                    "Validate every saved line against Autodesk's native " +
+                    "list before submitting one full Production ISO batch.");
                 _document?.Editor.WriteMessage(
-                    "\nSPTC REV95: Guarded Create requested. Validating " +
-                    "all saved route tags against native All Project " +
-                    "before invoking Autodesk Create.");
-                BeginAutomaticBatchCreate(dialog);
-                UpdateScopedCreateButton(dialog);
-            };
-            parent.Controls.Add(scopedButton);
-            _scopedCreateTip ??= new ToolTip();
-            _scopedCreateTip.SetToolTip(scopedButton,
-                "SPTC: restore and verify ALL selected line numbers " +
-                "before starting the original Autodesk Production ISO.");
-        }
+                    "\nSPTC REV96: separate SPTC Create action attached to " +
+                    host.GetType().Name + "; native Create remains untouched.");
+            }
 
-        Button proxy = _scopedCreateButton;
-        if (proxy.Bounds != original.Bounds) proxy.Bounds = original.Bounds;
-        proxy.Anchor = original.Anchor;
-        proxy.Text = pending ? "Preparing..." : "Create";
-        proxy.Enabled = !pending;
-        if (!proxy.Visible) proxy.Visible = true;
-        // REV95: when Autodesk switches its own list mode it can bring
-        // the disabled native Create control above our earlier proxy.
-        // Restore the SPTC control's z-order without moving/recreating
-        // either button. This never alters original.Enabled.
-        if (parent.Controls.GetChildIndex(proxy) != 0)
-            proxy.BringToFront();
+            Button button = _scopedCreateButton;
+            // Translate native Create screen rectangle into the chosen
+            // root dialog's CLIENT space, not the native button panel.
+            Point location;
+            if (GetWindowRect(original.Handle, out WinRect nativeRect))
+            {
+                WinPoint fromScreen = new WinPoint
+                {
+                    X = nativeRect.Left,
+                    Y = nativeRect.Top
+                };
+                if (ScreenToClient(host.Handle, ref fromScreen))
+                    location = new Point(fromScreen.X, fromScreen.Y);
+                else
+                    location = host.PointToClient(original.PointToScreen(Point.Empty));
+            }
+            else
+                location = host.PointToClient(original.PointToScreen(Point.Empty));
+
+            // A dedicated row above the native bottom buttons is visible
+            // even when the native Create stays grey. Never cover Cancel.
+            int x = Math.Max(5, Math.Min(
+                location.X + original.Width - button.Width,
+                host.ClientSize.Width - button.Width - 5));
+            int y = Math.Max(5, location.Y - button.Height - 9);
+            var target = new Rectangle(x, y, button.Width, button.Height);
+            if (button.Bounds != target) button.Bounds = target;
+            button.Text = pending
+                ? "Preparing " + selectedCount + "..."
+                : "SPTC Create (" + selectedCount + ")";
+            button.Enabled = !pending && selectedCount > 0;
+            if (!button.Visible) button.Visible = true;
+            if (host.Controls.GetChildIndex(button) != 0)
+                button.BringToFront();
+        }
+        catch (Exception ex)
+        {
+            // Never take down Autodesk's modal dialog for a UI-only helper.
+            if (_scopedCreateButton is { IsDisposed: false } button)
+                button.Visible = false;
+            _document?.Editor.WriteMessage(
+                "\nSPTC REV96: verified Create action layout error: " +
+                ex.GetBaseException().Message);
+        }
     }
 
     private static void RemoveScopedCreateButton()
