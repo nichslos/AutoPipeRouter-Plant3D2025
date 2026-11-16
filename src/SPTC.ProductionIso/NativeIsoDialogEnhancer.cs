@@ -346,7 +346,7 @@ internal static class NativeIsoDialogEnhancer
             }
             if (++ticks > 55)
             {
-                Cancel("A-08 native selection/Create not stable within " +
+                Cancel("native selection/Create not stable within " +
                     "the guarded recovery window");
                 return;
             }
@@ -378,7 +378,13 @@ internal static class NativeIsoDialogEnhancer
                     return; // bounded, never repeat checkbox events
                 }
 
-                if (_nativeCreateButton is not { IsDisposed: false,
+                // REV106: an EMPTY global selection is valid while
+                // browsing line numbers. Autodesk correctly disables
+                // Create when nothing is checked. Do not block Show All
+                // waiting for an impossible Create.Enabled=True.
+                // Nonempty selections still need the real native button.
+                if (expected.Length > 0 &&
+                    _nativeCreateButton is not { IsDisposed: false,
                                                  Enabled: true })
                 {
                     stable = 0;
@@ -391,9 +397,10 @@ internal static class NativeIsoDialogEnhancer
                 NativeIsoToolbarClickFilter.MarkAllLinesRestored(dialog);
                 NativeIsoLineSelectOverlay.UpdateDisplayedCount();
                 _document?.Editor.WriteMessage(
-                    "\nSPTC REV101: Show All stable " + expected.Length +
-                    "/" + expected.Length + ", Create.Enabled=True, " +
-                    "Active overlay removed without native list refresh.");
+                    "\nSPTC REV106: Show All stable " + expected.Length +
+                    "/" + expected.Length + ", Create.Enabled=" +
+                    (_nativeCreateButton?.Enabled.ToString() ?? "unknown") +
+                    ", Active overlay removed without native list refresh.");
             }
             catch (Exception ex)
             {
@@ -1428,8 +1435,9 @@ internal static class NativeIsoDialogEnhancer
                             NativeIsoLineSelectOverlay
                                 .HasCompleteUnfilteredProjectSource(
                                     native, allowActivePresentation: true) &&
-                            _nativeCreateButton is { IsDisposed: false,
-                                                     Enabled: true })
+                            (selectedBefore.Length == 0 ||
+                             _nativeCreateButton is { IsDisposed: false,
+                                                      Enabled: true }))
                         {
                             string[] nativeChecked = NativeCheckedRouteNames(native);
                             var selected = new HashSet<string>(selectedBefore,
@@ -1446,10 +1454,12 @@ internal static class NativeIsoDialogEnhancer
                                     native);
                                 NativeIsoLineSelectOverlay.UpdateDisplayedCount();
                                 _document.Editor.WriteMessage(
-                                    "\nSPTC REV100: instant Show All (" +
+                                    "\nSPTC REV106: instant Show All (" +
                                     nativeChecked.Length + "/" + selected.Count +
-                                    " checked, native Create=True); " +
-                                    "visual Active projection removed only.");
+                                    " checked, native Create=" +
+                                    (_nativeCreateButton?.Enabled.ToString() ??
+                                     "unknown") +
+                                    "); visual Active projection removed only.");
                                 return true;
                             }
                         }
