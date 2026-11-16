@@ -1239,13 +1239,30 @@ internal static class ProjectFolderLinePicker
         }
     }
 
+    // REV97: Active DWG may be entered a second time after another
+    // manual search with six saved tags. The initial projection build
+    // can precede Autodesk's filtered-list synchronization; recheck the
+    // ORIGINAL native checkbox/Create state only AFTER the exact Active
+    // filter has been finalized (and its original row index verified).
+    // This schedules a single genuine native eligibility event, never
+    // forces Create.Enabled, and never generates a partial ISO.
+    internal static void RevalidateNativeCreateAfterActiveReady()
+    {
+        if (!ActiveDwgView || _dialog == IntPtr.Zero ||
+            !HasVisibleProjection || VisibleEntries.Count == 0)
+            return;
+        if (!VisibleEntries.Any(GetNativeChecked))
+            return;
+        ScheduleNativeSelectionCommit();
+    }
+
     private static void ScheduleNativeSelectionCommit()
     {
         // Single reusable debounce timer; Select All may affect hundreds of
         // lines and must not allocate one timer per checked checkbox.
         if (_nativeCommitTimer is null)
         {
-            _nativeCommitTimer = new System.Windows.Forms.Timer { Interval = 220 };
+            _nativeCommitTimer = new System.Windows.Forms.Timer { Interval = 400 };
             _nativeCommitTimer.Tick += (_, _) =>
             {
                 _nativeCommitTimer?.Stop();
@@ -1359,9 +1376,10 @@ internal static class ProjectFolderLinePicker
 
             if (Current() && !create.Enabled)
                 _document?.Editor.WriteMessage(
-                    "\nSPTC REV91: Autodesk native Create remains disabled " +
-                    "after safe one-time Active/Folder validation for " +
-                    first.Tag + "; native eligibility was not overridden.");
+                    "\nSPTC REV97: Autodesk native Create remains disabled " +
+                    "after settled Active/Folder validation for " +
+                    first.Tag + ", saved selection remains unchanged. " +
+                    "Native Create was not forced enabled.");
         }
         catch (Exception ex)
         {
