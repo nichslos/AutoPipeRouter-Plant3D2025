@@ -1130,7 +1130,10 @@ internal static class ProjectFolderLinePicker
         return false;
     }
 
-    private static bool ClickNativeCheckedRow(
+    // REV83: allow batch preparation to notify Autodesk through its
+    // genuine checkbox click path, rather than setting a checkmark only.
+    // This is used only for exact, verified native indices.
+    internal static bool ClickNativeCheckedRow(
         CheckedListBox list, int index, bool desired)
     {
         if (list.IsDisposed || !list.IsHandleCreated ||
