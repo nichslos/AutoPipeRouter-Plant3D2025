@@ -73,6 +73,14 @@ internal sealed class NativeIsoToolbarClickFilter : IMessageFilter
             current._showingActive = false;
     }
 
+    public static void MarkActiveLinesDisplayed(IntPtr dialog)
+    {
+        // REV101: on a guarded Show All repair timeout, the Active
+        // projection remains visible. Next toolbar click must be Show All.
+        if (_active is { _disposed: false } current && current._dialog == dialog)
+            current._showingActive = true;
+    }
+
     // REV38: The old SPTC top-toolbar mouse filter deliberately intercepts
     // Drawing/Project/Filter clicks and turns all three into Active/All.
     // After native exact filtering, the original Autodesk checklist may
