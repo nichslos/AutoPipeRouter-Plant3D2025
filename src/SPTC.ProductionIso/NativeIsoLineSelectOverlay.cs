@@ -363,6 +363,26 @@ internal static class NativeIsoLineSelectOverlay
         dialog != IntPtr.Zero && dialog == _dialog
             ? _lastProjectWideRowCount : 0;
 
+    // REV100: a presentation-only Active view already has the full
+    // underlying original Autodesk project list. An extra Project icon
+    // click rebuilds its check state, intermittently dropping A-08 and
+    // causing the reported 5/6 Create error. Do not touch the source
+    // when its names/count and native filter are already project-wide.
+    public static bool HasCompleteUnfilteredProjectSource(IntPtr dialog)
+    {
+        if (dialog == IntPtr.Zero || dialog != _dialog ||
+            ProjectFolderLinePicker.HasVisibleProjection ||
+            _lastProjectWideRowCount <= 0)
+            return false;
+        EnsureSelectionTracking();
+        if (_trackedNativeSearch is not { IsDisposed: false } search ||
+            !string.IsNullOrWhiteSpace(search.Text))
+            return false;
+        CheckedListBox? list = FindNativeCheckedList(dialog);
+        return list is { IsDisposed: false } &&
+            list.Items.Count >= _lastProjectWideRowCount;
+    }
+
     public static bool IsNativeSearchBlank(IntPtr dialog)
     {
         if (dialog == IntPtr.Zero || dialog != _dialog) return false;
