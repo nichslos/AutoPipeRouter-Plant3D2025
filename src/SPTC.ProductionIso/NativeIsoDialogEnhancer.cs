@@ -1380,7 +1380,22 @@ internal static class NativeIsoDialogEnhancer
                             NativeIsoLineSelectOverlay.CancelScopeSwitch(native);
                             return false;
                         }
-                        bool projectRefresh =
+                        // REV99: when coming from an already-complete
+                        // unfiltered project list, clicking the native
+                        // Project toolbar again causes a costly rebuild and
+                        // invalidates Create eligibility/checkbox events.
+                        // Do it only after a manual search or partial source.
+                        int knownProjectRows =
+                            NativeIsoLineSelectOverlay.KnownProjectWideRowCount(
+                                native);
+                        int displayedNativeRows =
+                            NativeIsoLineSelectOverlay.NativeDisplayedCount(
+                                native) ?? 0;
+                        bool alreadyFullSource =
+                            NativeIsoLineSelectOverlay.IsNativeSearchBlank(native) &&
+                            knownProjectRows > 0 &&
+                            displayedNativeRows >= knownProjectRows;
+                        bool projectRefresh = !alreadyFullSource &&
                             NativeIsoToolbarClickFilter.TryRefreshNativeProjectList(
                                 native);
                         NativeIsoToolbarClickFilter.MarkAllLinesRestored(native);
