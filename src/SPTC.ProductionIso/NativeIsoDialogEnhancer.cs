@@ -1102,6 +1102,13 @@ internal static class NativeIsoDialogEnhancer
                     {
                         if (_document is null) return false;
 
+                        // REV89: capture the complete native project source
+                        // BEFORE filtering the original Autodesk list to
+                        // A-08; otherwise the interim substring list may
+                        // pass readiness checks during the reverse toggle.
+                        if (showActive)
+                            NativeIsoLineSelectOverlay.RememberUnfilteredProjectRows(
+                                native);
                         // REV65: snapshot CHECKED tag names, never item
                         // indices, before the native toolbar changes mode.
                         // Autodesk can replace its original checklist rows.
