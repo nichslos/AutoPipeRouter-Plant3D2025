@@ -46,6 +46,11 @@ internal static class NativeIsoDialogEnhancer
     // dimensions change. It never queries PnP databases or project files.
     private static System.Windows.Forms.Timer? _layoutWatch;
     private static System.Windows.Forms.Timer? _activeFilterVerify;
+    // REV98: retain the full Autodesk project source while only
+    // projecting the exact Active DWG tag. Prevents losing Create
+    // eligibility when returning from another manually searched route.
+    private static System.Windows.Forms.Timer? _activeProjectProjectionTimer;
+    private static int _activeProjectProjectionSerial;
     private static Size _lastDialogClientSize = Size.Empty;
     private static int _fallbackRowLeft = -1;
     private static int _fallbackTextboxLeft = -1;
@@ -293,6 +298,152 @@ internal static class NativeIsoDialogEnhancer
         return true;
     }
 
+    // REV98: do not run Autodesk's native text filter on Active view.
+    // Native search A-08 produces five substring rows and discards the
+    // other saved route selections, leaving Create=False. Instead restore
+    // the already-supported complete project list, revalidate the exact
+    // saved native set, and show a one-row projection of A-08 over it.
+    // The ORIGINAL Autodesk Create stays responsible for generation.
+    private static void StopActiveProjectProjection()
+    {
+        try
+        {
+            _activeProjectProjectionTimer?.Stop();
+            _activeProjectProjectionTimer?.Dispose();
+        }
+        catch (Exception) { }
+        _activeProjectProjectionTimer = null;
+        _activeProjectProjectionSerial++;
+    }
+
+    private static void BeginActiveProjectProjection(
+        IntPtr dialog, string exactTag, string[] selectedBefore)
+    {
+        StopActiveProjectProjection();
+        int serial = _activeProjectProjectionSerial;
+        string[] expected = selectedBefore
+            .Where(tag => !string.IsNullOrWhiteSpace(tag))
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var wanted = new HashSet<string>(expected,
+            StringComparer.OrdinalIgnoreCase);
+        int knownRows = NativeIsoLineSelectOverlay
+            .KnownProjectWideRowCount(dialog);
+        int ticks = 0, stable = 0, ready = 0;
+        string lastSignature = "";
+        var timer = new System.Windows.Forms.Timer { Interval = 180 };
+        _activeProjectProjectionTimer = timer;
+
+        void Stop(string? error = null, bool abortScope = false)
+        {
+            try { timer.Stop(); timer.Dispose(); }
+            catch (Exception) { }
+            if (!ReferenceEquals(_activeProjectProjectionTimer, timer))
+                return;
+            _activeProjectProjectionTimer = null;
+            _activeProjectProjectionSerial++;
+            if (abortScope && _native == dialog)
+                NativeIsoLineSelectOverlay.CancelScopeSwitch(dialog);
+            if (!string.IsNullOrEmpty(error))
+                _document?.Editor.WriteMessage(
+                    "\nSPTC REV98 Active projection: " + error);
+        }
+
+        timer.Tick += (_, _) =>
+        {
+            if (serial != _activeProjectProjectionSerial ||
+                _native != dialog || !IsWindow(dialog))
+            {
+                Stop();
+                return;
+            }
+
+            if (++ticks > 100)
+            {
+                Stop("Could not confirm full project source and exact " +
+                    "saved checked routes. Active view not changed; " +
+                    "Autodesk Create was not forced.", abortScope: true);
+                return;
+            }
+
+            try
+            {
+                if (ProjectFolderLinePicker.HasVisibleProjection ||
+                    !NativeIsoLineSelectOverlay.IsNativeSearchBlank(dialog))
+                {
+                    Stop("Native source changed during Active restore; " +
+                        "canceled stale projection.", abortScope: true);
+                    return;
+                }
+
+                int count = NativeIsoLineSelectOverlay
+                    .NativeDisplayedCount(dialog) ?? 0;
+                if (count == 0 || (knownRows > 0 && count < knownRows))
+                    return;
+
+                string signature = NativeIsoLineSelectOverlay
+                    .NativeRouteNameSignature(dialog);
+                if (string.IsNullOrEmpty(signature) ||
+                    !signature.Equals(lastSignature, StringComparison.Ordinal))
+                {
+                    lastSignature = signature;
+                    stable = 0;
+                    ready = 0;
+                    return;
+                }
+                if (++stable < 3) return;
+
+                // Ensure exact global selection is committed in native
+                // Autodesk's full list, not just in the "Selected: N" label.
+                if (expected.Length > 0)
+                {
+                    bool applied = NativeIsoLineSelectOverlay
+                        .TryApplySavedBatchToNative(dialog, expected,
+                            out int matched, out int checkedCount);
+                    if (!applied || matched != expected.Length ||
+                        checkedCount != expected.Length)
+                        return;
+                }
+
+                string[] checkedNative = NativeCheckedRouteNames(dialog);
+                var checkedSet = new HashSet<string>(
+                    checkedNative, StringComparer.OrdinalIgnoreCase);
+                if (checkedNative.Length != expected.Length ||
+                    !checkedSet.SetEquals(wanted))
+                {
+                    ready = 0;
+                    return;
+                }
+
+                if (!ProjectFolderLinePicker.ShowExactActiveDwgTags(
+                    new[] { exactTag }, _document,
+                    preserveOtherCheckedNativeRoutes: true))
+                {
+                    Stop("Exact active route unavailable in complete " +
+                        "Autodesk project list.", abortScope: true);
+                    return;
+                }
+
+                NativeIsoLineSelectOverlay.CompleteActiveProjectionScope(
+                    dialog, exactTag);
+                _document?.Editor.WriteMessage(
+                    "\nSPTC REV98: Active " + exactTag +
+                    " projected over complete " + count +
+                    "-row Autodesk source; native checked=" +
+                    checkedNative.Length + "/" + expected.Length +
+                    ", Create.Enabled=" +
+                    (_nativeCreateButton?.Enabled.ToString() ?? "unknown") +
+                    ". No native search/reindexing performed.");
+                Stop();
+            }
+            catch (Exception ex)
+            {
+                Stop("Native project restore exception: " +
+                    ex.GetBaseException().Message, abortScope: true);
+            }
+        };
+        timer.Start();
+    }
+
     private static void StopAutoCreate()
     {
         try { _autoCreateTimer?.Stop(); _autoCreateTimer?.Dispose(); }
@@ -359,6 +510,7 @@ internal static class NativeIsoDialogEnhancer
     // set (never just Selected:N) and invoke original Create exactly once.
     private static void BeginAutomaticBatchCreate(IntPtr dialog)
     {
+        StopActiveProjectProjection();
         if (_autoCreatePending || _autoCreateSubmitting ||
             dialog == IntPtr.Zero || dialog != _native ||
             _nativeCreateButton is not { IsDisposed: false } nativeCreate)
@@ -1112,10 +1264,10 @@ internal static class NativeIsoDialogEnhancer
                     {
                         if (_document is null) return false;
 
-                        // REV89: capture the complete native project source
-                        // BEFORE filtering the original Autodesk list to
-                        // A-08; otherwise the interim substring list may
-                        // pass readiness checks during the reverse toggle.
+                        // REV98: cancel any unfinished Active projection on
+                        // a new user-selected scope, and capture the full
+                        // original native project list before touching views.
+                        StopActiveProjectProjection();
                         if (showActive)
                             NativeIsoLineSelectOverlay.RememberUnfilteredProjectRows(
                                 native);
@@ -1201,29 +1353,31 @@ internal static class NativeIsoDialogEnhancer
                             return false;
                         }
 
-                        bool applied = ActiveDwgTags.ApplyOneTag(native, _document);
-                        if (applied)
+                        // REV98: Active DWG is a pure exact-tag projection
+                        // of the original COMPLETE project source. We must
+                        // NOT set Autodesk's native search to A-08: it
+                        // reindexes the list to five substring matches and
+                        // disables native Create on a later filter return.
+                        // Existing saved route selections remain checked in
+                        // the real 432-row list behind this one-row view.
+                        NativeIsoExactLineFilter.End(restore: true);
+                        if (!ActiveDwgTags.ClearOneTag(native, _document))
                         {
-                            // REV31: Autodesk's native Filter does a broad
-                            // substring match (A-08 also returns A-088 and
-                            // CAP...+A-088). Reversibly remove nonexact rows
-                            // from the SAME original checked-list control.
-                            NativeIsoExactLineFilter.Begin(
-                                native, ActiveDwgTags.CurrentTags[0], _document);
-                            _document.Editor.WriteMessage(
-                                "\nSPTC REV71: Exact match requested for " +
-                                ActiveDwgTags.CurrentTags[0] +
-                                "; waiting for native exact-filter validation.");
-                            // REV71: do NOT schedule 350ms mode-recovery
-                            // timer for Active DWG. NativeIsoExactLineFilter
-                            // notifies the selection overlay the moment the
-                            // single original Autodesk row is validated.
-                            // This eliminates the additional three-poll
-                            // recovery delay and competing checkbox writes.
-                        }
-                        else
                             NativeIsoLineSelectOverlay.CancelScopeSwitch(native);
-                        return applied;
+                            return false;
+                        }
+                        bool projectRefresh =
+                            NativeIsoToolbarClickFilter.TryRefreshNativeProjectList(
+                                native);
+                        NativeIsoToolbarClickFilter.MarkAllLinesRestored(native);
+                        string exactTag = ActiveDwgTags.CurrentTags[0];
+                        _document.Editor.WriteMessage(
+                            "\nSPTC REV98: restoring All Project native " +
+                            "selection for exact Active " + exactTag +
+                            " (refresh=" + projectRefresh + ").");
+                        BeginActiveProjectProjection(
+                            native, exactTag, selectedBefore);
+                        return true;
                     });
 
                 }
@@ -1720,6 +1874,7 @@ internal static class NativeIsoDialogEnhancer
 
     private static void Detach()
     {
+        StopActiveProjectProjection();
         _watch?.Stop();
         _watch?.Dispose();
         _watch = null;
