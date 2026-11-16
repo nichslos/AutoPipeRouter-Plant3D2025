@@ -85,12 +85,6 @@ internal static class NativeIsoDialogEnhancer
     private static bool _overwriteRequested;
     private static CheckBox? _nativeOverwriteBox;
     private static Button? _nativeCreateButton;
-    // REV93: when Autodesk disables its original Create in a scoped
-    // Active/Folder projection, provide an explicit SPTC Create action
-    // in the same position. It NEVER enables Autodesk's native button.
-    // The action runs the existing full-batch native eligibility preflight.
-    private static Button? _scopedCreateButton;
-    private static ToolTip? _scopedCreateTip;
     private static IntPtr _nativeOverwriteHandle;
     private static CreateClickPreflightFilter? _createPreflightFilter;
     private static bool _swallowCreateMouseUp;
@@ -898,153 +892,11 @@ internal static class NativeIsoDialogEnhancer
     }
 
 
-    // REV96: REV93-REV95 attempted to cover Autodesk's disabled Create
-    // using a child of original.Parent at the identical coordinates.
-    // Depending on Autodesk layout/window reparenting the child did not
-    // remain hit-testable/visible in All Project (reported with Selected:6).
-    // Show a DISTINCT SPTC action in the native dialog's own client area,
-    // immediately ABOVE the disabled native button, never on top of it.
-    // No native Enabled property is modified. Clicking the SPTC action
-    // calls the existing exact-tag, no-partial-ISO batch preparation.
-    private static void UpdateScopedCreateButton(IntPtr dialog)
-    {
-        try
-        {
-            if (_native != dialog || dialog == IntPtr.Zero ||
-                !IsWindow(dialog) ||
-                _nativeCreateButton is not { IsDisposed: false } original)
-            {
-                if (_scopedCreateButton is { IsDisposed: false } stale)
-                    stale.Visible = false;
-                return;
-            }
-
-            int selectedCount = NativeIsoLineSelectOverlay
-                .CaptureSelectedTags(dialog).Length;
-            bool pending = _autoCreatePending && !_autoCreateSubmitting;
-            bool show = pending || (!original.Enabled && selectedCount > 0);
-            if (!show)
-            {
-                if (_scopedCreateButton is { IsDisposed: false } unused)
-                    unused.Visible = false;
-                return;
-            }
-
-            // Prefer the managed Autodesk dialog itself, not the native
-            // button's immediate panel, which may be disabled or replaced
-            // when switching Active/All. This also prevents z-order races
-            // with Autodesk's bottom-button panel.
-            Control? host = Control.FromHandle(dialog);
-            if (host is null || host.IsDisposed)
-                host = original.FindForm();
-            if (host is null || host.IsDisposed)
-                host = original.Parent;
-            if (host is null || host.IsDisposed)
-                return;
-
-            if (_scopedCreateButton is null || _scopedCreateButton.IsDisposed ||
-                !ReferenceEquals(_scopedCreateButton.Parent, host))
-            {
-                try { _scopedCreateButton?.Dispose(); }
-                catch (Exception) { }
-                Button action = new Button
-                {
-                    Name = "SPTCVerifiedBatchCreateREV96",
-                    Text = "SPTC Create (" + selectedCount + ")",
-                    AutoSize = false,
-                    TabStop = false,
-                    UseVisualStyleBackColor = true,
-                    Size = new Size(138, 28),
-                    Anchor = AnchorStyles.Bottom | AnchorStyles.Right
-                };
-                _scopedCreateButton = action;
-                action.Click += (_, _) =>
-                {
-                    if (_native != dialog || !IsWindow(dialog) ||
-                        _autoCreatePending || _autoCreateSubmitting)
-                        return;
-                    string[] saved = NativeIsoLineSelectOverlay
-                        .CaptureSelectedTags(dialog);
-                    if (saved.Length == 0) return;
-                    _document?.Editor.WriteMessage(
-                        "\nSPTC REV96: explicit verified Create for " +
-                        saved.Length + " saved route(s), restoring " +
-                        "Autodesk All Project native selection first.");
-                    BeginAutomaticBatchCreate(dialog);
-                    UpdateScopedCreateButton(dialog);
-                };
-                host.Controls.Add(action);
-                _scopedCreateTip ??= new ToolTip();
-                _scopedCreateTip.SetToolTip(action,
-                    "Validate every saved line against Autodesk's native " +
-                    "list before submitting one full Production ISO batch.");
-                _document?.Editor.WriteMessage(
-                    "\nSPTC REV96: separate SPTC Create action attached to " +
-                    host.GetType().Name + "; native Create remains untouched.");
-            }
-
-            Button button = _scopedCreateButton;
-            // Translate native Create screen rectangle into the chosen
-            // root dialog's CLIENT space, not the native button panel.
-            Point location;
-            if (GetWindowRect(original.Handle, out WinRect nativeRect))
-            {
-                WinPoint fromScreen = new WinPoint
-                {
-                    X = nativeRect.Left,
-                    Y = nativeRect.Top
-                };
-                if (ScreenToClient(host.Handle, ref fromScreen))
-                    location = new Point(fromScreen.X, fromScreen.Y);
-                else
-                    location = host.PointToClient(original.PointToScreen(Point.Empty));
-            }
-            else
-                location = host.PointToClient(original.PointToScreen(Point.Empty));
-
-            // A dedicated row above the native bottom buttons is visible
-            // even when the native Create stays grey. Never cover Cancel.
-            int x = Math.Max(5, Math.Min(
-                location.X + original.Width - button.Width,
-                host.ClientSize.Width - button.Width - 5));
-            int y = Math.Max(5, location.Y - button.Height - 9);
-            var target = new Rectangle(x, y, button.Width, button.Height);
-            if (button.Bounds != target) button.Bounds = target;
-            button.Text = pending
-                ? "Preparing " + selectedCount + "..."
-                : "SPTC Create (" + selectedCount + ")";
-            button.Enabled = !pending && selectedCount > 0;
-            if (!button.Visible) button.Visible = true;
-            if (host.Controls.GetChildIndex(button) != 0)
-                button.BringToFront();
-        }
-        catch (Exception ex)
-        {
-            // Never take down Autodesk's modal dialog for a UI-only helper.
-            if (_scopedCreateButton is { IsDisposed: false } button)
-                button.Visible = false;
-            _document?.Editor.WriteMessage(
-                "\nSPTC REV96: verified Create action layout error: " +
-                ex.GetBaseException().Message);
-        }
-    }
-
-    private static void RemoveScopedCreateButton()
-    {
-        try { _scopedCreateTip?.Dispose(); }
-        catch (Exception) { }
-        _scopedCreateTip = null;
-        try { _scopedCreateButton?.Dispose(); }
-        catch (Exception) { }
-        _scopedCreateButton = null;
-    }
-
     private static void StartOverwriteTracker(IntPtr dialog)
     {
         CaptureNativeOverwrite(dialog);
         TrackNativeCreateButton(dialog);
         TrackNativeCancelClose(dialog);
-        UpdateScopedCreateButton(dialog);
         if (_overwriteTracker != null) return;
         _overwriteTracker = new System.Windows.Forms.Timer
         {
@@ -1057,7 +909,6 @@ internal static class NativeIsoDialogEnhancer
             CaptureNativeOverwrite(dialog);
             TrackNativeCreateButton(dialog);
             TrackNativeCancelClose(dialog);
-            UpdateScopedCreateButton(dialog);
         };
         _overwriteTracker.Start();
     }
@@ -1067,7 +918,6 @@ internal static class NativeIsoDialogEnhancer
         try { _overwriteTracker?.Stop(); _overwriteTracker?.Dispose(); }
         catch (Exception) { }
         _overwriteTracker = null;
-        RemoveScopedCreateButton();
 
         if (_createPreflightFilter != null)
         {
