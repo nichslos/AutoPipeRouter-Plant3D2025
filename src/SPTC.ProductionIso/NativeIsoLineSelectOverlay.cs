@@ -1232,20 +1232,38 @@ internal static class NativeIsoLineSelectOverlay
         {
             // Clear ONLY extras checked by an old filtered/indexed view.
             // User intent in wantedNames always remains authoritative.
+            // REV83: only clear unintended checks here. For requested
+            // unchecked items use the genuine Autodesk mouse event path
+            // below, so the native model receives the selection.
             for (int i = 0; i < list.Items.Count; i++)
+                if (!wanted.Contains(names[i]) && list.GetItemChecked(i))
+                    list.SetItemChecked(i, false);
+            // Remaining missing checks are committed using the real
+            // native click path before counting, below.
+
+            // REV83: native Autodesk state can reset a formerly-active
+            // projected route after clearing the exact current-DWG filter.
+            // A SetItemChecked checkmark alone does not always commit to
+            // Autodesk's underlying selection. Re-commit only any missing
+            // requested route through the same original native mouse path
+            // used by individual folder/active selection. Never change
+            // rows not explicitly requested or allow a partial Create.
+            foreach (int index in indices)
             {
-                bool desired = wanted.Contains(names[i]);
-                if (list.GetItemChecked(i) != desired)
-                    list.SetItemChecked(i, desired);
+                if (!list.GetItemChecked(index))
+                {
+                    bool clicked = ProjectFolderLinePicker
+                        .ClickNativeCheckedRow(list, index, true);
+                    WriteDiagnostic("REV83 native route commit: " +
+                        names[index] + ", clicked=" + clicked +
+                        ", checked=" + list.GetItemChecked(index));
+                }
             }
-            for (int i = 0; i < list.Items.Count; i++)
-            {
-                if (!list.GetItemChecked(i)) continue;
-                if (!wanted.Contains(names[i])) return false;
-                checkedCount++;
-            }
-            if (checkedCount != wanted.Count)
-                return false;
+            // The exact final result is checked again on later timer ticks.
+            checkedCount = 0;
+            foreach (int i in indices)
+                if (list.GetItemChecked(i)) checkedCount++;
+            if (checkedCount != wanted.Count) return false;
 
             // A focused checked row can trigger Autodesk's own native
             // Create eligibility refresh without fake checkbox clicks.
