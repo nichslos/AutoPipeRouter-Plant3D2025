@@ -473,9 +473,15 @@ internal static class NativeIsoDialogEnhancer
                     // while allowing the native source up to ~17 seconds.
                     if (++polls > 95)
                     {
+                        var nativeAtTimeout = new HashSet<string>(
+                            NativeCheckedRouteNames(dialog),
+                            StringComparer.OrdinalIgnoreCase);
+                        string missingAtTimeout = string.Join(", ",
+                            requested.Where(tag => !nativeAtTimeout.Contains(tag)));
                         Fail("Found " + matched + "/" +
                             requested.Length + " route(s), native checked=" +
                             checkedCount + "/" + requested.Length +
+                            ", missing=" + missingAtTimeout +
                             ", Autodesk Create.Enabled=" + create.Enabled +
                             ". Canceled the batch (no background watcher).");
                         return;
@@ -911,14 +917,20 @@ internal static class NativeIsoDialogEnhancer
 
         bool pending = _autoCreatePending && !_autoCreateSubmitting;
         bool scoped = ProjectFolderLinePicker.HasVisibleProjection;
-        bool haveSavedSelection = NativeIsoLineSelectOverlay
-            .CaptureSelectedTags(dialog).Length > 0;
-        bool haveVisibleCheck =
-            (ProjectFolderLinePicker.VisibleCheckedCount ?? 0) > 0;
-
+        string[] savedTags = NativeIsoLineSelectOverlay
+            .CaptureSelectedTags(dialog);
+        bool haveSavedSelection = savedTags.Length > 0;
+        // REV94: The global ledger may contain six saved routes while
+        // Autodesk's All Project source currently has only A-08 checked.
+        // The original Create is then disabled. Offer the same guarded
+        // SPTC batch action in All Project, not just Active/Folder mode.
+        // This action NEVER forces original.Enabled or submits a subset.
+        bool nativeMismatch = false;
+        if (!original.Enabled && haveSavedSelection && !scoped)
+            nativeMismatch = TryGetCreateSelectionMismatch(dialog, out _);
         bool show = pending ||
-            (scoped && !original.Enabled &&
-             haveSavedSelection && haveVisibleCheck);
+            (!original.Enabled && haveSavedSelection &&
+             (scoped || nativeMismatch));
         if (!show)
         {
             if (_scopedCreateButton is { IsDisposed: false } existing)
