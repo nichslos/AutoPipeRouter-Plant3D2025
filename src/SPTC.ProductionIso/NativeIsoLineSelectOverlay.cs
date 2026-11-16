@@ -333,16 +333,15 @@ internal static class NativeIsoLineSelectOverlay
             _lastProjectWideRowCount = Math.Max(
                 _lastProjectWideRowCount, unfiltered.Items.Count);
         ReconcileVisibleNativeSelection();
-        // REV77: Active Drawing exact projection displays just one native-
-        // backed route, but Selected:N must still report the session total
-        // (e.g. A-08 + five previously selected CAP_BF routes = six).
-        // Folder mode intentionally keeps its scoped checked count.
-        int? checkedCount = ProjectFolderLinePicker.ActiveDwgView
-            ? SessionSelectedTags.Count
-            : ProjectFolderLinePicker.VisibleCheckedCount ??
-              (_trackedNativeList is { IsDisposed: false }
-                  ? SessionSelectedTags.Count
-                  : ReadNativeCheckedCount(_dialog));
+        // REV92: Select All is LOCAL TO THE CURRENT VIEW. It means every
+        // visible line in this Active/Folder/All filter is checked, NOT
+        // every route remembered across other filters. During a scope
+        // transition the native list is incomplete: clear the visual
+        // Select All state without generating an unchecked event.
+        RefreshScopeSelectAll();
+        // REV92: Selected:N is GLOBAL ACROSS FILTERS. Never make it the
+        // count of native rows currently in the filtered view.
+        int? checkedCount = SessionSelectedTags.Count;
         if (_selectedCountLabel is { IsDisposed: false } selectedLabel)
         {
             string selectedText = checkedCount.HasValue
@@ -574,6 +573,7 @@ internal static class NativeIsoLineSelectOverlay
         if (_dialog != dialog || dialog == IntPtr.Zero) return;
         _scopeSwitchPending = true;
         _suspendPeriodicNativeWrites = true;
+        RefreshScopeSelectAll();
         _settledActiveRoute = "";
         CancelActiveCommit();
         // Re-enable regular monitoring before the All/Current button
@@ -1060,10 +1060,18 @@ internal static class NativeIsoLineSelectOverlay
         if (list.IsDisposed || _scopeSwitchPending ||
             !ReferenceEquals(_trackedNativeList, list))
             return;
+        // REV92: native checkboxes outside the visible Folder/Active
+        // projection are deliberately cleared for safe Create eligibility.
+        // They are NOT a user uncheck and must not erase saved selections
+        // belonging to another filter.
+        var scoped = ProjectFolderLinePicker.HasVisibleProjection
+            ? ProjectFolderLinePicker.GetVisibleTagNames()
+            : null;
         for (int i = 0; i < list.Items.Count; i++)
         {
             string tag = list.GetItemText(list.Items[i]).Trim();
-            if (tag.Length == 0) continue;
+            if (tag.Length == 0 ||
+                (scoped != null && !scoped.Contains(tag))) continue;
             if (list.GetItemChecked(i))
                 SessionSelectedTags.Add(tag);
             else
@@ -1086,14 +1094,33 @@ internal static class NativeIsoLineSelectOverlay
     {
         if (_selectedCountLabel is { IsDisposed: false } label)
         {
-            string caption = "Selected: " +
-                (ProjectFolderLinePicker.ActiveDwgView
-                    ? SessionSelectedTags.Count
-                    : ProjectFolderLinePicker.VisibleCheckedCount ??
-                      SessionSelectedTags.Count);
+            string caption = "Selected: " + SessionSelectedTags.Count;
             if (label.Text != caption)
                 label.Text = caption;
         }
+        RefreshScopeSelectAll();
+    }
+
+    // REV92: derived Select All presentation, never an implied selection.
+    // Suppress CheckedChanged so moving between filters does not call the
+    // bulk selection handler. Only the user's click changes selected tags.
+    private static void RefreshScopeSelectAll()
+    {
+        if (_toggle is not { IsDisposed: false } toggle ||
+            _dialog == IntPtr.Zero)
+            return;
+
+        int? visible = ProjectFolderLinePicker.VisibleLineCount ??
+                       ReadNativeLineCount(_dialog);
+        int? checkedVisible = ProjectFolderLinePicker.VisibleCheckedCount ??
+                              ReadNativeCheckedCount(_dialog);
+        bool scopedAll = !_scopeSwitchPending &&
+            visible is > 0 && checkedVisible.HasValue &&
+            checkedVisible.Value == visible.Value;
+        if (toggle.Checked == scopedAll) return;
+        _setting = true;
+        try { toggle.Checked = scopedAll; }
+        finally { _setting = false; }
     }
 
     private static void ReconcileVisibleNativeSelection()
