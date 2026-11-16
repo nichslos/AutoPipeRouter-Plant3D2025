@@ -378,22 +378,24 @@ internal static class NativeIsoDialogEnhancer
                     return; // bounded, never repeat checkbox events
                 }
 
-                if (_nativeCreateButton is not { IsDisposed: false,
-                                                 Enabled: true })
-                {
-                    stable = 0;
-                    return; // never force-enable Autodesk Create
-                }
-
+                // REV106: filter NAVIGATION is not ISO generation.
+                // Autodesk Create is normally DISABLED with Selected:0
+                // and may be disabled for other eligibility reasons.
+                // Never prevent return to Show All for that reason.
+                // We still require an exact, stable native checked set.
                 if (++stable < 3) return;
+                bool createEnabled =
+                    _nativeCreateButton is { IsDisposed: false,
+                                             Enabled: true };
                 StopQuietShowAll();
                 ProjectFolderLinePicker.ClearVisibleProjection();
                 NativeIsoToolbarClickFilter.MarkAllLinesRestored(dialog);
                 NativeIsoLineSelectOverlay.UpdateDisplayedCount();
                 _document?.Editor.WriteMessage(
-                    "\nSPTC REV101: Show All stable " + expected.Length +
-                    "/" + expected.Length + ", Create.Enabled=True, " +
-                    "Active overlay removed without native list refresh.");
+                    "\nSPTC REV106: Show All stable " + expected.Length +
+                    "/" + expected.Length + ", Create.Enabled=" +
+                    createEnabled + ", navigation allowed independently " +
+                    "of native ISO eligibility.");
             }
             catch (Exception ex)
             {
@@ -1415,11 +1417,50 @@ internal static class NativeIsoDialogEnhancer
                         string[] selectedBefore =
                             NativeIsoLineSelectOverlay.CaptureSelectedTags(native);
 
-                        // REV100: Active in REV98+ is only a ONE-LINE
-                        // visual projection over the full Autodesk list.
-                        // When the original native 432 rows are still
-                        // complete and exactly match the saved checked tags,
-                        // Show All only needs to remove that visual overlay.
+                        // REV106: an Active drawing may show MULTIPLE tags,
+                        // and Show All must work with Selected:0 as well.
+                        // The original Create is disabled by Autodesk if no
+                        // line is selected, but that must NEVER disable a
+                        // view navigation. If the entire native source is
+                        // already available, drop the projection immediately.
+                        if (!showActive &&
+                            ProjectFolderLinePicker.ActiveDwgView &&
+                            selectedBefore.Length == 0 &&
+                            NativeIsoLineSelectOverlay
+                                .HasCompleteUnfilteredProjectSource(
+                                    native, allowActivePresentation: true))
+                        {
+                            string[] checkedRows =
+                                NativeCheckedRouteNames(native);
+                            ProjectFolderLinePicker.ClearVisibleProjection();
+                            NativeIsoToolbarClickFilter.MarkAllLinesRestored(
+                                native);
+                            if (checkedRows.Length == 0)
+                                NativeIsoLineSelectOverlay
+                                    .UpdateDisplayedCount();
+                            else
+                                // In the unexpected case of stale native
+                                // checks, restore the empty selection on the
+                                // complete list AFTER showing All Project.
+                                // No ISO batch is started; native Create
+                                // is never forcibly enabled.
+                                NativeIsoLineSelectOverlay
+                                    .ScheduleModeChangeRecovery(
+                                        native, selectedBefore);
+                            _document.Editor.WriteMessage(
+                                "\nSPTC REV106: Show All with Selected:0; " +
+                                "restored complete native project list " +
+                                "without requiring Create.Enabled. " +
+                                "Stale checked rows=" + checkedRows.Length +
+                                ".");
+                            return true;
+                        }
+
+                        // REV100: Active projection overlays the full
+                        // Autodesk checklist without changing row indices.
+                        // When the complete native source already matches
+                        // the saved selection, Show All simply removes
+                        // the visual projection, without a new scan.
                         // Do it BEFORE BeginScopeSwitch/refresh/checkbox
                         // timers: otherwise a valid A-08 repeatedly blinks
                         // and 5/6 batch validation may fail.
@@ -1427,9 +1468,7 @@ internal static class NativeIsoDialogEnhancer
                             ProjectFolderLinePicker.ActiveDwgView &&
                             NativeIsoLineSelectOverlay
                                 .HasCompleteUnfilteredProjectSource(
-                                    native, allowActivePresentation: true) &&
-                            _nativeCreateButton is { IsDisposed: false,
-                                                     Enabled: true })
+                                    native, allowActivePresentation: true))
                         {
                             string[] nativeChecked = NativeCheckedRouteNames(native);
                             var selected = new HashSet<string>(selectedBefore,
@@ -1446,10 +1485,12 @@ internal static class NativeIsoDialogEnhancer
                                     native);
                                 NativeIsoLineSelectOverlay.UpdateDisplayedCount();
                                 _document.Editor.WriteMessage(
-                                    "\nSPTC REV100: instant Show All (" +
+                                    "\nSPTC REV106: instant Show All (" +
                                     nativeChecked.Length + "/" + selected.Count +
-                                    " checked, native Create=True); " +
-                                    "visual Active projection removed only.");
+                                    " checked, native Create.Enabled=" +
+                                    (_nativeCreateButton?.Enabled.ToString() ??
+                                        "unknown") +
+                                    "); visual Active projection removed only.");
                                 return true;
                             }
                         }
@@ -1510,19 +1551,19 @@ internal static class NativeIsoDialogEnhancer
                                     StringComparer.OrdinalIgnoreCase)
                                     .SetEquals(wanted);
 
-                            if (nativeExact &&
-                                _nativeCreateButton is { IsDisposed: false,
-                                                         Enabled: true })
+                            if (nativeExact)
                             {
                                 // No Autodesk source mutation: preserve exact
                                 // checked routes and existing Create state.
                                 NativeIsoLineSelectOverlay.CancelScopeSwitch(native);
                                 NativeIsoLineSelectOverlay.UpdateDisplayedCount();
                                 _document.Editor.WriteMessage(
-                                    "\nSPTC REV100: Show All native fast path; " +
+                                    "\nSPTC REV106: Show All native fast path; " +
                                     nativeChecked.Length + "/" + wanted.Count +
-                                    " checked, Create.Enabled=True, " +
-                                    "no project refresh or checkbox replay.");
+                                    " checked, Create.Enabled=" +
+                                    (_nativeCreateButton?.Enabled.ToString() ??
+                                        "unknown") +
+                                    ", no project refresh or checkbox replay.");
                                 return true;
                             }
 
