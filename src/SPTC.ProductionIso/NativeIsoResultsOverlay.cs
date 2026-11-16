@@ -337,7 +337,15 @@ internal static class NativeIsoResultsOverlay
         if (!CopiedPaths.Any(p => p.Equals(full, StringComparison.OrdinalIgnoreCase)))
             CopiedPaths.Add(full);
         _displaySignature = "";
-        RefreshNativeResults();
+        // REV107: a Results TreeView can be disposed/recreated while
+        // the user closes or switches an AutoCAD DWG. Keep this copied
+        // DWG in CopiedPaths even if immediate UI repaint fails.
+        try { RefreshNativeResults(); }
+        catch (Exception ex)
+        {
+            Diagnostic("REV107 deferred custom Results refresh: " +
+                ex.GetBaseException().Message);
+        }
     }
 
     private static string WindowText(IntPtr hwnd)
@@ -448,6 +456,23 @@ internal static class NativeIsoResultsOverlay
     }
 
     private static void OnTick()
+    {
+        try { OnTickCore(); }
+        catch (Exception ex)
+        {
+            // REV107: transient native results window disposal during
+            // document switching must never escape a WinForms timer.
+            // Keep CopiedPaths and timer alive; reattach to the Autodesk
+            // Results window on the next poll.
+            try { DetachTree(); }
+            catch (Exception) { }
+            _dialog = IntPtr.Zero;
+            Diagnostic("REV107 Results view will retry: " +
+                ex.GetBaseException().Message);
+        }
+    }
+
+    private static void OnTickCore()
     {
         IntPtr current = FindResults();
         if (_dialog != current ||
