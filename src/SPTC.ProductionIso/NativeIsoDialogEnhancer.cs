@@ -916,21 +916,17 @@ internal static class NativeIsoDialogEnhancer
         }
 
         bool pending = _autoCreatePending && !_autoCreateSubmitting;
-        bool scoped = ProjectFolderLinePicker.HasVisibleProjection;
-        string[] savedTags = NativeIsoLineSelectOverlay
-            .CaptureSelectedTags(dialog);
-        bool haveSavedSelection = savedTags.Length > 0;
-        // REV94: The global ledger may contain six saved routes while
-        // Autodesk's All Project source currently has only A-08 checked.
-        // The original Create is then disabled. Offer the same guarded
-        // SPTC batch action in All Project, not just Active/Folder mode.
-        // This action NEVER forces original.Enabled or submits a subset.
-        bool nativeMismatch = false;
-        if (!original.Enabled && haveSavedSelection && !scoped)
-            nativeMismatch = TryGetCreateSelectionMismatch(dialog, out _);
-        bool show = pending ||
-            (!original.Enabled && haveSavedSelection &&
-             (scoped || nativeMismatch));
+        int savedCount = NativeIsoLineSelectOverlay
+            .CaptureSelectedTags(dialog).Length;
+        // REV95: show the guarded SPTC Create action whenever the actual
+        // Autodesk Create is disabled but saved route intent is nonempty.
+        // REV94 incorrectly gated the All Project fallback on a separate
+        // selected-row mismatch probe. That probe can return false while
+        // Autodesk still disables Create after a filter transition.
+        // This is only UI availability, not authorization to create:
+        // BeginAutomaticBatchCreate still requires exact real native
+        // checked tags AND original.Enabled before invoking Autodesk.
+        bool show = pending || (!original.Enabled && savedCount > 0);
         if (!show)
         {
             if (_scopedCreateButton is { IsDisposed: false } existing)
@@ -962,7 +958,7 @@ internal static class NativeIsoDialogEnhancer
                         .Length == 0)
                     return;
                 _document?.Editor.WriteMessage(
-                    "\nSPTC REV93: Scoped Create requested. Validating " +
+                    "\nSPTC REV95: Guarded Create requested. Validating " +
                     "all saved route tags against native All Project " +
                     "before invoking Autodesk Create.");
                 BeginAutomaticBatchCreate(dialog);
@@ -980,11 +976,13 @@ internal static class NativeIsoDialogEnhancer
         proxy.Anchor = original.Anchor;
         proxy.Text = pending ? "Preparing..." : "Create";
         proxy.Enabled = !pending;
-        if (!proxy.Visible)
-        {
-            proxy.Visible = true;
+        if (!proxy.Visible) proxy.Visible = true;
+        // REV95: when Autodesk switches its own list mode it can bring
+        // the disabled native Create control above our earlier proxy.
+        // Restore the SPTC control's z-order without moving/recreating
+        // either button. This never alters original.Enabled.
+        if (parent.Controls.GetChildIndex(proxy) != 0)
             proxy.BringToFront();
-        }
     }
 
     private static void RemoveScopedCreateButton()
