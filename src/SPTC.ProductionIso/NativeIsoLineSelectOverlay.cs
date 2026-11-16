@@ -368,10 +368,13 @@ internal static class NativeIsoLineSelectOverlay
     // click rebuilds its check state, intermittently dropping A-08 and
     // causing the reported 5/6 Create error. Do not touch the source
     // when its names/count and native filter are already project-wide.
-    public static bool HasCompleteUnfilteredProjectSource(IntPtr dialog)
+    public static bool HasCompleteUnfilteredProjectSource(
+        IntPtr dialog, bool allowActivePresentation = false)
     {
         if (dialog == IntPtr.Zero || dialog != _dialog ||
-            ProjectFolderLinePicker.HasVisibleProjection ||
+            (ProjectFolderLinePicker.HasVisibleProjection &&
+             !(allowActivePresentation &&
+               ProjectFolderLinePicker.ActiveDwgView)) ||
             _lastProjectWideRowCount <= 0)
             return false;
         EnsureSelectionTracking();
