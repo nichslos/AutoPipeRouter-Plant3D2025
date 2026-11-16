@@ -1298,7 +1298,7 @@ internal static class NativeIsoDialogEnhancer
                         string[] selectedBefore =
                             NativeIsoLineSelectOverlay.CaptureSelectedTags(native);
 
-                        // REV101: Active in REV98+ is only a ONE-LINE
+                        // REV100: Active in REV98+ is only a ONE-LINE
                         // visual projection over the full Autodesk list.
                         // When the original native 432 rows are still
                         // complete and exactly match the saved checked tags,
@@ -1329,7 +1329,7 @@ internal static class NativeIsoDialogEnhancer
                                     native);
                                 NativeIsoLineSelectOverlay.UpdateDisplayedCount();
                                 _document.Editor.WriteMessage(
-                                    "\nSPTC REV101: instant Show All (" +
+                                    "\nSPTC REV100: instant Show All (" +
                                     nativeChecked.Length + "/" + selected.Count +
                                     " checked, native Create=True); " +
                                     "visual Active projection removed only.");
