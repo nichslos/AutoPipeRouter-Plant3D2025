@@ -85,6 +85,12 @@ internal static class NativeIsoDialogEnhancer
     private static bool _overwriteRequested;
     private static CheckBox? _nativeOverwriteBox;
     private static Button? _nativeCreateButton;
+    // REV93: when Autodesk disables its original Create in a scoped
+    // Active/Folder projection, provide an explicit SPTC Create action
+    // in the same position. It NEVER enables Autodesk's native button.
+    // The action runs the existing full-batch native eligibility preflight.
+    private static Button? _scopedCreateButton;
+    private static ToolTip? _scopedCreateTip;
     private static IntPtr _nativeOverwriteHandle;
     private static CreateClickPreflightFilter? _createPreflightFilter;
     private static bool _swallowCreateMouseUp;
@@ -462,7 +468,10 @@ internal static class NativeIsoDialogEnhancer
                         AbortAutoCreate();
                         return;
                     }
-                    if (++polls > 23)
+                    // REV93: a 432-line project can take over 5 seconds
+                    // to rebuild. Keep this UI timer bounded and cancelable
+                    // while allowing the native source up to ~17 seconds.
+                    if (++polls > 95)
                     {
                         Fail("Found " + matched + "/" +
                             requested.Length + " route(s), native checked=" +
@@ -882,11 +891,106 @@ internal static class NativeIsoDialogEnhancer
         }, IntPtr.Zero);
     }
 
+    // REV93: the filtered Active/Folder view can display a valid checked
+    // route while Autodesk disables its Create because the other selected
+    // routes are outside the current native list. Never force-enable the
+    // Autodesk control. The SPTC button in its place restores the full
+    // project list and validates exact saved checkboxes before triggering
+    // the genuine native Create once. On failure, no partial ISO is sent.
+    private static void UpdateScopedCreateButton(IntPtr dialog)
+    {
+        if (_native != dialog || dialog == IntPtr.Zero ||
+            !IsWindow(dialog) ||
+            _nativeCreateButton is not { IsDisposed: false } original ||
+            original.Parent is not { IsDisposed: false } parent)
+        {
+            if (_scopedCreateButton is { IsDisposed: false } stale)
+                stale.Visible = false;
+            return;
+        }
+
+        bool pending = _autoCreatePending && !_autoCreateSubmitting;
+        bool scoped = ProjectFolderLinePicker.HasVisibleProjection;
+        bool haveSavedSelection = NativeIsoLineSelectOverlay
+            .CaptureSelectedTags(dialog).Length > 0;
+        bool haveVisibleCheck =
+            (ProjectFolderLinePicker.VisibleCheckedCount ?? 0) > 0;
+
+        bool show = pending ||
+            (scoped && !original.Enabled &&
+             haveSavedSelection && haveVisibleCheck);
+        if (!show)
+        {
+            if (_scopedCreateButton is { IsDisposed: false } existing)
+                existing.Visible = false;
+            return;
+        }
+
+        if (_scopedCreateButton is null || _scopedCreateButton.IsDisposed ||
+            !ReferenceEquals(_scopedCreateButton.Parent, parent))
+        {
+            try { _scopedCreateButton?.Dispose(); }
+            catch (Exception) { }
+            _scopedCreateButton = new Button
+            {
+                Name = "SPTCScopedBatchCreate",
+                Text = "Create",
+                AutoSize = false,
+                TabStop = false,
+                UseVisualStyleBackColor = true,
+                Anchor = original.Anchor,
+                Bounds = original.Bounds
+            };
+            Button scopedButton = _scopedCreateButton;
+            scopedButton.Click += (_, _) =>
+            {
+                if (_native != dialog || !IsWindow(dialog) ||
+                    _autoCreatePending || _autoCreateSubmitting ||
+                    NativeIsoLineSelectOverlay.CaptureSelectedTags(dialog)
+                        .Length == 0)
+                    return;
+                _document?.Editor.WriteMessage(
+                    "\nSPTC REV93: Scoped Create requested. Validating " +
+                    "all saved route tags against native All Project " +
+                    "before invoking Autodesk Create.");
+                BeginAutomaticBatchCreate(dialog);
+                UpdateScopedCreateButton(dialog);
+            };
+            parent.Controls.Add(scopedButton);
+            _scopedCreateTip ??= new ToolTip();
+            _scopedCreateTip.SetToolTip(scopedButton,
+                "SPTC: restore and verify ALL selected line numbers " +
+                "before starting the original Autodesk Production ISO.");
+        }
+
+        Button proxy = _scopedCreateButton;
+        if (proxy.Bounds != original.Bounds) proxy.Bounds = original.Bounds;
+        proxy.Anchor = original.Anchor;
+        proxy.Text = pending ? "Preparing..." : "Create";
+        proxy.Enabled = !pending;
+        if (!proxy.Visible)
+        {
+            proxy.Visible = true;
+            proxy.BringToFront();
+        }
+    }
+
+    private static void RemoveScopedCreateButton()
+    {
+        try { _scopedCreateTip?.Dispose(); }
+        catch (Exception) { }
+        _scopedCreateTip = null;
+        try { _scopedCreateButton?.Dispose(); }
+        catch (Exception) { }
+        _scopedCreateButton = null;
+    }
+
     private static void StartOverwriteTracker(IntPtr dialog)
     {
         CaptureNativeOverwrite(dialog);
         TrackNativeCreateButton(dialog);
         TrackNativeCancelClose(dialog);
+        UpdateScopedCreateButton(dialog);
         if (_overwriteTracker != null) return;
         _overwriteTracker = new System.Windows.Forms.Timer
         {
@@ -899,6 +1003,7 @@ internal static class NativeIsoDialogEnhancer
             CaptureNativeOverwrite(dialog);
             TrackNativeCreateButton(dialog);
             TrackNativeCancelClose(dialog);
+            UpdateScopedCreateButton(dialog);
         };
         _overwriteTracker.Start();
     }
@@ -908,6 +1013,7 @@ internal static class NativeIsoDialogEnhancer
         try { _overwriteTracker?.Stop(); _overwriteTracker?.Dispose(); }
         catch (Exception) { }
         _overwriteTracker = null;
+        RemoveScopedCreateButton();
 
         if (_createPreflightFilter != null)
         {
