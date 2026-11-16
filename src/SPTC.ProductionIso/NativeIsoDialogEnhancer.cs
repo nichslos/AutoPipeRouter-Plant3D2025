@@ -2312,6 +2312,12 @@ internal static class NativeIsoDialogEnhancer
             if (matched != null) completedTags.Add(matched);
         }
         long lastNativeChangeTicks = start.Ticks;
+        // REV104: cap SOURCE directory enumeration to one sweep per
+        // three seconds even if Autodesk emits dozens of FileSystemWatcher
+        // notifications while saving a DWG. Continuous SMB enumerations
+        // compete with 3D model editing; the async copy remains off the
+        // AutoCAD UI thread and verified copies are still surfaced.
+        DateTime nextSourceSweepUtc = DateTime.MinValue;
 
         using var wake = new System.Threading.SemaphoreSlim(0, 1);
         void Signal()
@@ -2360,6 +2366,10 @@ internal static class NativeIsoDialogEnhancer
             // several ISO sheets created asynchronously by Autodesk.
             while ((DateTime.UtcNow - start).TotalMinutes < 10)
             {
+                TimeSpan untilSweep = nextSourceSweepUtc - DateTime.UtcNow;
+                if (untilSweep > TimeSpan.Zero)
+                    await Task.Delay(untilSweep).ConfigureAwait(false);
+                nextSourceSweepUtc = DateTime.UtcNow.AddSeconds(3);
                 try
                 {
                     if (!Directory.Exists(source))
@@ -2546,9 +2556,11 @@ internal static class NativeIsoDialogEnhancer
                      (copied > 0 || skipped > 0) && idleSeconds >= 120))
                     break;
 
-                // FileSystemWatcher is a hint, not a guarantee. SMB drives
-                // are supported with a low-cost periodic fallback.
-                await wake.WaitAsync(TimeSpan.FromMilliseconds(650))
+                // REV104: FileSystemWatcher is a wake hint, never a
+                // request to hammer the SMB source once per notification.
+                // The sweep-rate gate above enforces a 3-second minimum;
+                // no native ISO job/copy operation is run on AutoCAD's UI.
+                await wake.WaitAsync(TimeSpan.FromMilliseconds(1600))
                     .ConfigureAwait(false);
             }
         }
@@ -2559,8 +2571,16 @@ internal static class NativeIsoDialogEnhancer
 
     private static void EnsureMonitor()
     {
-        if (_watch != null) return;
-        _watch = new System.Windows.Forms.Timer { Interval = 1500 };
+        // REV104: after Create, only background-copy progress/cleanup
+        // needs this AutoCAD UI timer; native selection monitors have
+        // already been detached. Give modeling input priority over
+        // frequent Win32 window enumeration and Editor.WriteMessage.
+        if (_watch != null)
+        {
+            _watch.Interval = 3500;
+            return;
+        }
+        _watch = new System.Windows.Forms.Timer { Interval = 3500 };
         _watch.Tick += OnTick;
         _watch.Start();
     }
