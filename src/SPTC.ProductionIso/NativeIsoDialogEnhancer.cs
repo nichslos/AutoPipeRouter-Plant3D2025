@@ -432,6 +432,7 @@ internal static class NativeIsoDialogEnhancer
                 int readySamples = 0;
                 bool appliedOnce = false;
                 bool nudgedOnce = false;
+                bool repairedOnce = false;
                 string lastNativeSignature = "";
                 // REV80: one native selection write, not a 432-checkbox
                 // reconciliation repeated 35 times on the UI thread.
@@ -533,10 +534,37 @@ internal static class NativeIsoDialogEnhancer
                                 verified, StringComparer.OrdinalIgnoreCase)
                                 .SetEquals(requested))
                         {
+                            readySamples = 0;
+                            // REV81: Autodesk may asynchronously reset one
+                            // checked row after releasing the scope guard.
+                            // Reconcile exactly once, then verify on later
+                            // ticks; NEVER submit an incomplete batch.
                             if (afterAppliedPolls > 3)
-                                Fail("Native checked selection changed " +
-                                    "after preparation (" + checkedCount +
-                                    "/" + requested.Length + ").");
+                            {
+                                if (repairedOnce)
+                                {
+                                    Fail("Native checked selection changed " +
+                                        "after REV81 one-time repair (" +
+                                        checkedCount + "/" + requested.Length + ").");
+                                    return;
+                                }
+                                repairedOnce = true;
+                                bool repaired = NativeIsoLineSelectOverlay
+                                    .TryApplySavedBatchToNative(dialog, requested,
+                                        out int repairMatched, out int repairChecked);
+                                _document?.Editor.WriteMessage(
+                                    "\nSPTC REV81: One-time native batch repair " +
+                                    repairMatched + "/" + requested.Length +
+                                    ", checked=" + repairChecked +
+                                    ", applied=" + repaired + ".");
+                                if (!repaired || repairChecked != requested.Length)
+                                {
+                                    Fail("Native batch could not be repaired (" +
+                                        repairChecked + "/" + requested.Length + ").");
+                                    return;
+                                }
+                                afterAppliedPolls = 0;
+                            }
                             return;
                         }
 
