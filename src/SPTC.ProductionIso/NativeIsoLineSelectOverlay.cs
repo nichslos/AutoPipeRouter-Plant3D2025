@@ -281,6 +281,30 @@ internal static class NativeIsoLineSelectOverlay
     // REV17: "Select All (N)" counts the lines currently displayed, not
     // how many are checked. When a folder is active the projected native-backed
     // line list is authoritative; otherwise read the current Autodesk list.
+    // REV89: snapshot the original UNFILTERED Autodesk row count before
+    // Active DWG sets the native search text. Show All must wait for the
+    // complete project source, never act on the intermediate five A-08
+    // substring matches. No file, database or model scans are performed.
+    public static void RememberUnfilteredProjectRows(IntPtr dialog)
+    {
+        if (_dialog != dialog || dialog == IntPtr.Zero ||
+            ProjectFolderLinePicker.HasVisibleProjection ||
+            _scopeSwitchPending)
+            return;
+        EnsureSelectionTracking();
+        if (_trackedNativeSearch is { IsDisposed: false } search &&
+            !string.IsNullOrWhiteSpace(search.Text))
+            return;
+        CheckedListBox? list = FindNativeCheckedList(dialog);
+        if (list is { IsDisposed: false } && list.Items.Count > 0)
+        {
+            _lastProjectWideRowCount = Math.Max(
+                _lastProjectWideRowCount, list.Items.Count);
+            WriteDiagnostic("REV89: remembered native All Project rows=" +
+                _lastProjectWideRowCount + ".");
+        }
+    }
+
     public static void UpdateDisplayedCount()
     {
         if (_dialog == IntPtr.Zero || _toggle is null ||
@@ -1340,6 +1364,7 @@ internal static class NativeIsoLineSelectOverlay
         int stable = 0;
         bool redrawReleased = false;
         bool readinessLogged = false;
+        int lastObservedRows = 0;
         int confirmed = 0;
         int readsAfterCommit = 0;
         // REV87: after Active -> All, Autodesk can show a checked A-08
@@ -1372,7 +1397,7 @@ internal static class NativeIsoLineSelectOverlay
             EndProjectRedrawBatch();
             UpdateDisplayedCount();
             if (!string.IsNullOrEmpty(reason))
-                WriteDiagnostic("REV88: " + reason);
+                WriteDiagnostic("REV89: " + reason);
         }
 
         timer.Tick += (_, _) =>
@@ -1390,7 +1415,9 @@ internal static class NativeIsoLineSelectOverlay
             if (++ticks > 86)
             {
                 Finish("All Project native list not validated within " +
-                    "12 seconds; saved routes retained, Create not forced.");
+                    "12 seconds (expected rows=" + requiredRows +
+                    ", observed=" + lastObservedRows +
+                    "); saved routes retained, Create not forced.");
                 return;
             }
             if (ticks == 26 && !readinessLogged)
@@ -1409,6 +1436,9 @@ internal static class NativeIsoLineSelectOverlay
                 CheckedListBox? list = FindNativeCheckedList(dialog);
                 if (list is null || list.IsDisposed || list.Items.Count == 0)
                     return;
+                lastObservedRows = list.Items.Count;
+                // Even when a native search momentarily contains A-08,
+                // the original unfiltered project list is authoritative.
                 if (requiredRows > 0 && list.Items.Count < requiredRows)
                     return;
 
@@ -1437,6 +1467,22 @@ internal static class NativeIsoLineSelectOverlay
                 }
                 if (++stable < 2) return;
 
+                if (!redrawReleased)
+                {
+                    // REV89: BeginUpdate prevented Autodesk's native
+                    // mouse/ItemCheck activation from fully settling.
+                    // Re-enable the real checklist BEFORE attempting to
+                    // restore checked rows. Keep the scope guard active
+                    // to protect the selected route ledger from events.
+                    redrawReleased = true;
+                    EndProjectRedrawBatch();
+                    stable = 0;
+                    WriteDiagnostic("REV89: complete native project source " +
+                        list.Items.Count + "/" + requiredRows +
+                        "; releasing redraw before checkbox commit.");
+                    return;
+                }
+
                 if (!committed)
                 {
                     committed = true;
@@ -1457,9 +1503,12 @@ internal static class NativeIsoLineSelectOverlay
                         }
                     }
                     finally { _restoringSelection = false; }
-                    WriteDiagnostic("REV88: Show All native commit once; " +
+                    WriteDiagnostic("REV89: Show All native commit once; " +
                         "changed=" + changed + ", expected=" + expected.Count +
-                        ", rows=" + list.Items.Count + ".");
+                        ", rows=" + list.Items.Count + ", actual checked=" +
+                        string.Join(", ", Enumerable.Range(0, list.Items.Count)
+                            .Where(i => list.GetItemChecked(i))
+                            .Select(i => list.GetItemText(list.Items[i]).Trim())) + ".");
                     return;
                 }
 
@@ -1490,20 +1539,9 @@ internal static class NativeIsoLineSelectOverlay
                 }
                 if (++confirmed < 2) return;
 
-                // REV88: release the native BeginUpdate redraw hold only
-                // after exact checked names have passed verification.
-                // Autodesk may not refresh the Create eligibility UI
-                // until the original checklist is repainted. This does
-                // NOT remove the scope/selection guard.
-                if (!redrawReleased)
-                {
-                    redrawReleased = true;
-                    EndProjectRedrawBatch();
-                    WriteDiagnostic("REV88: native All Project selection " +
-                        "confirmed; redraw hold released for Create validation.");
-                    return;
-                }
-
+                // REV89: native redraw was already released before checkbox
+                // commit; Autodesk has now had the chance to process real
+                // ItemCheck/Click events and Create eligibility updates.
                 // REV87: require Autodesk's own Create eligibility to
                 // recognize the saved checked routes. Do not set
                 // Create.Enabled, fabricate routes, or submit an ISO here.
@@ -1592,7 +1630,7 @@ internal static class NativeIsoLineSelectOverlay
                     Finish("native Create remains disabled with no saved routes.");
                     return;
                 }
-                WriteDiagnostic("REV88: Show All native checked routes " +
+                WriteDiagnostic("REV89: Show All native checked routes " +
                     expected.Count + "/" + expected.Count +
                     ", Create.Enabled=True.");
                 Finish();
