@@ -15,8 +15,8 @@ namespace SPTC.ProductionIso;
 /// <summary>
 /// REV08: read the live P3dLineGroup Tag linked to Plant 3D piping objects
 /// in THIS open DWG. No changes to PnP database or model objects.
-/// When exactly one active tag is verified, use Autodesk's own native text
-/// filter to hide old line numbers; never remove entries from the source list.
+/// Verify ALL distinct physical route tags in the active DWG. Present exact
+/// matching native ISO routes without mutating Autodesk's source list.
 /// </summary>
 internal static class ActiveDwgTags
 {
@@ -209,11 +209,14 @@ internal static class ActiveDwgTags
                 tr.Commit();
             }
 
-            // Use direct tags whenever actual component properties provided
-            // any. The fallback group set can contain old-but-registered tags.
-            foreach (string tag in (componentTags.Count > 0
-                         ? componentTags : relationshipTags))
-                Tags.Add(tag);
+            // REV105: keep all distinct line numbers belonging to physical
+            // parts in this DWG. Some parts have direct LineNumberTag while
+            // others provide only a P3dLineGroupPartRelationship; choosing
+            // EITHER set globally previously dropped valid active routes.
+            // Relationship tags were gathered ONLY for parts that lacked
+            // a usable direct tag, never from bare/orphan group records.
+            Tags.UnionWith(componentTags);
+            Tags.UnionWith(relationshipTags);
             LastDiagnostic = $"Scanned {CheckedEntities} Plant objects; " +
                 $"{DirectTaggedParts} direct-tagged, {GroupTaggedParts} fallback " +
                 $"group-tagged, {Count} distinct current route tag(s).";
