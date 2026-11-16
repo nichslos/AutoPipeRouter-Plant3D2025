@@ -81,6 +81,10 @@ internal static class ProjectFolderLinePicker
     // callbacks cannot change native rows after an Active/All toggle.
     private static long _projectionGeneration;
     private static System.Windows.Forms.Timer? _nativeCommitTimer;
+    // REV91: a native Create eligibility validation belongs to the exact
+    // Active/Folder projection that scheduled it. Autodesk can destroy
+    // and replace projection rows during an Active -> All switch.
+    private static long _nativeCommitGeneration;
     private static bool _committingNative;
     private static string _folder = "";
     private static bool _activeDwgView;
@@ -1075,6 +1079,9 @@ internal static class ProjectFolderLinePicker
 
     public static void ClearVisibleProjection()
     {
+        // REV91: never let a delayed 220ms native-commit callback touch
+        // cleared/reindexed rows from the previous Active view.
+        _nativeCommitTimer?.Stop();
         _activeDwgView = false;
         _folder = "";
         DestroyProjection();
@@ -1228,22 +1235,56 @@ internal static class ProjectFolderLinePicker
             _nativeCommitTimer.Tick += (_, _) =>
             {
                 _nativeCommitTimer?.Stop();
-                VerifyNativeCreateState();
+                if (_nativeCommitGeneration != _projectionGeneration ||
+                    !HasVisibleProjection || _dialog == IntPtr.Zero)
+                    return;
+                try { VerifyNativeCreateState(); }
+                catch (Exception ex)
+                {
+                    // A transient Autodesk list rebuild must not escape
+                    // through a WinForms Timer and crash AutoCAD.
+                    _document?.Editor.WriteMessage(
+                        "\nSPTC REV91: native Create validation skipped: " +
+                        ex.GetBaseException().Message);
+                }
             };
         }
+        _nativeCommitGeneration = _projectionGeneration;
         _nativeCommitTimer.Stop();
         _nativeCommitTimer.Start();
     }
 
+    // REV91: avoid LINQ First(predicate), which throws when the checked
+    // Active route disappears during Autodesk's asynchronous source refresh.
+    // Every native operation is guarded by both the projection generation
+    // and the original route tag, never the previous row index alone.
     private static void VerifyNativeCreateState()
     {
         if (_committingNative || !HasVisibleProjection || _dialog == IntPtr.Zero)
             return;
+
+        long generation = _projectionGeneration;
         _committingNative = true;
         try
         {
-            int selected = VisibleEntries.Count(GetNativeChecked);
-            if (selected < 1) return;
+            bool Current() =>
+                generation == _projectionGeneration &&
+                HasVisibleProjection && _dialog != IntPtr.Zero;
+
+            NativeEntry? FirstChecked()
+            {
+                if (!Current()) return null;
+                foreach (NativeEntry candidate in VisibleEntries.ToArray())
+                {
+                    if (!Current()) return null;
+                    if (GetNativeChecked(candidate))
+                        return candidate;
+                }
+                return null;
+            }
+
+            NativeEntry? first = FirstChecked();
+            if (first is null || !Current()) return;
 
             Control? create = null;
             EnumChildWindows(_dialog, (hwnd, _) =>
@@ -1257,55 +1298,79 @@ internal static class ProjectFolderLinePicker
                 }
                 return true;
             }, IntPtr.Zero);
-            if (create is null || create.Enabled) return;
+            if (create is null || !Current() || create.Enabled) return;
 
-            // Already-checked native row may need its SelectedIndexChanged
-            // event after the ItemCheck event has fully committed.
-            if (_nativeChecked != null && !_nativeChecked.IsDisposed)
+            bool RowStillCurrent(NativeEntry row)
             {
-                NativeEntry first = VisibleEntries.First(GetNativeChecked);
-                if (_nativeChecked.SelectedIndex == first.Index)
-                    _nativeChecked.ClearSelected();
-                _nativeChecked.SelectedIndex = first.Index;
-            }
-            else if (_nativeView != null && !_nativeView.IsDisposed)
-            {
-                NativeEntry first = VisibleEntries.First(GetNativeChecked);
-                _nativeView.Items[first.Index].Selected = true;
-            }
-
-            // We MUST NOT force Create.Enabled=true. Autodesk may reject
-            // generation for reasons beyond the checkmarks (style, scope,
-            // pipeline validation). Make the discrepancy diagnosable.
-            if (!create.Enabled && _nativeChecked is { IsDisposed: false } list)
-            {
-                // Final one-shot repair: an already-checked row might have
-                // been selected before our overlay was attached. Replaying a
-                // real native checkbox OFF then ON gives Autodesk's handlers
-                // the full mouse/ItemCheck/selection event sequence while
-                // preserving the intended final checked state.
-                NativeEntry first = VisibleEntries.First(GetNativeChecked);
-                if (ClickNativeCheckedRow(list, first.Index, false))
-                    ClickNativeCheckedRow(list, first.Index, true);
+                if (!Current() || !VisibleEntries.Contains(row)) return false;
+                if (_nativeChecked is { IsDisposed: false } cb)
+                    return row.Index >= 0 && row.Index < cb.Items.Count &&
+                        cb.GetItemText(cb.Items[row.Index]).Trim().Equals(
+                            row.Tag, StringComparison.OrdinalIgnoreCase);
+                if (_nativeView is { IsDisposed: false } lv)
+                    return row.Index >= 0 && row.Index < lv.Items.Count &&
+                        lv.Items[row.Index].Text.Trim().Equals(
+                            row.Tag, StringComparison.OrdinalIgnoreCase);
+                return false;
             }
 
-            if (!create.Enabled)
+            if (!RowStillCurrent(first) || !GetNativeChecked(first))
+                return;
+
+            if (_nativeChecked is { IsDisposed: false } checkedList)
+            {
+                if (checkedList.SelectedIndex == first.Index)
+                    checkedList.ClearSelected();
+                if (!RowStillCurrent(first)) return;
+                checkedList.SelectedIndex = first.Index;
+            }
+            else if (_nativeView is { IsDisposed: false } listView)
+            {
+                if (!RowStillCurrent(first)) return;
+                listView.Items[first.Index].Selected = true;
+            }
+
+            if (!Current() || create.Enabled) return;
+
+            // A single native OFF->ON replay is permitted only while the
+            // verified original route still has the same tag/index.
+            // Never force Autodesk's Create.Enabled or create an ISO here.
+            if (_nativeChecked is { IsDisposed: false } native &&
+                RowStillCurrent(first) && GetNativeChecked(first))
+            {
+                if (ClickNativeCheckedRow(native, first.Index, false) &&
+                    RowStillCurrent(first))
+                    ClickNativeCheckedRow(native, first.Index, true);
+            }
+
+            if (Current() && !create.Enabled)
                 _document?.Editor.WriteMessage(
-                    "\nSPTC REV24: Native Create is still disabled despite " +
-                    selected + " checked native ISO line(s). " +
-                    "No forced Create override; verify Autodesk's original line " +
-                    "source and other Production Iso eligibility conditions.");
+                    "\nSPTC REV91: Autodesk native Create remains disabled " +
+                    "after safe one-time Active/Folder validation for " +
+                    first.Tag + "; native eligibility was not overridden.");
+        }
+        catch (Exception ex)
+        {
+            _document?.Editor.WriteMessage(
+                "\nSPTC REV91: native selection changed while validating " +
+                "Create; skipped stale callback: " +
+                ex.GetBaseException().Message);
         }
         finally { _committingNative = false; }
     }
 
     private static bool GetNativeChecked(NativeEntry entry)
     {
-        if (_nativeChecked != null)
-            return entry.Index < _nativeChecked.Items.Count &&
-                   _nativeChecked.GetItemChecked(entry.Index);
-        return _nativeView != null && entry.Index < _nativeView.Items.Count &&
-               _nativeView.Items[entry.Index].Checked;
+        if (_nativeChecked is { IsDisposed: false } cb)
+            return entry.Index >= 0 && entry.Index < cb.Items.Count &&
+                cb.GetItemText(cb.Items[entry.Index]).Trim().Equals(
+                    entry.Tag, StringComparison.OrdinalIgnoreCase) &&
+                cb.GetItemChecked(entry.Index);
+        return _nativeView is { IsDisposed: false } lv &&
+            entry.Index >= 0 && entry.Index < lv.Items.Count &&
+            lv.Items[entry.Index].Text.Trim().Equals(
+                entry.Tag, StringComparison.OrdinalIgnoreCase) &&
+            lv.Items[entry.Index].Checked;
     }
 
     private static void BuildProjection(List<NativeEntry> entries)
@@ -1700,6 +1765,9 @@ internal static class ProjectFolderLinePicker
 
     private static void DestroyProjection()
     {
+        // Cancel delayed selection validation BEFORE clearing the route
+        // collection. Prevents a stale timer accessing empty VisibleEntries.
+        try { _nativeCommitTimer?.Stop(); } catch { }
         _projectionGeneration++;
         VisibleEntries.Clear();
         _nativeChecked = null;
