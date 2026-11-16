@@ -705,9 +705,17 @@ internal static class ActiveDwgTags
             // explicitly switches back to All Project.
             _lastAppliedDialog = IntPtr.Zero;
             ResetAutoFilterDisplay();
+            // REV101: avoid publishing redundant Filter.TextChanged
+            // notifications against the same empty search. Autodesk can
+            // rebuild its entire 432-row source even when the query was
+            // already blank, temporarily dropping saved native checks.
             if (Control.FromHandle(nativeFilter) is TextBoxBase edit)
-                edit.Text = "";
-            else if (!SetWindowText(nativeFilter, ""))
+            {
+                if (!string.IsNullOrEmpty(edit.Text))
+                    edit.Text = "";
+            }
+            else if (!string.IsNullOrEmpty(WindowText(nativeFilter)) &&
+                     !SetWindowText(nativeFilter, ""))
                 return false;
             doc?.Editor.WriteMessage(
                 "\nSPTC REV27: Cleared native line filter; All Project lines restored.");
