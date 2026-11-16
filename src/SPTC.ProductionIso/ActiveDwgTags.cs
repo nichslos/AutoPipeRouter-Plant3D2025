@@ -714,9 +714,14 @@ internal static class ActiveDwgTags
                 if (!string.IsNullOrEmpty(edit.Text))
                     edit.Text = "";
             }
-            else if (!string.IsNullOrEmpty(WindowText(nativeFilter)) &&
-                     !SetWindowText(nativeFilter, ""))
-                return false;
+            else
+            {
+                var nativeValue = new StringBuilder(2048);
+                GetWindowText(nativeFilter, nativeValue, nativeValue.Capacity);
+                if (nativeValue.Length > 0 &&
+                    !SetWindowText(nativeFilter, ""))
+                    return false;
+            }
             doc?.Editor.WriteMessage(
                 "\nSPTC REV27: Cleared native line filter; All Project lines restored.");
             return true;
