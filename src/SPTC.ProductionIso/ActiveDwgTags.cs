@@ -705,7 +705,7 @@ internal static class ActiveDwgTags
             // explicitly switches back to All Project.
             _lastAppliedDialog = IntPtr.Zero;
             ResetAutoFilterDisplay();
-            // REV101: avoid publishing redundant Filter.TextChanged
+            // REV100: avoid publishing redundant Filter.TextChanged
             // notifications against the same empty search. Autodesk can
             // rebuild its entire 432-row source even when the query was
             // already blank, temporarily dropping saved native checks.
