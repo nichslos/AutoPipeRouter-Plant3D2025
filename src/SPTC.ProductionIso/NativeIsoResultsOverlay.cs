@@ -794,7 +794,7 @@ internal static class NativeIsoResultsOverlay
     // only copied X, and vertically centered text inside the entire custom
     // item row, making its font/baseline look different from Autodesk's.
     private static Rectangle? NativeCustomTextRectangle(
-        IntPtr tree, NativeCustomLink custom)
+        IntPtr tree, NativeCustomLink custom, int verticalShiftPx = 0)
     {
         if (!GetClientRect(tree, out RECT client))
             return null;
@@ -846,14 +846,66 @@ internal static class NativeIsoResultsOverlay
         // by 2 px to visually match the native hyperlink row spacing.
         // Never move the actual TreeView rows or touch the native list.
         x = Math.Max(0, x + 3);
-        int y = Math.Max(0, full.Top + textTopOffset + 2);
+        // REV103: move the ENTIRE Custom-link group visually by the same
+        // small pixel offset; preserve exact top-to-top spacing between
+        // individual Custom files and their Explorer link.
+        int y = Math.Max(0, full.Top + textTopOffset + 2 +
+            verticalShiftPx);
         int bottom = Math.Min(client.Height,
-            Math.Min(full.Bottom, y + Math.Max(1, textHeight)));
+            Math.Min(full.Bottom + Math.Max(0, verticalShiftPx),
+                y + Math.Max(1, textHeight)));
         int right = client.Width - 5;
         if (x >= right || y >= bottom)
             return null;
 
         return new Rectangle(x, y, right - x, bottom - y);
+    }
+
+    // REV103: Windows TreeView rows have a global ItemHeight, not a
+    // per-node millimeter/point setting. Avoid another full blank row.
+    // Instead measure the text top of the original Autodesk Explorer
+    // link and the first injected Custom link, then move all injected
+    // group labels by the SAME pixel delta to target 20px top-to-top.
+    // Does not move native tree items or alter their individual spacing.
+    private const int TargetOriginalToFirstCustomTopPx = 20;
+
+    private static int CustomGroupVerticalShiftPx(IntPtr tree, IntPtr parent)
+    {
+        IntPtr originalExplorer = IntPtr.Zero;
+        NativeCustomLink? firstCustom = null;
+
+        IntPtr sibling = WinNext(tree, TVGN_CHILD, parent);
+        for (int i = 0; sibling != IntPtr.Zero && i < 400; i++)
+        {
+            if (_winLinks.TryGetValue(sibling, out var link))
+            {
+                if (!link.OpenFolder && !link.IsSeparator &&
+                    firstCustom is null)
+                    firstCustom = link;
+            }
+            else if (NativeItemText(tree, sibling).Equals(
+                         CustomFolderLabel,
+                         StringComparison.OrdinalIgnoreCase))
+                originalExplorer = sibling;
+            sibling = WinNext(tree, TVGN_NEXT, sibling);
+        }
+
+        if (originalExplorer != IntPtr.Zero && firstCustom is not null)
+        {
+            RECT? original = NativeItemRect(tree, originalExplorer, true);
+            Rectangle? custom = NativeCustomTextRectangle(
+                tree, firstCustom);
+            if (original is not null && custom is not null)
+            {
+                int measured = custom.Value.Top - original.Value.Top;
+                // A 17px native separation normally means +3px here.
+                // Limit correction if Windows DPI/theme reports an
+                // unexpected rectangle, avoiding overlap with other UI.
+                return Math.Clamp(
+                    TargetOriginalToFirstCustomTopPx - measured, -4, 6);
+            }
+        }
+        return 3; // REV102 screenshot baseline: approximately 17px
     }
 
     private static void DrawNativeCustomLabels(IntPtr tree)
@@ -879,42 +931,58 @@ internal static class NativeIsoResultsOverlay
                 sourceFont.SizeInPoints,
                 FontStyle.Regular | FontStyle.Underline, GraphicsUnit.Point);
 
+            // Cache one offset PER result group, not per file link.
+            // All Custom labels in that group retain native row rhythm.
+            var groupOffsets = new Dictionary<IntPtr, int>();
+            int ShiftFor(NativeCustomLink link)
+            {
+                if (!groupOffsets.TryGetValue(link.Parent, out int shift))
+                {
+                    shift = CustomGroupVerticalShiftPx(tree, link.Parent);
+                    groupOffsets[link.Parent] = shift;
+                }
+                return shift;
+            }
+
+            // Clear all custom rows FIRST. With a 2-4px visual shift, a
+            // glyph can extend into the next custom row; clearing while
+            // drawing would erase part of the preceding file label.
             foreach (NativeCustomLink link in _winLinks.Values)
             {
-                if (link.IsSeparator) continue; // one unpainted row
-                Rectangle? bounds = NativeCustomTextRectangle(tree, link);
+                if (link.IsSeparator) continue;
+                Rectangle? bounds = NativeCustomTextRectangle(
+                    tree, link, ShiftFor(link));
                 if (bounds is null) continue;
                 Rectangle area = bounds.Value;
-
-                // REV57 repainted the same glyphs every 550ms without
-                // clearing, making them appear artificially bold. Erase
-                // ONLY the inserted custom item's row before repainting.
-                // All original Autodesk result rows remain untouched.
                 RECT? full = NativeItemRect(tree, link.Item, false);
-                if (full is not null)
+                if (full is null) continue;
+                RECT row = full.Value;
+                int clearLeft = Math.Max(0,
+                    Math.Min(row.Left, area.Left) - 2);
+                if (GetClientRect(tree, out RECT client))
                 {
-                    RECT row = full.Value;
-                    int clearLeft = Math.Max(0,
-                        Math.Min(row.Left, area.Left) - 2);
-                    // Clear the FULL injected row rather than only the
-                    // shifted text rect, avoiding residual/ghost glyphs.
-                    if (GetClientRect(tree, out RECT client))
-                    {
-                        int clearTop = Math.Max(0, row.Top);
-                        int clearBottom = Math.Min(client.Height, row.Bottom);
-                        if (area.Right > clearLeft &&
-                            clearBottom > clearTop)
-                            canvas.FillRectangle(SystemBrushes.Window,
-                                new Rectangle(clearLeft, clearTop,
-                                    area.Right - clearLeft,
-                                    clearBottom - clearTop));
-                    }
+                    int clearTop = Math.Max(0, row.Top);
+                    int clearBottom = Math.Min(client.Height, row.Bottom);
+                    if (area.Right > clearLeft &&
+                        clearBottom > clearTop)
+                        canvas.FillRectangle(SystemBrushes.Window,
+                            new Rectangle(clearLeft, clearTop,
+                                area.Right - clearLeft,
+                                clearBottom - clearTop));
                 }
+            }
 
+            foreach (NativeCustomLink link in _winLinks.Values)
+            {
+                if (link.IsSeparator) continue;
+                Rectangle? bounds = NativeCustomTextRectangle(
+                    tree, link, ShiftFor(link));
+                if (bounds is null) continue;
                 TextRenderer.DrawText(canvas,
-                    NativeLinkLabel(link.Path, link.OpenFolder, link.IsSeparator),
+                    NativeLinkLabel(link.Path, link.OpenFolder,
+                        link.IsSeparator),
                     link.OpenFolder ? folderFont : drawFont,
-                    area, Color.Blue,
+                    bounds.Value, Color.Blue,
                     TextFormatFlags.SingleLine |
                     TextFormatFlags.EndEllipsis |
                     TextFormatFlags.NoPadding |
