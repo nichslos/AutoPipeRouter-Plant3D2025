@@ -1045,6 +1045,12 @@ internal static class ProjectFolderLinePicker
         }
         PositionList(_dialog);
         NativeIsoLineSelectOverlay.UpdateDisplayedCount();
+        // REV85: if the projected Active row is already checked, Autodesk
+        // may not have received a native focus/eligibility event after
+        // the filter rebuilt. Schedule a single native validation/commit
+        // even when no new checkbox click was necessary.
+        if (nativeExactChecked)
+            ScheduleNativeSelectionCommit();
         doc?.Editor.WriteMessage(
             "\nSPTC REV77: Exact native-backed current DWG routes (" +
             matches.Count + " of " + nativeRows.Count +
