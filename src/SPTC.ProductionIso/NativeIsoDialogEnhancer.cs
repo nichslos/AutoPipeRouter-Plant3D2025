@@ -432,7 +432,7 @@ internal static class NativeIsoDialogEnhancer
                 int readySamples = 0;
                 bool appliedOnce = false;
                 bool nudgedOnce = false;
-                bool repairedOnce = false;
+                int repairAttempts = 0;
                 string lastNativeSignature = "";
                 // REV80: one native selection write, not a 432-checkbox
                 // reconciliation repeated 35 times on the UI thread.
@@ -516,13 +516,14 @@ internal static class NativeIsoDialogEnhancer
 
                             appliedOnce = true;
                             afterAppliedPolls = 0;
-                            // Release plugin scope guard so native Autodesk
-                            // and normal checked-list events can settle.
-                            NativeIsoLineSelectOverlay.CancelScopeSwitch(dialog);
+                            // REV82: keep the plugin's selection/recovery guard
+                            // until the exact native batch AND Create are ready.
+                            // Releasing it here allowed the 800ms selection
+                            // monitor to race Autodesk's checkbox refresh.
                             _document?.Editor.WriteMessage(
-                                "\nSPTC REV80: Full native batch applied " +
+                                "\nSPTC REV82: Full native batch applied " +
                                 matched + "/" + requested.Length +
-                                "; waiting for Autodesk Create validation.");
+                                "; guarded verification before Create.");
                             return;
                         }
 
@@ -541,19 +542,23 @@ internal static class NativeIsoDialogEnhancer
                             // ticks; NEVER submit an incomplete batch.
                             if (afterAppliedPolls > 3)
                             {
-                                if (repairedOnce)
+                                if (++repairAttempts > 3)
                                 {
-                                    Fail("Native checked selection changed " +
-                                        "after REV81 one-time repair (" +
-                                        checkedCount + "/" + requested.Length + ").");
+                                    var found = new HashSet<string>(
+                                        verified, StringComparer.OrdinalIgnoreCase);
+                                    string missingTags = string.Join(", ",
+                                        requested.Where(t => !found.Contains(t)));
+                                    Fail("Native checked selection unstable (" +
+                                        checkedCount + "/" + requested.Length +
+                                        "). Missing: " + missingTags + ".");
                                     return;
                                 }
-                                repairedOnce = true;
                                 bool repaired = NativeIsoLineSelectOverlay
                                     .TryApplySavedBatchToNative(dialog, requested,
                                         out int repairMatched, out int repairChecked);
                                 _document?.Editor.WriteMessage(
-                                    "\nSPTC REV81: One-time native batch repair " +
+                                    "\nSPTC REV82: guarded native batch repair #" +
+                                    repairAttempts + " " +
                                     repairMatched + "/" + requested.Length +
                                     ", checked=" + repairChecked +
                                     ", applied=" + repaired + ".");
@@ -585,6 +590,21 @@ internal static class NativeIsoDialogEnhancer
                         }
 
                         if (++readySamples < 2) return;
+                        // REV82: end recovery guard at the last possible point,
+                        // after two exact native 6/6 + enabled samples.
+                        // No timer tick can intervene before native PerformClick.
+                        NativeIsoLineSelectOverlay.CancelScopeSwitch(dialog);
+                        string[] finalChecked = NativeCheckedRouteNames(dialog);
+                        if (!new HashSet<string>(
+                            finalChecked, StringComparer.OrdinalIgnoreCase)
+                            .SetEquals(requested) ||
+                            finalChecked.Length != requested.Length ||
+                            !create.Enabled)
+                        {
+                            Fail("Native Create eligibility changed during " +
+                                "the final REV82 handoff.");
+                            return;
+                        }
                         // Submit ONCE only when exact native check set and
                         // Autodesk eligibility both remain verified.
                         try { timer.Stop(); timer.Dispose(); }
@@ -594,7 +614,7 @@ internal static class NativeIsoDialogEnhancer
                         _batchPreparationFailed = false;
                         _autoCreateSubmitting = true;
                         _document?.Editor.WriteMessage(
-                            "\nSPTC REV80: verified exact native batch " +
+                            "\nSPTC REV82: verified exact native batch " +
                             verified.Length + "/" + requested.Length +
                             ", Create=True; invoking native Create once.");
                         try { create.PerformClick(); }
