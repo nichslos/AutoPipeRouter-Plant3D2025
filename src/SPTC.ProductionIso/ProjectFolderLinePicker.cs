@@ -88,6 +88,10 @@ internal static class ProjectFolderLinePicker
     private static bool _committingNative;
     private static string _folder = "";
     private static bool _activeDwgView;
+    // REV99: REV98's presentation-only Active view keeps the complete
+    // native project list checked. Native Create has already been verified
+    // before projection; a queued OFF/ON revalidation can disable it.
+    private static bool _fullSourceActivePresentation;
     public static bool ActiveDwgView => _activeDwgView;
     // REV16: cancel is cooperative and executed between PnP database calls.
     private static CancellationTokenSource? _scanCancellation;
@@ -1062,6 +1066,10 @@ internal static class ProjectFolderLinePicker
 
         VisibleEntries.AddRange(matches);
         _activeDwgView = true;
+        // Must be set before BuildProjection, which previously scheduled
+        // a 400ms native checkbox OFF/ON commit. Such a write races the
+        // already valid full-source Create eligibility (REV98).
+        _fullSourceActivePresentation = preserveOtherCheckedNativeRoutes;
         BuildProjection(matches);
         if (_lineHost is null)
         {
@@ -1074,8 +1082,12 @@ internal static class ProjectFolderLinePicker
         // may not have received a native focus/eligibility event after
         // the filter rebuilt. Schedule a single native validation/commit
         // even when no new checkbox click was necessary.
-        if (nativeExactChecked)
+        if (nativeExactChecked && !preserveOtherCheckedNativeRoutes)
             ScheduleNativeSelectionCommit();
+        if (preserveOtherCheckedNativeRoutes)
+            doc?.Editor.WriteMessage(
+                "\nSPTC REV99: Full-source Active projection ready; " +
+                "skipped obsolete native checkbox replay to retain Create.");
         doc?.Editor.WriteMessage(
             "\nSPTC REV77: Exact native-backed current DWG routes (" +
             matches.Count + " of " + nativeRows.Count +
@@ -1104,6 +1116,7 @@ internal static class ProjectFolderLinePicker
         // cleared/reindexed rows from the previous Active view.
         _nativeCommitTimer?.Stop();
         _activeDwgView = false;
+        _fullSourceActivePresentation = false;
         _folder = "";
         DestroyProjection();
         NativeIsoLineSelectOverlay.UpdateDisplayedCount();
@@ -1260,6 +1273,10 @@ internal static class ProjectFolderLinePicker
             return;
         if (!VisibleEntries.Any(GetNativeChecked))
             return;
+        // REV99: read-only display of the full native source never needs
+        // another synthetic checkbox toggle after exact route verification.
+        if (_fullSourceActivePresentation)
+            return;
         ScheduleNativeSelectionCommit();
     }
 
@@ -1337,6 +1354,20 @@ internal static class ProjectFolderLinePicker
                 return true;
             }, IntPtr.Zero);
             if (create is null || !Current() || create.Enabled) return;
+
+            // REV99: the REV98 one-row Active view is presentation-only.
+            // Autodesk already accepted all saved native checkboxes in
+            // the complete project source. Replaying one route OFF/ON here
+            // can DISABLE the original Create even though Selected:6 and
+            // all six native checkboxes were valid immediately before.
+            if (_fullSourceActivePresentation)
+            {
+                _document?.Editor.WriteMessage(
+                    "\nSPTC REV99: Active native Create reported disabled; " +
+                    "suppressed destructive checkbox replay, full native " +
+                    "source and saved selections left unchanged.");
+                return;
+            }
 
             bool RowStillCurrent(NativeEntry row)
             {
@@ -1605,7 +1636,8 @@ internal static class ProjectFolderLinePicker
         _lineHost.Show();
         // An already-checked underlying line can have missing native Create
         // eligibility state after overlay creation. Revalidate it once.
-        if (entries.Any(GetNativeChecked))
+        if (entries.Any(GetNativeChecked) &&
+            !_fullSourceActivePresentation)
             ScheduleNativeSelectionCommit();
     }
 
@@ -1831,6 +1863,7 @@ internal static class ProjectFolderLinePicker
         HideFolderMenu();
         _folder = "";
         _activeDwgView = false;
+        _fullSourceActivePresentation = false;
         DestroyProjection();
         try { _filterHost?.Dispose(); } catch { }
         _filterHost = null;
