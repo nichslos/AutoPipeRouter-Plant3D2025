@@ -1329,7 +1329,10 @@ internal static class NativeIsoLineSelectOverlay
         int stablePasses = 0;
         int exactConfirmationPasses = 0;
         string lastVisibleNames = "";
-        var timer = new System.Windows.Forms.Timer { Interval = 250 };
+        // REV85: reduce unnecessary 250ms UI polling during Active -> All.
+        // Autodesk's real list readiness is still verified by names/counts;
+        // no speculative checkmarks or native Create overrides.
+        var timer = new System.Windows.Forms.Timer { Interval = 120 };
         _modeRecoveryTimer = timer;
 
         void Stop()
@@ -1360,9 +1363,9 @@ internal static class NativeIsoLineSelectOverlay
             }
             // Bounded: never hang the Autodesk dialog if source rows do
             // not load, and never rewrite DWG/SQL/PnP data.
-            if (++attempts > 16)
+            if (++attempts > 30)
             {
-                WriteDiagnostic("REV84: All Project recovery timed out; " +
+                WriteDiagnostic("REV85: All Project recovery timed out; " +
                     "saved route names retained; native checkboxes not confirmed.");
                 Stop();
                 return;
@@ -1446,18 +1449,20 @@ internal static class NativeIsoLineSelectOverlay
                 finally { _restoringSelection = false; }
 
                 if (repaired > 0)
-                    WriteDiagnostic("REV84: All Project native checks " +
+                    WriteDiagnostic("REV85: All Project native checks " +
                         "recommitted for " + repaired + " row(s); exact=" +
                         exact + ".");
                 // Do NOT stop after the first write. Autodesk may update
                 // the underlying list/check state on subsequent UI ticks.
-                // Require three untouched, exact states before repaint.
+                // REV85: verify one later unmodified UI tick, instead
+                // of holding the complete native list invisible for
+                // multiple extra update cycles.
                 if (!exact || repaired > 0)
                 {
                     exactConfirmationPasses = 0;
                     return;
                 }
-                if (++exactConfirmationPasses < 3)
+                if (++exactConfirmationPasses < 2)
                     return;
                 UpdateSelectedLabel();
                 Stop();
