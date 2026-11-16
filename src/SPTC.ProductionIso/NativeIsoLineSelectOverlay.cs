@@ -882,6 +882,15 @@ internal static class NativeIsoLineSelectOverlay
     public static bool IsSessionTagSelected(string tag) =>
         !string.IsNullOrWhiteSpace(tag) && SessionSelectedTags.Contains(tag);
 
+    // Keep legacy single-tag exact-filter callback source-compatible.
+    // REV105's normal Active path passes ALL verified physical line tags.
+    public static void CompleteActiveProjectionScope(
+        IntPtr dialog, string exactTag)
+    {
+        CompleteActiveProjectionScope(dialog,
+            new[] { exactTag });
+    }
+
     public static void CompleteActiveProjectionScope(
         IntPtr dialog, IReadOnlyCollection<string> exactTags)
     {
