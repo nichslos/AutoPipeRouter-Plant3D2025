@@ -66,6 +66,27 @@ internal static class NativeIsoDialogEnhancer
     private static bool _destinationEditedThisDialog;
     private static string? _source;
     private static Document? _document;
+
+    // REV107: The source 3D DWG may be CLOSED while ISO generation and
+    // custom copying continue. Document?.Editor is NOT safe on a closed
+    // AutoCAD document: it throws Autodesk eNotApplicable. Only log to
+    // whichever document is NOW active, and silently skip when none is
+    // available. Never let a diagnostic kill the background copy monitor.
+    private static void SafeLog(string message)
+    {
+        try
+        {
+            Autodesk.AutoCAD.ApplicationServices.Application
+                .DocumentManager.MdiActiveDocument?
+                .Editor.WriteMessage(message);
+        }
+        catch (Exception)
+        {
+            // An MDI document can disappear or deactivate between read
+            // and WriteMessage. Logging must be best effort only.
+        }
+    }
+
     private static int _noWindowTicks;
     private static DateTime _launchUtc;
     // REV54: snapshot the REAL Autodesk native line selection at Create
@@ -148,7 +169,7 @@ internal static class NativeIsoDialogEnhancer
         {
             _overwriteRequested = box.Checked;
             _overwriteFound = true;
-            _document?.Editor.WriteMessage(
+            SafeLog(
                 "\nSPTC REV50: Native overwrite " +
                 (_overwriteRequested ? "ON" : "OFF") +
                 " (checkbox event).");
@@ -331,7 +352,7 @@ internal static class NativeIsoDialogEnhancer
             if (serial != _quietShowAllSerial) return;
             StopQuietShowAll();
             NativeIsoToolbarClickFilter.MarkActiveLinesDisplayed(dialog);
-            _document?.Editor.WriteMessage(
+            SafeLog(
                 "\nSPTC REV101: Show All kept Active view: " + reason +
                 ". No partial ISO created.");
         }
@@ -396,7 +417,7 @@ internal static class NativeIsoDialogEnhancer
                 ProjectFolderLinePicker.ClearVisibleProjection();
                 NativeIsoToolbarClickFilter.MarkAllLinesRestored(dialog);
                 NativeIsoLineSelectOverlay.UpdateDisplayedCount();
-                _document?.Editor.WriteMessage(
+                SafeLog(
                     "\nSPTC REV106: Show All stable " + expected.Length +
                     "/" + expected.Length + ", Create.Enabled=" +
                     (_nativeCreateButton?.Enabled.ToString() ?? "unknown") +
@@ -464,7 +485,7 @@ internal static class NativeIsoDialogEnhancer
             if (abortScope && _native == dialog)
                 NativeIsoLineSelectOverlay.CancelScopeSwitch(dialog);
             if (!string.IsNullOrEmpty(error))
-                _document?.Editor.WriteMessage(
+                SafeLog(
                     "\nSPTC REV98 Active projection: " + error);
         }
 
@@ -559,7 +580,7 @@ internal static class NativeIsoDialogEnhancer
 
                 NativeIsoLineSelectOverlay.CompleteActiveProjectionScope(
                     dialog, exactTags);
-                _document?.Editor.WriteMessage(
+                SafeLog(
                     "\nSPTC REV105: Active view showing " +
                     ProjectFolderLinePicker.VisibleLineCount + "/" +
                     exactTags.Length + " physical route(s) over complete " +
@@ -606,7 +627,7 @@ internal static class NativeIsoDialogEnhancer
         {
             AbortAutoCreate();
             NativeIsoLineSelectOverlay.CancelScopeSwitch(_native);
-            _document?.Editor.WriteMessage(
+            SafeLog(
                 "\nSPTC REV80: canceled pending ISO batch selection; " +
                 "auto-create timer stopped; no custom-copy watcher.");
         }
@@ -624,7 +645,7 @@ internal static class NativeIsoDialogEnhancer
         // delayed native MouseDown/Click to flag a nonexistent ISO run.
         _batchPreparationFailed = true;
         _createRequested = false;
-        _document?.Editor.WriteMessage(
+        SafeLog(
             "\nSPTC REV80: Batch Create not started: " + problem);
         try
         {
@@ -705,7 +726,7 @@ internal static class NativeIsoDialogEnhancer
                         NativeIsoToolbarClickFilter
                             .TryRefreshNativeProjectList(dialog);
                     NativeIsoToolbarClickFilter.MarkAllLinesRestored(dialog);
-                    _document?.Editor.WriteMessage(
+                    SafeLog(
                         "\nSPTC REV100: Create clicked with " +
                         requested.Length + " saved route(s); native " +
                         "source already complete=" + alreadyFull +
@@ -824,7 +845,7 @@ internal static class NativeIsoDialogEnhancer
                             // until the exact native batch AND Create are ready.
                             // Releasing it here allowed the 800ms selection
                             // monitor to race Autodesk's checkbox refresh.
-                            _document?.Editor.WriteMessage(
+                            SafeLog(
                                 "\nSPTC REV82: Full native batch applied " +
                                 matched + "/" + requested.Length +
                                 "; guarded verification before Create.");
@@ -860,7 +881,7 @@ internal static class NativeIsoDialogEnhancer
                                 bool repaired = NativeIsoLineSelectOverlay
                                     .TryApplySavedBatchToNative(dialog, requested,
                                         out int repairMatched, out int repairChecked);
-                                _document?.Editor.WriteMessage(
+                                SafeLog(
                                     "\nSPTC REV82: guarded native batch repair #" +
                                     repairAttempts + " " +
                                     repairMatched + "/" + requested.Length +
@@ -917,7 +938,7 @@ internal static class NativeIsoDialogEnhancer
                         _autoCreatePending = false;
                         _batchPreparationFailed = false;
                         _autoCreateSubmitting = true;
-                        _document?.Editor.WriteMessage(
+                        SafeLog(
                             "\nSPTC REV82: verified exact native batch " +
                             verified.Length + "/" + requested.Length +
                             ", Create=True; invoking native Create once.");
@@ -942,7 +963,7 @@ internal static class NativeIsoDialogEnhancer
 
     private static void ShowCreateSelectionWarning(string warning)
     {
-        _document?.Editor.WriteMessage(
+        SafeLog(
             "\nSPTC REV78: blocked Create: " +
             warning.Replace("\r", "").Replace("\n", " "));
         try
@@ -1060,7 +1081,7 @@ internal static class NativeIsoDialogEnhancer
         foreach (string tag in best)
             _selectedIsoTags.Add(tag);
         NativeIsoResultsOverlay.SetExpectedIsoTags(best);
-        _document?.Editor.WriteMessage(
+        SafeLog(
             "\nSPTC REV54: Native ISO selected lines=" + best.Count +
             " (custom copies limited to these routes).");
     }
@@ -1104,7 +1125,7 @@ internal static class NativeIsoDialogEnhancer
         if (_native != IntPtr.Zero &&
             TryGetCreateSelectionMismatch(_native, out _))
         {
-            _document?.Editor.WriteMessage(
+            SafeLog(
                 "\nSPTC REV79: unverified direct native Create action; " +
                 "full saved selection was not captured for custom copying.");
             return;
@@ -1115,7 +1136,7 @@ internal static class NativeIsoDialogEnhancer
             CaptureNativeOverwrite(_native);
             CaptureSelectedIsoTags(_native);
         }
-        _document?.Editor.WriteMessage(
+        SafeLog(
             "\nSPTC REV64: Create requested; custom overwrite=" +
             (_overwriteRequested ? "YES" : "NO") +
             " (source: " + _overwriteSource + ").");
@@ -1247,7 +1268,10 @@ internal static class NativeIsoDialogEnhancer
         // after the native Create dialog has closed.
     }
 
-    private sealed record CopyReport(int Copied, int Skipped, string Destination);
+    private sealed record CustomCopyOutput(string Path, bool Existing);
+    private sealed record CopyReport(
+        int Copied, int Skipped, string Destination,
+        CustomCopyOutput[] Outputs);
 
     public static void Launch(Document doc)
     {
@@ -1340,7 +1364,7 @@ internal static class NativeIsoDialogEnhancer
                 NativeIsoResultsOverlay.ReportCopied(resultPath, existing);
                 _copyState = (existing ? "Existing " : "Copied ") +
                     actualName + "; monitoring remaining ISOs";
-                _document?.Editor.WriteMessage(
+                SafeLog(
                     "\nSPTC REV57: Custom ISO " +
                     (existing ? "already exists: " : "copied: ") + resultPath);
             }
@@ -1349,22 +1373,42 @@ internal static class NativeIsoDialogEnhancer
             {
                 Task<CopyReport> finished = _copyTask;
                 _copyTask = null;
+                // REV107: reconcile all verified custom files before
+                // stopping our status monitor. Files may have been copied
+                // correctly even if their UI notifications were interrupted
+                // by a source DWG Close/Open during background generation.
+                if (finished.Status == TaskStatus.RanToCompletion)
+                {
+                    foreach (CustomCopyOutput output in finished.Result.Outputs)
+                    {
+                        try
+                        {
+                            NativeIsoResultsOverlay.ReportCopied(
+                                output.Path, output.Existing);
+                        }
+                        catch (Exception ex)
+                        {
+                            SafeLog("\nSPTC REV107: deferred Results link " +
+                                "refresh: " + ex.GetBaseException().Message);
+                        }
+                    }
+                }
                 Detach();
                 if (finished.IsFaulted)
                 {
                     _copyState = "Error: " + finished.Exception?.GetBaseException().Message;
-                    _document?.Editor.WriteMessage("\nSPTC ISO export: " + _copyState);
+                    SafeLog("\nSPTC ISO export: " + _copyState);
                 }
                 else if (finished.IsCanceled)
                 {
                     _copyState = "Canceled";
-                    _document?.Editor.WriteMessage("\nSPTC ISO export canceled.");
+                    SafeLog("\nSPTC ISO export canceled.");
                 }
                 else
                 {
                     _lastCopyReport = finished.Result;
                     _copyState = "Completed";
-                    _document?.Editor.WriteMessage(
+                    SafeLog(
                         $"\nSPTC ISO: {_lastCopyReport.Copied} DWG(s) copied to {_lastCopyReport.Destination}; " +
                         $"{_lastCopyReport.Skipped} skipped. Original project files unchanged.");
                 }
@@ -1387,7 +1431,7 @@ internal static class NativeIsoDialogEnhancer
                     StartOverwriteTracker(native);
                     attachWatch.Stop();
 
-                    _document?.Editor.WriteMessage(
+                    SafeLog(
                         "\nSPTC REV27: Native dialog detected after " +
                         elapsedToNative.TotalMilliseconds.ToString("F0") +
                         " ms; enhancements attached in " +
@@ -1453,7 +1497,7 @@ internal static class NativeIsoDialogEnhancer
                                 NativeIsoToolbarClickFilter.MarkAllLinesRestored(
                                     native);
                                 NativeIsoLineSelectOverlay.UpdateDisplayedCount();
-                                _document.Editor.WriteMessage(
+                                SafeLog(
                                     "\nSPTC REV106: instant Show All (" +
                                     nativeChecked.Length + "/" + selected.Count +
                                     " checked, native Create=" +
@@ -1528,7 +1572,7 @@ internal static class NativeIsoDialogEnhancer
                                 // checked routes and existing Create state.
                                 NativeIsoLineSelectOverlay.CancelScopeSwitch(native);
                                 NativeIsoLineSelectOverlay.UpdateDisplayedCount();
-                                _document.Editor.WriteMessage(
+                                SafeLog(
                                     "\nSPTC REV100: Show All native fast path; " +
                                     nativeChecked.Length + "/" + wanted.Count +
                                     " checked, Create.Enabled=True, " +
@@ -1550,7 +1594,7 @@ internal static class NativeIsoDialogEnhancer
                                 bool refreshed = !fullSource &&
                                     NativeIsoToolbarClickFilter
                                         .TryRefreshNativeProjectList(native);
-                                _document.Editor.WriteMessage(
+                                SafeLog(
                                     "\nSPTC REV100: Show All recovery (fullSource=" +
                                     fullSource + ", refresh=" + refreshed +
                                     ", checked=" + nativeChecked.Length + "/" +
@@ -1577,7 +1621,7 @@ internal static class NativeIsoDialogEnhancer
                             var scanWatch = Stopwatch.StartNew();
                             ActiveDwgTags.Scan(_document);
                             scanWatch.Stop();
-                            _document.Editor.WriteMessage(
+                            SafeLog(
                                 "\nSPTC REV71: first active DWG tag scan " +
                                 scanWatch.ElapsedMilliseconds + " ms.");
                         }
@@ -1589,7 +1633,7 @@ internal static class NativeIsoDialogEnhancer
                             ActiveDwgTags.CurrentTags.ToArray();
                         if (physicalTags.Length == 0)
                         {
-                            _document.Editor.WriteMessage(
+                            SafeLog(
                                 "\nSPTC REV105: No verified physical pipe " +
                                 "line numbers in active DWG. Native list " +
                                 "left unchanged.");
@@ -1629,7 +1673,7 @@ internal static class NativeIsoDialogEnhancer
                             NativeIsoToolbarClickFilter.TryRefreshNativeProjectList(
                                 native);
                         NativeIsoToolbarClickFilter.MarkAllLinesRestored(native);
-                        _document.Editor.WriteMessage(
+                        SafeLog(
                             "\nSPTC REV105: restoring All Project native " +
                             "selection for " + physicalTags.Length +
                             " exact Active DWG tag(s) (refresh=" +
@@ -1663,7 +1707,7 @@ internal static class NativeIsoDialogEnhancer
                             _destination = _rememberedDestination;
                             if (_destinationBox is { IsDisposed: false } box)
                                 box.Text = _destination;
-                            _document?.Editor.WriteMessage(
+                            SafeLog(
                                 "\nSPTC REV78: restored last custom location " +
                                 "for this ISO output source.");
                         }
@@ -1672,7 +1716,7 @@ internal static class NativeIsoDialogEnhancer
                             _rememberedSource = _source;
                             _rememberedDestination = _destination;
                         }
-                        _document?.Editor.WriteMessage(
+                        SafeLog(
                             "\nSPTC ISO detected native source: " + _source);
                     }
                 }
@@ -1702,7 +1746,7 @@ internal static class NativeIsoDialogEnhancer
                     while (_copyProgress.TryDequeue(out _)) { }
                     _nativeClosedAt = DateTime.MinValue;
                     _copyState = "Canceled before Create — no ISO copy started";
-                    _document?.Editor.WriteMessage(
+                    SafeLog(
                         "\nSPTC REV64: Production Iso canceled; " +
                         "all plugin monitors stopped. No DWG copy started.");
                     return;
@@ -1710,6 +1754,11 @@ internal static class NativeIsoDialogEnhancer
 
                 _nativeClosedAt = DateTime.UtcNow;
                 _copyState = "Create requested; watching for completed DWGs";
+                // REV107: retain only the ISO batch snapshot (source,
+                // destination, selected tags, overwrite). The originating
+                // modeling Document is no longer required after Create and
+                // may be closed or replaced during background generation.
+                _document = null;
             }
 
             // Autodesk may display a notification first and open this dialog
@@ -1720,9 +1769,10 @@ internal static class NativeIsoDialogEnhancer
                 _resultsSeen = true;
                 if (!string.IsNullOrWhiteSpace(_destination))
                     NativeIsoResultsOverlay.BeginSession(_destination);
-                if (_copyTask is null && _document is not null &&
-                    !string.IsNullOrWhiteSpace(_destination) && !string.IsNullOrWhiteSpace(_source))
-                    CopyCompleted(_document);
+                if (_copyTask is null &&
+                    !string.IsNullOrWhiteSpace(_destination) &&
+                    !string.IsNullOrWhiteSpace(_source))
+                    CopyCompletedCore();
             }
 
             // Start background detection immediately after the original Create dialog
@@ -1733,18 +1783,18 @@ internal static class NativeIsoDialogEnhancer
                 {
                     Detach();
                     _copyState = "Error: Native source folder was not detected";
-                    _document?.Editor.WriteMessage("\nSPTC ISO: " + _copyState +
+                    SafeLog("\nSPTC ISO: " + _copyState +
                         ". Run SPTC_ISOSTATUS for details.");
                     return;
                 }
-                if (!string.IsNullOrWhiteSpace(_destination) && _document is not null)
+                if (!string.IsNullOrWhiteSpace(_destination))
                 {
-                    CopyCompleted(_document);
+                    CopyCompletedCore();
                     return;
                 }
                 Detach();
                 _copyState = "Custom location empty; default output retained";
-                _document?.Editor.WriteMessage("\nSPTC ISO: " + _copyState);
+                SafeLog("\nSPTC ISO: " + _copyState);
                 return;
             }
 
@@ -1756,9 +1806,20 @@ internal static class NativeIsoDialogEnhancer
         }
         catch (Exception ex)
         {
+            // REV107: AutoCAD is allowed to close/switch the modeling
+            // document mid-ISO. A transient native UI/document exception
+            // must not discard the batch-copy task or its Results links.
+            SafeLog("\nSPTC REV107: ISO monitor UI transient: " +
+                ex.GetBaseException().Message);
+            if (_createRequested &&
+                (_copyTask != null ||
+                 _nativeClosedAt != DateTime.MinValue))
+            {
+                EnsureMonitor();
+                return;
+            }
             Detach();
             _copyState = "Error: " + ex.Message;
-            _document?.Editor.WriteMessage("\nSPTC ISO monitor: " + ex.Message);
         }
     }
 
@@ -1783,12 +1844,12 @@ internal static class NativeIsoDialogEnhancer
                 // Autodesk may still be loading entries after the first
                 // repaint; clearing would cause the old routes to reappear
                 // even though the user is actively trying to select a line.
-                _document?.Editor.WriteMessage(
+                SafeLog(
                     "\nSPTC REV27: Active filter verification inconclusive: " +
                     note + " Inspect the native line list before creating an ISO.");
             }
             else
-                _document?.Editor.WriteMessage(
+                SafeLog(
                     "\nSPTC REV27: Native active route " + tag +
                     " displayed in the original selectable Autodesk checklist.");
             NativeIsoLineSelectOverlay.UpdateDisplayedCount();
@@ -1824,7 +1885,7 @@ internal static class NativeIsoDialogEnhancer
             {
                 NativeIsoToolbarClickFilter.MarkAllLinesRestored(native);
                 NativeIsoLineSelectOverlay.UpdateDisplayedCount();
-                _document?.Editor.WriteMessage(
+                SafeLog(
                     "\nSPTC REV21: Current DWG tag did not match a line in the " +
                     "native ISO list. Cleared the search filter so routes remain visible.");
             }
@@ -1964,12 +2025,12 @@ internal static class NativeIsoDialogEnhancer
             };
             _layoutWatch.Start();
 
-            _document?.Editor.WriteMessage(
+            SafeLog(
                 "\nSPTC REV19: Native Production Iso dialog found; custom location row tracks Revision number when resized.");
         }
         catch (Exception ex)
         {
-            _document?.Editor.WriteMessage("\nSPTC: Unable to attach field: " + ex.Message);
+            SafeLog("\nSPTC: Unable to attach field: " + ex.Message);
             Detach();
         }
     }
@@ -2303,6 +2364,10 @@ internal static class NativeIsoDialogEnhancer
         bool overwriteExisting, IReadOnlyCollection<string> selectedTags)
     {
         int copied = 0, skipped = 0;
+        // REV107: worker-owned ledger survives AutoCAD MDI document
+        // changes. On completion replay every verified custom result,
+        // even if some real-time UI notifications were missed.
+        var completedOutputs = new List<CustomCopyOutput>();
         var processedFiles = new HashSet<string>(
             StringComparer.OrdinalIgnoreCase);
         var observed = new Dictionary<string,
@@ -2477,6 +2542,8 @@ internal static class NativeIsoDialogEnhancer
                                 // REV57: a safe skipped output still exists
                                 // in the custom folder. Report it as an
                                 // EXISTING clickable result, not a new copy.
+                                completedOutputs.Add(
+                                    new CustomCopyOutput(destination, true));
                                 _copyProgress.Enqueue(
                                     "existing:" + Path.GetFileName(destination));
                                 continue;
@@ -2533,6 +2600,8 @@ internal static class NativeIsoDialogEnhancer
                             MarkRouteFinished(Path.GetFileName(file));
                             // REV51: report the ACTUAL numbered output so
                             // its clickable file link appears in Results.
+                            completedOutputs.Add(
+                                new CustomCopyOutput(published, false));
                             _copyProgress.Enqueue(Path.GetFileName(published));
                         }
                         catch (IOException)
@@ -2590,7 +2659,8 @@ internal static class NativeIsoDialogEnhancer
         }
         finally { watcher?.Dispose(); }
 
-        return new CopyReport(copied, skipped, targetRoot);
+        return new CopyReport(
+            copied, skipped, targetRoot, completedOutputs.ToArray());
     }
 
     private static void EnsureMonitor()
@@ -2621,23 +2691,27 @@ internal static class NativeIsoDialogEnhancer
                 $"\nLast copy: {_lastCopyReport.Copied} succeeded, {_lastCopyReport.Skipped} skipped"));
     }
 
-    public static void CopyCompleted(Document doc)
+    // Preserve the public command entry point but never rely on its
+    // source Document after Create. The modeling DWG may be closed.
+    public static void CopyCompleted(Document doc) => CopyCompletedCore();
+
+    private static void CopyCompletedCore()
     {
         if (_copyTask is { IsCompleted: false })
         {
-            doc.Editor.WriteMessage("\nSPTC ISO: Background export is already running.");
+            SafeLog("\nSPTC ISO: Background export is already running.");
             return;
         }
         if (string.IsNullOrWhiteSpace(_destination))
         {
             _copyState = "Custom location not specified";
-            doc.Editor.WriteMessage("\nSPTC ISO: " + _copyState);
+            SafeLog("\nSPTC ISO: " + _copyState);
             return;
         }
         if (string.IsNullOrWhiteSpace(_source))
         {
             _copyState = "Native source not detected";
-            doc.Editor.WriteMessage("\nSPTC ISO: " + _copyState +
+            SafeLog("\nSPTC ISO: " + _copyState +
                 ". No copy started. Run SPTC_ISOSTATUS to check paths.");
             return;
         }
@@ -2654,7 +2728,7 @@ internal static class NativeIsoDialogEnhancer
             // active after the REV47 copy task completes.
             NativeIsoResultsOverlay.BeginSession(destination);
             bool allowOverwrite = _overwriteFound && _overwriteRequested;
-            _document?.Editor.WriteMessage(
+            SafeLog(
                 "\nSPTC REV50: Custom overwrite=" +
                 (allowOverwrite ? "YES" : "NO") +
                 " (source: " + _overwriteSource + ").");
@@ -2664,14 +2738,14 @@ internal static class NativeIsoDialogEnhancer
                 source, destination, _launchUtc, allowOverwrite,
                 selectedTags));
             EnsureMonitor();
-            doc.Editor.WriteMessage(
+            SafeLog(
                 "\nSPTC ISO: Monitoring completed DWGs for custom copy (background)." +
                 " Custom destination overwrite=" + (_overwriteRequested ? "YES" : "NO") + ".");
         }
         catch (Exception ex)
         {
             _copyState = "Error: " + ex.Message;
-            doc.Editor.WriteMessage("\nSPTC ISO export: " + _copyState);
+            SafeLog("\nSPTC ISO export: " + _copyState);
         }
     }
 }
