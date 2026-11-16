@@ -1021,18 +1021,29 @@ internal static class ProjectFolderLinePicker
 
         var allowed = new HashSet<string>(actualTags, StringComparer.OrdinalIgnoreCase);
         var matches = nativeRows.Where(x => allowed.Contains(x.Tag)).ToList();
-        // Do not apply a partial or misleading list. The Project scope might
-        // not have finished loading, or the tag might not be registered.
-        if (matches.Count == 0 ||
-            allowed.Any(t => !matches.Any(x =>
-                x.Tag.Equals(t, StringComparison.OrdinalIgnoreCase))))
+        // REV105: an active DWG can legitimately contain MULTIPLE line
+        // numbers; some may not be registered for this ISO style. Show
+        // EVERY exact native-eligible route instead of rejecting the
+        // entire active DWG because one physical tag is unavailable.
+        // Do not fabricate missing rows or silently select them for ISO.
+        if (matches.Count == 0)
         {
             doc?.Editor.WriteMessage(
-                "\nSPTC REV22: Current physical line tag(s) not fully available " +
-                "in the native ISO line list. Use Project mode and try again: " +
+                "\nSPTC REV105: None of the " + allowed.Count +
+                " physical Active DWG line tags are available in the " +
+                "Autodesk ISO list for this style: " +
                 string.Join(", ", allowed));
             return false;
         }
+        var missingTags = allowed.Where(tag => !matches.Any(row =>
+            row.Tag.Equals(tag, StringComparison.OrdinalIgnoreCase)))
+            .ToArray();
+        if (missingTags.Length > 0)
+            doc?.Editor.WriteMessage(
+                "\nSPTC REV105: Show Active includes " + matches.Count +
+                " native-eligible route(s); skipped " + missingTags.Length +
+                " not registered in this ISO style: " +
+                string.Join(", ", missingTags));
 
         // REV77: preserve Autodesk's unmodified native list/item INDEX
         // mapping. Earlier exact filtering physically removed four
