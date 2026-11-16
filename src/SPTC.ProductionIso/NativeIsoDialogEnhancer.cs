@@ -423,9 +423,16 @@ internal static class NativeIsoDialogEnhancer
     }
 
     private static void BeginActiveProjectProjection(
-        IntPtr dialog, string exactTag, string[] selectedBefore)
+        IntPtr dialog, IReadOnlyList<string> activeTags,
+        string[] selectedBefore)
     {
         StopActiveProjectProjection();
+        string[] exactTags = activeTags
+            .Where(tag => !string.IsNullOrWhiteSpace(tag))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (exactTags.Length == 0)
+            return;
         int serial = _activeProjectProjectionSerial;
         string[] expected = selectedBefore
             .Where(tag => !string.IsNullOrWhiteSpace(tag))
@@ -535,24 +542,25 @@ internal static class NativeIsoDialogEnhancer
                 if (++ready < 2) return;
 
                 if (!ProjectFolderLinePicker.ShowExactActiveDwgTags(
-                    new[] { exactTag }, _document,
+                    exactTags, _document,
                     preserveOtherCheckedNativeRoutes: true))
                 {
-                    Stop("Exact active route unavailable in complete " +
-                        "Autodesk project list.", abortScope: true);
+                    Stop("No eligible Active DWG routes found in complete " +
+                        "Autodesk native project list.", abortScope: true);
                     return;
                 }
 
                 NativeIsoLineSelectOverlay.CompleteActiveProjectionScope(
-                    dialog, exactTag);
+                    dialog, exactTags);
                 _document?.Editor.WriteMessage(
-                    "\nSPTC REV98: Active " + exactTag +
-                    " projected over complete " + count +
-                    "-row Autodesk source; native checked=" +
+                    "\nSPTC REV105: Active view showing " +
+                    ProjectFolderLinePicker.VisibleLineCount + "/" +
+                    exactTags.Length + " physical route(s) over complete " +
+                    count + "-row Autodesk source; native checked=" +
                     checkedNative.Length + "/" + expected.Length +
                     ", Create.Enabled=" +
                     (_nativeCreateButton?.Enabled.ToString() ?? "unknown") +
-                    ". No native search/reindexing performed.");
+                    ". No native substring search/reindex performed.");
                 Stop();
             }
             catch (Exception ex)
@@ -1564,12 +1572,17 @@ internal static class NativeIsoDialogEnhancer
                                 scanWatch.ElapsedMilliseconds + " ms.");
                         }
 
-                        if (ActiveDwgTags.Count != 1)
+                        // REV105: multiple physical line tags per Active
+                        // DWG are valid; reject only when the read-only
+                        // Plant scan found NONE.
+                        string[] physicalTags =
+                            ActiveDwgTags.CurrentTags.ToArray();
+                        if (physicalTags.Length == 0)
                         {
                             _document.Editor.WriteMessage(
-                                "\nSPTC REV30: Native active filtering needs exactly " +
-                                "one verified physical line tag. Found " +
-                                ActiveDwgTags.Count + ". Full list was left unchanged.");
+                                "\nSPTC REV105: No verified physical pipe " +
+                                "line numbers in active DWG. Native list " +
+                                "left unchanged.");
                             NativeIsoLineSelectOverlay.CancelScopeSwitch(native);
                             return false;
                         }
@@ -1606,13 +1619,14 @@ internal static class NativeIsoDialogEnhancer
                             NativeIsoToolbarClickFilter.TryRefreshNativeProjectList(
                                 native);
                         NativeIsoToolbarClickFilter.MarkAllLinesRestored(native);
-                        string exactTag = ActiveDwgTags.CurrentTags[0];
                         _document.Editor.WriteMessage(
-                            "\nSPTC REV98: restoring All Project native " +
-                            "selection for exact Active " + exactTag +
-                            " (refresh=" + projectRefresh + ").");
+                            "\nSPTC REV105: restoring All Project native " +
+                            "selection for " + physicalTags.Length +
+                            " exact Active DWG tag(s) (refresh=" +
+                            projectRefresh + "): " +
+                            string.Join(", ", physicalTags));
                         BeginActiveProjectProjection(
-                            native, exactTag, selectedBefore);
+                            native, physicalTags, selectedBefore);
                         return true;
                     });
 
