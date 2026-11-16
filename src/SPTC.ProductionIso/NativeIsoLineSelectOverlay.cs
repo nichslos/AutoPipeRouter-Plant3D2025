@@ -357,6 +357,20 @@ internal static class NativeIsoLineSelectOverlay
         ActiveDwgTags.EnsureNativeSearchEditable(_dialog);
     }
 
+    // REV98: expose the already-observed native project-wide source size.
+    // Never use an intermediate five-substring-result list as project data.
+    public static int KnownProjectWideRowCount(IntPtr dialog) =>
+        dialog != IntPtr.Zero && dialog == _dialog
+            ? _lastProjectWideRowCount : 0;
+
+    public static bool IsNativeSearchBlank(IntPtr dialog)
+    {
+        if (dialog == IntPtr.Zero || dialog != _dialog) return false;
+        EnsureSelectionTracking();
+        return _trackedNativeSearch is { IsDisposed: false } search &&
+            string.IsNullOrWhiteSpace(search.Text);
+    }
+
     // REV21: read only the actual Autodesk line list to validate an active
     // tag filter. Never infer a route from the search textbox contents.
     public static int? NativeDisplayedCount(IntPtr dialog) =>
