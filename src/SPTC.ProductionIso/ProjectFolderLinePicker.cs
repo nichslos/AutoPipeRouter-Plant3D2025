@@ -120,6 +120,12 @@ internal static class ProjectFolderLinePicker
             ? _folderLineList.Items.Count
             : null;
 
+    // REV92: the overlay records only actual user changes in this filter,
+    // never cleared native rows belonging to other saved folder selections.
+    public static HashSet<string> GetVisibleTagNames() =>
+        new(VisibleEntries.Select(x => x.Tag),
+            StringComparer.OrdinalIgnoreCase);
+
     // REV65: count the actual checked *native* lines in the current
     // folder projection. Do not count focus/highlight or hidden routes.
     public static int? VisibleCheckedCount
@@ -766,12 +772,20 @@ internal static class ProjectFolderLinePicker
 
             var visible = nativeRows
                 .Where(x => allowed.Contains(x.Tag)).ToList();
-            // Clear hidden selections to avoid generating unexpected ISOs.
+            // REV92: preserve saved selections across different folders.
+            // Native checkboxes from outside this folder are kept OFF
+            // while the scoped view is shown; the authoritative tag ledger
+            // remembers those selections for other filters/Show All.
+            // Reopen a previously selected folder with its exact checked
+            // tags restored, without treating the hidden clear as a user
+            // deselection or silently selecting other project lines.
             foreach (var row in nativeRows)
-                if (!allowed.Contains(row.Tag)) SetNativeChecked(row, false);
-            // REV66: folder scope intentionally clears off-folder native
-            // selection. Match that behavior in the persistent tag ledger.
-            NativeIsoLineSelectOverlay.RestrictSessionSelectionTo(allowed);
+            {
+                bool wanted = allowed.Contains(row.Tag) &&
+                    NativeIsoLineSelectOverlay.IsSessionTagSelected(row.Tag);
+                if (GetNativeChecked(row) != wanted)
+                    SetNativeChecked(row, wanted, userAction: wanted);
+            }
 
             VisibleEntries.AddRange(visible);
             _folder = folder;
