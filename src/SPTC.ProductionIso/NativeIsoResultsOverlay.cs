@@ -122,7 +122,13 @@ internal static class NativeIsoResultsOverlay
                 (uint)message.Msg == WM_LBUTTONUP ||
                 (uint)message.Msg == WM_LBUTTONDBLCLK)
             {
-                IntPtr item = HitNativeItem(_tree, message.LParam);
+                // REV105: custom labels are owner-drawn a few pixels
+                // below their native TreeView row to achieve the requested
+                // 25px group gap. Hit-test the DRAWN text first, otherwise
+                // a click near a row boundary could open the next file.
+                IntPtr item = HitVisibleCustomLabel(_tree, message.LParam);
+                if (item == IntPtr.Zero)
+                    item = HitNativeItem(_tree, message.LParam);
                 if (_winLinks.TryGetValue(item, out var link))
                 {
                     if (link.IsSeparator)
@@ -1121,6 +1127,50 @@ internal static class NativeIsoResultsOverlay
 
         if (itemsChanged)
             DrawNativeCustomLabels(tree);
+    }
+
+    private static IntPtr HitVisibleCustomLabel(
+        IntPtr tree, IntPtr location)
+    {
+        if (tree == IntPtr.Zero || _winLinks.Count == 0)
+            return IntPtr.Zero;
+
+        long bits = location.ToInt64();
+        int x = unchecked((short)(bits & 0xFFFF));
+        int y = unchecked((short)((bits >> 16) & 0xFFFF));
+        var offsets = new Dictionary<IntPtr, int>();
+
+        // Only check the actual glyph area, never the full row width.
+        // Mouse hit testing is user-driven, not part of the periodic
+        // Results watcher or the native ISO generation path.
+        foreach (NativeCustomLink link in _winLinks.Values)
+        {
+            if (link.IsSeparator) continue;
+            if (!offsets.TryGetValue(link.Parent, out int shift))
+            {
+                shift = CustomGroupVerticalShiftPx(tree, link.Parent);
+                offsets[link.Parent] = shift;
+            }
+            Rectangle? rectangle = NativeCustomTextRectangle(
+                tree, link, shift);
+            if (rectangle is null) continue;
+            Rectangle area = rectangle.Value;
+            if (y < area.Top || y >= area.Bottom ||
+                x < area.Left || x >= area.Right)
+                continue;
+
+            string label = NativeLinkLabel(
+                link.Path, link.OpenFolder, link.IsSeparator);
+            Size textSize = TextRenderer.MeasureText(
+                label, SystemFonts.MessageBoxFont,
+                new Size(int.MaxValue, Math.Max(area.Height, 20)),
+                TextFormatFlags.SingleLine |
+                TextFormatFlags.NoPrefix |
+                TextFormatFlags.NoPadding);
+            if (x < area.Left + Math.Min(area.Width, textSize.Width))
+                return link.Item;
+        }
+        return IntPtr.Zero;
     }
 
     private static IntPtr HitNativeItem(IntPtr tree, IntPtr location)
