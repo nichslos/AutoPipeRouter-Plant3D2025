@@ -51,6 +51,8 @@ internal static class NativeIsoDialogEnhancer
     // eligibility when returning from another manually searched route.
     private static System.Windows.Forms.Timer? _activeProjectProjectionTimer;
     private static int _activeProjectProjectionSerial;
+    private static System.Windows.Forms.Timer? _quietShowAllTimer;
+    private static int _quietShowAllSerial;
     private static Size _lastDialogClientSize = Size.Empty;
     private static int _fallbackRowLeft = -1;
     private static int _fallbackTextboxLeft = -1;
@@ -298,6 +300,110 @@ internal static class NativeIsoDialogEnhancer
         return true;
     }
 
+    // REV101: keep the single-line Active VIEW visible while repairing
+    // the ORIGINAL 432-row Autodesk list behind it. Only reveal Show All
+    // after exact checked tags AND native Create have settled. This avoids
+    // exposing the transient A-08 unchecked/rechecked state (the blink).
+    private static void StopQuietShowAll()
+    {
+        _quietShowAllSerial++;
+        try { _quietShowAllTimer?.Stop(); _quietShowAllTimer?.Dispose(); }
+        catch (Exception) { }
+        _quietShowAllTimer = null;
+    }
+
+    private static void BeginQuietShowAll(
+        IntPtr dialog, IReadOnlyCollection<string> requiredTags)
+    {
+        StopQuietShowAll();
+        int serial = _quietShowAllSerial;
+        string[] expected = requiredTags
+            .Where(t => !string.IsNullOrWhiteSpace(t))
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var wanted = new HashSet<string>(
+            expected, StringComparer.OrdinalIgnoreCase);
+        int ticks = 0, attempts = 0, stable = 0;
+        var timer = new System.Windows.Forms.Timer { Interval = 180 };
+        _quietShowAllTimer = timer;
+
+        void Cancel(string reason)
+        {
+            if (serial != _quietShowAllSerial) return;
+            StopQuietShowAll();
+            NativeIsoToolbarClickFilter.MarkActiveLinesDisplayed(dialog);
+            _document?.Editor.WriteMessage(
+                "\nSPTC REV101: Show All kept Active view: " + reason +
+                ". No partial ISO created.");
+        }
+
+        timer.Tick += (_, _) =>
+        {
+            if (serial != _quietShowAllSerial || _native != dialog ||
+                !IsWindow(dialog))
+            {
+                try { timer.Stop(); timer.Dispose(); } catch { }
+                return;
+            }
+            if (++ticks > 55)
+            {
+                Cancel("A-08 native selection/Create not stable within " +
+                    "the guarded recovery window");
+                return;
+            }
+            try
+            {
+                if (!ProjectFolderLinePicker.ActiveDwgView ||
+                    !NativeIsoLineSelectOverlay.HasCompleteUnfilteredProjectSource(
+                        dialog, allowActivePresentation: true))
+                {
+                    Cancel("complete native source was replaced");
+                    return;
+                }
+
+                string[] checkedTags = NativeCheckedRouteNames(dialog);
+                bool exact = checkedTags.Length == wanted.Count &&
+                    new HashSet<string>(checkedTags,
+                        StringComparer.OrdinalIgnoreCase).SetEquals(wanted);
+                if (!exact)
+                {
+                    stable = 0;
+                    if (attempts < 2)
+                    {
+                        attempts++;
+                        NativeIsoLineSelectOverlay.TryApplySavedBatchToNative(
+                            dialog, expected, out _, out _,
+                            allowActivePresentation: true);
+                        return;
+                    }
+                    return; // bounded, never repeat checkbox events
+                }
+
+                if (_nativeCreateButton is not { IsDisposed: false,
+                                                 Enabled: true })
+                {
+                    stable = 0;
+                    return; // never force-enable Autodesk Create
+                }
+
+                if (++stable < 3) return;
+                StopQuietShowAll();
+                ProjectFolderLinePicker.ClearVisibleProjection();
+                NativeIsoToolbarClickFilter.MarkAllLinesRestored(dialog);
+                NativeIsoLineSelectOverlay.UpdateDisplayedCount();
+                _document?.Editor.WriteMessage(
+                    "\nSPTC REV101: Show All stable " + expected.Length +
+                    "/" + expected.Length + ", Create.Enabled=True, " +
+                    "Active overlay removed without native list refresh.");
+            }
+            catch (Exception ex)
+            {
+                Cancel("native selection check: " +
+                    ex.GetBaseException().Message);
+            }
+        };
+        timer.Start();
+    }
+
     // REV98: do not run Autodesk's native text filter on Active view.
     // Native search A-08 produces five substring rows and discards the
     // other saved route selections, leaving Create=False. Instead restore
@@ -524,6 +630,7 @@ internal static class NativeIsoDialogEnhancer
     // set (never just Selected:N) and invoke original Create exactly once.
     private static void BeginAutomaticBatchCreate(IntPtr dialog)
     {
+        StopQuietShowAll();
         StopActiveProjectProjection();
         if (_autoCreatePending || _autoCreateSubmitting ||
             dialog == IntPtr.Zero || dialog != _native ||
@@ -1284,6 +1391,8 @@ internal static class NativeIsoDialogEnhancer
                     NativeIsoToolbarClickFilter.Attach(native, showActive =>
                     {
                         if (_document is null) return false;
+                        if (_quietShowAllTimer is not null)
+                            return false; // ignore repeat clicks mid-validation
 
                         // REV98: cancel any unfinished Active projection on
                         // a new user-selected scope, and capture the full
@@ -1335,6 +1444,21 @@ internal static class NativeIsoDialogEnhancer
                                     "visual Active projection removed only.");
                                 return true;
                             }
+                        }
+
+                        // REV101: if the complete 432-row native source
+                        // exists but A-08 is temporarily 5/6 after another
+                        // manual search, repair it BEHIND the active single-
+                        // row presentation. Don't reveal a blinking native
+                        // checkbox or restart the whole Project data query.
+                        if (!showActive &&
+                            ProjectFolderLinePicker.ActiveDwgView &&
+                            NativeIsoLineSelectOverlay
+                                .HasCompleteUnfilteredProjectSource(
+                                    native, allowActivePresentation: true))
+                        {
+                            BeginQuietShowAll(native, selectedBefore);
+                            return true;
                         }
 
                         // REV68: forbid programmatic native checkbox events
@@ -1986,6 +2110,7 @@ internal static class NativeIsoDialogEnhancer
 
     private static void Detach()
     {
+        StopQuietShowAll();
         StopActiveProjectProjection();
         _watch?.Stop();
         _watch?.Dispose();
