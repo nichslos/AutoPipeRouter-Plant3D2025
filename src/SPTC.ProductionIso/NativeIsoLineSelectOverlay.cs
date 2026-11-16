@@ -1306,12 +1306,15 @@ internal static class NativeIsoLineSelectOverlay
 
     public static bool TryApplySavedBatchToNative(
         IntPtr dialog, IReadOnlyCollection<string> wantedNames,
-        out int matched, out int checkedCount)
+        out int matched, out int checkedCount,
+        bool allowActivePresentation = false)
     {
         matched = 0;
         checkedCount = 0;
         if (dialog == IntPtr.Zero || dialog != _dialog ||
-            ProjectFolderLinePicker.HasVisibleProjection ||
+            (ProjectFolderLinePicker.HasVisibleProjection &&
+             !(allowActivePresentation &&
+               ProjectFolderLinePicker.ActiveDwgView)) ||
             wantedNames.Count == 0)
             return false;
 
