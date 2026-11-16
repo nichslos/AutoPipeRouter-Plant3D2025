@@ -1001,7 +1001,8 @@ internal static class ProjectFolderLinePicker
     /// original native ISO line item, leaving Autodesk's records untouched.
     /// </summary>
     public static bool ShowExactActiveDwgTags(
-        IReadOnlyList<string> actualTags, Document? doc)
+        IReadOnlyList<string> actualTags, Document? doc,
+        bool preserveOtherCheckedNativeRoutes = false)
     {
         if (_dialog == IntPtr.Zero || actualTags.Count == 0)
             return false;
@@ -1047,7 +1048,13 @@ internal static class ProjectFolderLinePicker
             bool desired = allowed.Contains(row.Tag) &&
                 NativeIsoLineSelectOverlay.IsSessionTagSelected(row.Tag);
             bool actual = GetNativeChecked(row);
-            if (actual != desired)
+            // REV98: if Active is a PRESENTATION-ONLY view over the full
+            // All Project native source, keep saved checks outside A-08.
+            // Clearing them made Autodesk Create disabled despite Selected:6.
+            // The existing folder projection keeps its original behavior.
+            if (actual != desired &&
+                (!preserveOtherCheckedNativeRoutes ||
+                 allowed.Contains(row.Tag)))
                 SetNativeChecked(row, desired, userAction: desired);
             if (allowed.Contains(row.Tag) && GetNativeChecked(row))
                 nativeExactChecked = true;
