@@ -1297,6 +1297,46 @@ internal static class NativeIsoDialogEnhancer
                         // Autodesk can replace its original checklist rows.
                         string[] selectedBefore =
                             NativeIsoLineSelectOverlay.CaptureSelectedTags(native);
+
+                        // REV101: Active in REV98+ is only a ONE-LINE
+                        // visual projection over the full Autodesk list.
+                        // When the original native 432 rows are still
+                        // complete and exactly match the saved checked tags,
+                        // Show All only needs to remove that visual overlay.
+                        // Do it BEFORE BeginScopeSwitch/refresh/checkbox
+                        // timers: otherwise a valid A-08 repeatedly blinks
+                        // and 5/6 batch validation may fail.
+                        if (!showActive &&
+                            ProjectFolderLinePicker.ActiveDwgView &&
+                            NativeIsoLineSelectOverlay
+                                .HasCompleteUnfilteredProjectSource(
+                                    native, allowActivePresentation: true) &&
+                            _nativeCreateButton is { IsDisposed: false,
+                                                     Enabled: true })
+                        {
+                            string[] nativeChecked = NativeCheckedRouteNames(native);
+                            var selected = new HashSet<string>(selectedBefore,
+                                StringComparer.OrdinalIgnoreCase);
+                            if (nativeChecked.Length == selected.Count &&
+                                new HashSet<string>(nativeChecked,
+                                    StringComparer.OrdinalIgnoreCase)
+                                    .SetEquals(selected))
+                            {
+                                // No source rebuild, no native check event,
+                                // no recovery timer and no BeginUpdate.
+                                ProjectFolderLinePicker.ClearVisibleProjection();
+                                NativeIsoToolbarClickFilter.MarkAllLinesRestored(
+                                    native);
+                                NativeIsoLineSelectOverlay.UpdateDisplayedCount();
+                                _document.Editor.WriteMessage(
+                                    "\nSPTC REV101: instant Show All (" +
+                                    nativeChecked.Length + "/" + selected.Count +
+                                    " checked, native Create=True); " +
+                                    "visual Active projection removed only.");
+                                return true;
+                            }
+                        }
+
                         // REV68: forbid programmatic native checkbox events
                         // during toolbar scope changes from being counted as
                         // intentional user unchecks. The A-08 tag must remain
