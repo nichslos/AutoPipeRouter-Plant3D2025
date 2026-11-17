@@ -1088,6 +1088,12 @@ internal static class ProjectFolderLinePicker
             return false;
         }
         PositionList(_dialog);
+        // REV108: native list changes are asynchronous. An Active
+        // projection can exist in memory without being repainted until an
+        // unrelated Windows event (e.g. Win+Shift+S) invalidates AutoCAD.
+        // Request both an immediate paint and exactly one deferred UI
+        // paint after the native layout/event queue has settled.
+        RefreshActiveProjectionPaint();
         NativeIsoLineSelectOverlay.UpdateDisplayedCount();
         // REV85: if the projected Active row is already checked, Autodesk
         // may not have received a native focus/eligibility event after
@@ -1106,6 +1112,45 @@ internal static class ProjectFolderLinePicker
             "checked=" + nativeExactChecked + ": " +
             string.Join(", ", actualTags));
         return true;
+    }
+
+    // REV108: force the native-parented Active checked list to be visible
+    // immediately after its delayed source projection becomes available.
+    // A deferred second invalidate handles Autodesk's later layout pass.
+    // No native checkbox or Create state changes are performed here.
+    private static void RefreshActiveProjectionPaint()
+    {
+        if (!_activeDwgView ||
+            _lineHost is not { IsDisposed: false, IsHandleCreated: true } host ||
+            _folderLineList is not { IsDisposed: false } list)
+            return;
+
+        long generation = _projectionGeneration;
+        void PaintNow()
+        {
+            if (generation != _projectionGeneration ||
+                !_activeDwgView || _dialog == IntPtr.Zero ||
+                host.IsDisposed || list.IsDisposed) return;
+            PositionList(_dialog);
+            host.BringToFront();
+            if (!host.Visible) host.Show();
+            host.Invalidate(true);
+            list.Invalidate();
+            host.Update();
+            list.Update();
+        }
+        try
+        {
+            PaintNow();
+            host.BeginInvoke((MethodInvoker)(() =>
+            {
+                try { PaintNow(); }
+                catch (InvalidOperationException) { }
+                catch (ObjectDisposedException) { }
+            }));
+        }
+        catch (InvalidOperationException) { }
+        catch (ObjectDisposedException) { }
     }
 
     /// <summary>
