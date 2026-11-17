@@ -1146,11 +1146,9 @@ internal static class ProjectFolderLinePicker
             {
                 try { PaintNow(); }
                 catch (InvalidOperationException) { }
-                catch (ObjectDisposedException) { }
             }));
         }
         catch (InvalidOperationException) { }
-        catch (ObjectDisposedException) { }
     }
 
     /// <summary>
