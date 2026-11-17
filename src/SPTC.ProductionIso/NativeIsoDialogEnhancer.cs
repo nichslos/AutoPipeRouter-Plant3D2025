@@ -66,6 +66,12 @@ internal static class NativeIsoDialogEnhancer
     private static string _rememberedSource = "";
     private static bool _destinationEditedThisDialog;
     private static string? _source;
+    // REV118: the Autodesk Create Production Iso dialog already provides
+    // its own supported "Save Isos to" output directory. For an explicit
+    // custom destination, bind THAT native path before Create instead of
+    // generating to the native folder and deleting files still referenced
+    // by Autodesk's Results and deferred opening operations.
+    private static bool _directCustomOutputAccepted;
     private static Document? _document;
 
     // REV107: The source 3D DWG may be CLOSED while ISO generation and
@@ -1047,6 +1053,23 @@ internal static class NativeIsoDialogEnhancer
                                 "the final REV82 handoff.");
                             return;
                         }
+                        // REV118: for a filtered batch, also configure the
+                        // supported native output path BEFORE PerformClick.
+                        // If unavailable, never fall back to unsafe
+                        // copy-then-delete of Autodesk's native results.
+                        if (!TryPrepareNativeCustomOutput(dialog,
+                                out string outputIssue))
+                        {
+                            Fail(outputIssue);
+                            return;
+                        }
+                        if (!create.Enabled)
+                        {
+                            Fail("Native Create became disabled while " +
+                                 "applying Custom Save Location.");
+                            return;
+                        }
+
                         // Submit ONCE only when exact native check set and
                         // Autodesk eligibility both remain verified.
                         try { timer.Stop(); timer.Dispose(); }
@@ -1134,9 +1157,19 @@ internal static class NativeIsoDialogEnhancer
             if (!_autoCreatePending &&
                 !TryGetCreateSelectionMismatch(_native, out _))
             {
-                // A NEW explicit valid native Create action after a prior
-                // failed batch resets the failure latch. The filter is run
-                // before the button's WinForms MouseDown/Click handlers.
+                // REV118: native Create must point to the FINAL output
+                // folder BEFORE Autodesk submits the batch. If the
+                // native output editor cannot be safely identified,
+                // consume the click instead of generating elsewhere.
+                if (!TryPrepareNativeCustomOutput(_native,
+                        out string outputIssue))
+                {
+                    if (mouseDown) _swallowCreateMouseUp = true;
+                    _createRequested = false;
+                    _batchPreparationFailed = true;
+                    ShowCreateSelectionWarning(outputIssue);
+                    return true;
+                }
                 _batchPreparationFailed = false;
                 return false;
             }
@@ -1475,6 +1508,7 @@ internal static class NativeIsoDialogEnhancer
         _source = null;
         _destination = "";
         _destinationEditedThisDialog = false;
+        _directCustomOutputAccepted = false;
         _launchUtc = DateTime.UtcNow;
         _noWindowTicks = 0;
         _nativeSeen = false;
@@ -1962,18 +1996,37 @@ internal static class NativeIsoDialogEnhancer
             if (results != IntPtr.Zero)
             {
                 _resultsSeen = true;
-                if (!string.IsNullOrWhiteSpace(_destination))
-                    NativeIsoResultsOverlay.BeginSession(_destination);
-                if (_copyTask is null &&
-                    !string.IsNullOrWhiteSpace(_destination) &&
-                    !string.IsNullOrWhiteSpace(_source))
-                    CopyCompletedCore();
+                // REV118: native Results already display the TRUE custom
+                // DWG paths when Autodesk generated directly there. Do
+                // not inject duplicate 'Custom:' rows or hide real
+                // native file links in this native-output mode.
+                if (!_directCustomOutputAccepted)
+                {
+                    if (!string.IsNullOrWhiteSpace(_destination))
+                        NativeIsoResultsOverlay.BeginSession(_destination);
+                    if (_copyTask is null &&
+                        !string.IsNullOrWhiteSpace(_destination) &&
+                        !string.IsNullOrWhiteSpace(_source))
+                        CopyCompletedCore();
+                }
             }
 
             // Start background detection immediately after the original Create dialog
             // closes; copying itself waits for a stable, unlocked output DWG.
             if (_nativeClosedAt != DateTime.MinValue && _copyTask is null)
             {
+                if (_directCustomOutputAccepted)
+                {
+                    // Autodesk owns generation, Results and its native
+                    // completion notification. Nothing to copy/delete:
+                    // this batch was written directly to custom output.
+                    Detach();
+                    _copyState = "Native custom output selected; " +
+                        "Autodesk controls completion";
+                    SafeLog("\nSPTC REV118: native custom output; " +
+                        "no source folder deletion, no extra SPTC toast.");
+                    return;
+                }
                 if (!string.IsNullOrWhiteSpace(_destination) && string.IsNullOrWhiteSpace(_source))
                 {
                     Detach();
@@ -2112,6 +2165,121 @@ internal static class NativeIsoDialogEnhancer
             return true;
         }, IntPtr.Zero);
         return source;
+    }
+
+    // REV118: fail closed when the native Save Isos to editor cannot be
+    // positively located. Never change Project Setup, style files, or an
+    // unrelated textbox by guessing its position/index.
+    private static bool TryPrepareNativeCustomOutput(
+        IntPtr dialog, out string issue)
+    {
+        issue = "";
+        if (string.IsNullOrWhiteSpace(_destination))
+            return true; // absolutely no changes in original-only mode
+
+        try
+        {
+            string destination = Path.GetFullPath(_destination.Trim());
+            if (!Directory.Exists(destination))
+            {
+                issue = "Custom Save Location does not exist: " +
+                    destination + ". Select an existing folder.";
+                return false;
+            }
+
+            // The output field is adjacent to Autodesk's own "Save Isos
+            // to" label. Identify it by both native source text and that
+            // label's screen position; never use a fixed control index.
+            var labels = new List<WinRect>();
+            var textBoxes = new List<TextBoxBase>();
+            EnumChildWindows(dialog, (handle, _) =>
+            {
+                string caption = WindowText(handle).Replace("&", "").Trim();
+                if (caption.StartsWith("Save Isos to",
+                        StringComparison.OrdinalIgnoreCase) &&
+                    GetWindowRect(handle, out WinRect labelBounds))
+                    labels.Add(labelBounds);
+
+                if (Control.FromHandle(handle) is TextBoxBase edit &&
+                    !edit.IsDisposed && edit != _destinationBox &&
+                    edit.IsHandleCreated && edit.Visible &&
+                    edit.Enabled && !edit.ReadOnly)
+                    textBoxes.Add(edit);
+                return true;
+            }, IntPtr.Zero);
+
+            TextBoxBase? nativeEdit = null;
+            int bestScore = 0;
+            bool ambiguous = false;
+            foreach (TextBoxBase edit in textBoxes)
+            {
+                string value = edit.Text.Trim().Trim('"');
+                bool sameSource = !string.IsNullOrWhiteSpace(_source) &&
+                    value.Equals(_source.Trim().Trim('"'),
+                        StringComparison.OrdinalIgnoreCase);
+                bool sameDestination = value.Equals(destination,
+                    StringComparison.OrdinalIgnoreCase);
+                bool nearLabel = false;
+                if (GetWindowRect(edit.Handle, out WinRect bounds))
+                {
+                    nearLabel = labels.Any(label =>
+                        Math.Abs((bounds.Top + bounds.Bottom) / 2 -
+                                 (label.Top + label.Bottom) / 2) <= 28 &&
+                        bounds.Left >= label.Left - 10 &&
+                        bounds.Left < label.Right + 900);
+                }
+                if (!sameSource && !nearLabel && !sameDestination)
+                    continue;
+                // Native source path + label is stronger than either
+                // signal alone. Ignore unrelated editable/search fields.
+                int score = (sameSource ? 100 : 0) +
+                    (nearLabel ? 60 : 0) + (sameDestination ? 40 : 0);
+                if (score > bestScore)
+                {
+                    bestScore = score;
+                    nativeEdit = edit;
+                    ambiguous = false;
+                }
+                else if (score == bestScore)
+                    ambiguous = true;
+            }
+            if (nativeEdit is null || ambiguous)
+            {
+                issue = "SPTC could not uniquely identify the editable " +
+                    "Autodesk 'Save Isos to' field. ISO Create was blocked " +
+                    "to prevent generating to the wrong folder. " +
+                    "Use Autodesk's own Save Isos to Browse button " +
+                    "to select the desired output folder.";
+                return false;
+            }
+
+            if (!nativeEdit.Text.Trim().Trim('"').Equals(destination,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                nativeEdit.Text = destination;
+                // Let WinForms run its normal validation/binding event.
+                // No Project Setup change or disk copy/delete here.
+                nativeEdit.Parent?.Validate();
+            }
+            if (!nativeEdit.Text.Trim().Trim('"').Equals(destination,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                issue = "Autodesk rejected the Custom Save Location. " +
+                    "ISO Create was blocked.";
+                return false;
+            }
+            _directCustomOutputAccepted = true;
+            SafeLog("\nSPTC REV118: native Save Isos to confirmed: " +
+                destination + "; generating directly in custom folder. " +
+                "Original ISO DWGs are not copied or deleted.");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            issue = "Could not set Autodesk native Save Isos to: " +
+                ex.GetBaseException().Message;
+            return false;
+        }
     }
 
     private static void Attach(IntPtr dialog)
@@ -2945,6 +3113,12 @@ internal static class NativeIsoDialogEnhancer
 
     private static void CopyCompletedCore()
     {
+        if (_directCustomOutputAccepted)
+        {
+            SafeLog("\nSPTC REV118: already using native Save Isos to; " +
+                "custom copy/delete not required.");
+            return;
+        }
         if (_copyTask is { IsCompleted: false })
         {
             SafeLog("\nSPTC ISO: Background export is already running.");
