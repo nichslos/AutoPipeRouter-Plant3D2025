@@ -1323,10 +1323,13 @@ internal static class NativeIsoLineSelectOverlay
     // item once, after all saved tags are verified; never force-enable
     // the Create button, and never synthesize checkbox mouse clicks.
     public static bool TryNudgeNativeBatchCreateEligibility(
-        IntPtr dialog, IReadOnlyCollection<string> expectedTags)
+        IntPtr dialog, IReadOnlyCollection<string> expectedTags,
+        bool allowActivePresentation = false)
     {
         if (_dialog != dialog || dialog == IntPtr.Zero ||
-            ProjectFolderLinePicker.HasVisibleProjection)
+            (ProjectFolderLinePicker.HasVisibleProjection &&
+             !(allowActivePresentation &&
+               ProjectFolderLinePicker.ActiveDwgView)))
             return false;
         CheckedListBox? list = FindNativeCheckedList(dialog);
         if (list is null || list.IsDisposed) return false;
@@ -1367,8 +1370,7 @@ internal static class NativeIsoLineSelectOverlay
         if (dialog == IntPtr.Zero || dialog != _dialog ||
             (ProjectFolderLinePicker.HasVisibleProjection &&
              !(allowActivePresentation &&
-               ProjectFolderLinePicker.ActiveDwgView)) ||
-            wantedNames.Count == 0)
+               ProjectFolderLinePicker.ActiveDwgView)))
             return false;
 
         CheckedListBox? list = FindNativeCheckedList(dialog);
@@ -1391,6 +1393,37 @@ internal static class NativeIsoLineSelectOverlay
             .Distinct(StringComparer.OrdinalIgnoreCase).Count();
         if (matched != wanted.Count)
             return false;  // native source not ready; do not create subset
+
+        // REV111: clearing the Active view's last selected tag is a
+        // legitimate user action. REV110 refused an empty saved batch and
+        // left stale native checkmarks behind. Clear at most ONE checked
+        // Autodesk row per guarded timer tick, preserving its event path.
+        // Never set Create.Enabled; verify it separately before Show All.
+        if (wanted.Count == 0)
+        {
+            _restoringSelection = true;
+            try
+            {
+                for (int i = 0; i < list.Items.Count; i++)
+                {
+                    if (!list.GetItemChecked(i)) continue;
+                    ProjectFolderLinePicker.ClickNativeCheckedRow(
+                        list, i, false);
+                    break;
+                }
+                checkedCount = ReadCheckedTags(list).Count;
+                if (checkedCount == 0 && list.SelectedIndex >= 0)
+                    list.ClearSelected();
+                return checkedCount == 0;
+            }
+            catch (Exception ex)
+            {
+                WriteDiagnostic("REV111 empty active selection: " +
+                    ex.GetBaseException().Message);
+                return false;
+            }
+            finally { _restoringSelection = false; }
+        }
 
         _restoringSelection = true;
         try
