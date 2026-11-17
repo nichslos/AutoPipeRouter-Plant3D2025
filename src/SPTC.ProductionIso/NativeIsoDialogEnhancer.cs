@@ -344,6 +344,7 @@ internal static class NativeIsoDialogEnhancer
         var wanted = new HashSet<string>(
             expected, StringComparer.OrdinalIgnoreCase);
         int ticks = 0, attempts = 0, stable = 0;
+        bool nudgedCreateOnce = false;
         var timer = new System.Windows.Forms.Timer { Interval = 180 };
         _quietShowAllTimer = timer;
 
@@ -388,34 +389,53 @@ internal static class NativeIsoDialogEnhancer
                 if (!exact)
                 {
                     stable = 0;
-                    if (attempts < 2)
+                    nudgedCreateOnce = false;
+                    // REV111: the Active projection's checked state is
+                    // durable user intent, but may not yet be committed to
+                    // Autodesk's original full-source list. Commit ONE
+                    // missing native route per timer tick, without removing
+                    // the projected view or forcing the Create button.
+                    // Bound retries by the requested route count.
+                    int maxAttempts = Math.Min(45,
+                        Math.Max(4, expected.Length * 3 + 3));
+                    if (attempts < maxAttempts)
                     {
                         attempts++;
                         NativeIsoLineSelectOverlay.TryApplySavedBatchToNative(
                             dialog, expected, out _, out _,
                             allowActivePresentation: true);
-                        return;
                     }
-                    return; // bounded, never repeat checkbox events
+                    return;
                 }
 
-                // REV106: an EMPTY global selection is valid while
-                // browsing line numbers. Autodesk correctly disables
-                // Create when nothing is checked. Do not block Show All
-                // waiting for an impossible Create.Enabled=True.
-                // Nonempty selections still need the real native button.
-                if (expected.Length > 0 &&
-                    _nativeCreateButton is not { IsDisposed: false,
-                                                 Enabled: true })
+                // REV111: require the real native Create state to match
+                // the exact saved selection before exposing Show All.
+                // Zero checked routes must leave Create disabled; positive
+                // selections must be accepted by Autodesk itself.
+                bool nativeCreateReady = expected.Length == 0
+                    ? _nativeCreateButton is { IsDisposed: false,
+                                               Enabled: false }
+                    : _nativeCreateButton is { IsDisposed: false,
+                                               Enabled: true };
+                if (!nativeCreateReady)
                 {
                     stable = 0;
-                    return; // never force-enable Autodesk Create
+                    if (expected.Length > 0 && !nudgedCreateOnce)
+                    {
+                        nudgedCreateOnce = true;
+                        NativeIsoLineSelectOverlay
+                            .TryNudgeNativeBatchCreateEligibility(
+                                dialog, expected,
+                                allowActivePresentation: true);
+                    }
+                    return; // do not fabricate Create.Enabled
                 }
 
                 if (++stable < 3) return;
                 StopQuietShowAll();
                 ProjectFolderLinePicker.ClearVisibleProjection();
                 NativeIsoToolbarClickFilter.MarkAllLinesRestored(dialog);
+                NativeIsoLineSelectOverlay.CancelScopeSwitch(dialog);
                 NativeIsoLineSelectOverlay.UpdateDisplayedCount();
                 SafeLog(
                     "\nSPTC REV106: Show All stable " + expected.Length +
@@ -1546,14 +1566,13 @@ internal static class NativeIsoDialogEnhancer
                         string[] selectedBefore =
                             NativeIsoLineSelectOverlay.CaptureSelectedTags(native);
 
-                        // REV110: Active -> All is PRESENTATION ONLY,
-                        // regardless of whether Autodesk's transient
-                        // checked rows happen to match the saved ledger.
-                        // Waiting for native Create eligibility here led
-                        // to timed recovery, blinking, and the user's
-                        // A-08 check being rejected after unchecking.
-                        // The Create preflight still demands exact N/N
-                        // checked native routes and real Create.Enabled.
+                        // REV111: Active checkbox clicks update the durable
+                        // route-name ledger, not necessarily Autodesk's
+                        // underlying full-source checked list. The REV110
+                        // view-only Show All path could therefore lose a
+                        // newly checked active line and disable Create.
+                        // Keep the Active overlay visible while the existing
+                        // guarded native commit restores EXACT saved tags.
                         if (!showActive &&
                             ProjectFolderLinePicker.ActiveDwgView &&
                             NativeIsoLineSelectOverlay
@@ -1562,19 +1581,41 @@ internal static class NativeIsoDialogEnhancer
                         {
                             string[] nativeChecked =
                                 NativeCheckedRouteNames(native);
-                            ProjectFolderLinePicker.ClearVisibleProjection();
-                            NativeIsoToolbarClickFilter.MarkAllLinesRestored(
-                                native);
-                            NativeIsoLineSelectOverlay.CancelScopeSwitch(
-                                native);
-                            NativeIsoLineSelectOverlay.UpdateDisplayedCount();
-                            SafeLog(
-                                "\nSPTC REV110: Active -> Show All, view " +
-                                "switch only (" + nativeChecked.Length +
-                                " native checked, " + selectedBefore.Length +
-                                " saved). No Project reload or repeated " +
-                                "native checkbox clicks. Create still " +
-                                "requires exact native preflight.");
+                            var saved = new HashSet<string>(
+                                selectedBefore, StringComparer.OrdinalIgnoreCase);
+                            bool exact = nativeChecked.Length == saved.Count &&
+                                new HashSet<string>(nativeChecked,
+                                    StringComparer.OrdinalIgnoreCase)
+                                    .SetEquals(saved);
+                            bool createReady = saved.Count == 0
+                                ? _nativeCreateButton is { IsDisposed: false,
+                                                           Enabled: false }
+                                : _nativeCreateButton is { IsDisposed: false,
+                                                           Enabled: true };
+                            if (exact && createReady)
+                            {
+                                ProjectFolderLinePicker.ClearVisibleProjection();
+                                NativeIsoToolbarClickFilter.MarkAllLinesRestored(
+                                    native);
+                                NativeIsoLineSelectOverlay.CancelScopeSwitch(native);
+                                NativeIsoLineSelectOverlay.UpdateDisplayedCount();
+                                SafeLog(
+                                    "\nSPTC REV111: Active -> Show All fast path; " +
+                                    nativeChecked.Length + " native checked " +
+                                    "exactly matches saved routes. No native " +
+                                    "checkbox replay or Project reload.");
+                            }
+                            else
+                            {
+                                BeginQuietShowAll(native, selectedBefore);
+                                SafeLog(
+                                    "\nSPTC REV111: Active -> Show All guarded " +
+                                    "native selection synchronization (" +
+                                    nativeChecked.Length + " checked, " +
+                                    selectedBefore.Length + " saved). Active " +
+                                    "overlay retained until actual native " +
+                                    "checkboxes and Create state settle.");
+                            }
                             return true;
                         }
 
