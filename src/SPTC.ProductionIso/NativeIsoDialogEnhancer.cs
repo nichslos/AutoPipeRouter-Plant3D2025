@@ -4,6 +4,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
+using System.Security.Cryptography;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -1370,7 +1371,8 @@ internal static class NativeIsoDialogEnhancer
 
     private sealed record CustomCopyOutput(string Path, bool Existing);
     private sealed record CopyReport(
-        int Copied, int Skipped, string Destination,
+        int Copied, int Skipped, int OriginalsDeleted,
+        int OriginalsRetained, string Destination,
         CustomCopyOutput[] Outputs);
 
     public static void Launch(Document doc)
@@ -1462,7 +1464,7 @@ internal static class NativeIsoDialogEnhancer
                     : savedName;
                 string resultPath = Path.Combine(_destination, actualName);
                 NativeIsoResultsOverlay.ReportCopied(resultPath, existing);
-                _copyState = (existing ? "Existing " : "Copied ") +
+                _copyState = (existing ? "Existing " : "Custom saved ") +
                     actualName + "; monitoring remaining ISOs";
                 SafeLog(
                     "\nSPTC REV57: Custom ISO " +
@@ -1509,8 +1511,10 @@ internal static class NativeIsoDialogEnhancer
                     _lastCopyReport = finished.Result;
                     _copyState = "Completed";
                     SafeLog(
-                        $"\nSPTC ISO: {_lastCopyReport.Copied} DWG(s) copied to {_lastCopyReport.Destination}; " +
-                        $"{_lastCopyReport.Skipped} skipped. Original project files unchanged.");
+                        $"\nSPTC REV113: {_lastCopyReport.Copied} DWG(s) saved to {_lastCopyReport.Destination}; " +
+                        $"{_lastCopyReport.OriginalsDeleted} verified original ISO DWG(s) deleted; " +
+                        $"{_lastCopyReport.OriginalsRetained} original ISO DWG(s) retained " +
+                        $"(skipped/locked/changed/unverified). Other project files unchanged.");
                 }
                 return;
             }
@@ -2078,7 +2082,7 @@ internal static class NativeIsoDialogEnhancer
             {
                 using var picker = new FolderBrowserDialog
                 {
-                    Description = "Choose destination for COPIES of completed Production Isos",
+                    Description = "Choose FINAL destination for completed Production Isos",
                     ShowNewFolderButton = true
                 };
                 if (Directory.Exists(_destination)) picker.SelectedPath = _destination;
@@ -2454,6 +2458,10 @@ internal static class NativeIsoDialogEnhancer
         }
     }
 
+    // REV113: stage current-batch native DWGs in the custom folder,
+    // verify published bytes, then delete ONLY identical, unlocked source
+    // DWGs. Never delete unrelated project/native files.
+    //
     // REV47: safely snapshot ONLY finished native Production Iso DWGs.
     // REV46 held an EXCLUSIVE source FileStream open while copying, which
     // could conflict with Plant 3D's subsequent write/open operations and
@@ -2470,11 +2478,61 @@ internal static class NativeIsoDialogEnhancer
     // destination name already exists, KEEP that user file and skip this
     // copy; do not overwrite or invent _copy1, _copy2, etc. Use an empty
     // destination folder for a fresh run if overwrite was not requested.
+    // REV113: only delete the exact current-batch source DWG when its
+    // published custom copy is still byte-identical and the source is
+    // unchanged/unlocked. Never delete an unrelated preexisting native DWG.
+    private static bool TryDeleteVerifiedNativeIso(
+        string nativeFile, string customFile, long expectedSize,
+        long expectedModifiedTicks, string expectedSha256)
+    {
+        if (!File.Exists(customFile)) return false;
+        byte[] expected = Convert.FromHexString(expectedSha256);
+        using (var saved = new FileStream(
+            customFile, FileMode.Open, FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete))
+        {
+            if (saved.Length != expectedSize ||
+                !CryptographicOperations.FixedTimeEquals(
+                    expected, SHA256.HashData(saved)))
+                return false;
+        }
+
+        if (!File.Exists(nativeFile)) return true;
+        var info = new FileInfo(nativeFile);
+        if (info.Length != expectedSize ||
+            info.LastWriteTimeUtc.Ticks != expectedModifiedTicks)
+            return false;
+
+        // If Autodesk/another process holds this file, exclusive access
+        // fails and the native source is deliberately retained.
+        using (var native = new FileStream(
+            nativeFile, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            if (native.Length != expectedSize ||
+                !CryptographicOperations.FixedTimeEquals(
+                    expected, SHA256.HashData(native)))
+                return false;
+        }
+
+        info.Refresh();
+        if (!info.Exists || info.Length != expectedSize ||
+            info.LastWriteTimeUtc.Ticks != expectedModifiedTicks)
+            return false;
+        File.Delete(nativeFile);
+        return !File.Exists(nativeFile);
+    }
+
     private static async Task<CopyReport> CopyFilesAsync(
         string source, string targetRoot, DateTime sinceUtc,
         bool overwriteExisting, IReadOnlyCollection<string> selectedTags)
     {
-        int copied = 0, skipped = 0;
+        int copied = 0, skipped = 0, originalsDeleted = 0;
+        // Only a byte-verified, newly published custom ISO can enter the
+        // deletion ledger. A skipped existing custom result is never a move.
+        var pendingOriginalCleanup = new Dictionary<string,
+            (string Custom, long Size, long ModifiedTicks,
+             string Sha256, DateTime PublishedUtc, DateTime LastAttemptUtc)>(
+            StringComparer.OrdinalIgnoreCase);
         // REV107: worker-owned ledger survives AutoCAD MDI document
         // changes. On completion replay every verified custom result,
         // even if some real-time UI notifications were missed.
@@ -2682,6 +2740,21 @@ internal static class NativeIsoDialogEnhancer
                                 await output.FlushAsync().ConfigureAwait(false);
                             }
 
+                            // REV113: compare source and staged DWG bytes
+                            // before final publication or source deletion.
+                            input.Position = 0;
+                            byte[] sourceHash = SHA256.HashData(input);
+                            using (var staged = new FileStream(
+                                temp, FileMode.Open, FileAccess.Read,
+                                FileShare.Read))
+                            {
+                                if (staged.Length != version.Size ||
+                                    !CryptographicOperations.FixedTimeEquals(
+                                        sourceHash, SHA256.HashData(staged)))
+                                    throw new IOException(
+                                        "Custom ISO staging checksum mismatch.");
+                            }
+
                             // Reject a snapshot if Autodesk edited the DWG
                             // while we were reading it. Never publish a
                             // potentially incomplete or mid-write copy.
@@ -2705,6 +2778,23 @@ internal static class NativeIsoDialogEnhancer
                             string published = PublishCustomSnapshot(
                                 temp, destination, allowCustomOverwrite);
                             temp = null;
+
+                            // Verify the published pathname, including
+                            // numbered outputs when the base DWG was locked.
+                            using (var publishedRead = new FileStream(
+                                published, FileMode.Open, FileAccess.Read,
+                                FileShare.ReadWrite | FileShare.Delete))
+                            {
+                                if (publishedRead.Length != version.Size ||
+                                    !CryptographicOperations.FixedTimeEquals(
+                                        sourceHash, SHA256.HashData(publishedRead)))
+                                    throw new IOException(
+                                        "Published custom ISO checksum mismatch.");
+                            }
+                            pendingOriginalCleanup[file] = (
+                                published, version.Size, version.Modified,
+                                Convert.ToHexString(sourceHash),
+                                DateTime.UtcNow, DateTime.MinValue);
                             processedFiles.Add(file);
                             copied++;
                             lastProcessed = DateTime.UtcNow;
@@ -2745,6 +2835,38 @@ internal static class NativeIsoDialogEnhancer
                 }
                 catch (UnauthorizedAccessException) { throw; }
 
+                // REV113: delete only fully verified generated originals,
+                // after Autodesk's file activity settles. Locked, changed
+                // or unreadable sources stay untouched.
+                foreach (var item in pendingOriginalCleanup.ToArray())
+                {
+                    var pending = item.Value;
+                    DateTime cleanupNow = DateTime.UtcNow;
+                    if ((cleanupNow - pending.PublishedUtc).TotalSeconds < 12 ||
+                        (cleanupNow - pending.LastAttemptUtc).TotalSeconds < 9 ||
+                        (cleanupNow - new DateTime(
+                            System.Threading.Interlocked.Read(
+                                ref lastNativeChangeTicks),
+                            DateTimeKind.Utc)).TotalSeconds < 5)
+                        continue;
+
+                    pendingOriginalCleanup[item.Key] = pending with {
+                        LastAttemptUtc = cleanupNow
+                    };
+                    try
+                    {
+                        if (TryDeleteVerifiedNativeIso(
+                            item.Key, pending.Custom, pending.Size,
+                            pending.ModifiedTicks, pending.Sha256))
+                        {
+                            pendingOriginalCleanup.Remove(item.Key);
+                            originalsDeleted++;
+                        }
+                    }
+                    catch (IOException) { } // sharing lock/network failure
+                    catch (UnauthorizedAccessException) { } // permission failure
+                }
+
                 // REV58: Never stop while a selected line is still missing.
                 // Autodesk can have gaps of 25+ seconds between ISO sheets.
                 // Once ALL expected native line groups are processed, allow
@@ -2755,9 +2877,12 @@ internal static class NativeIsoDialogEnhancer
                     expectedTags.All(completedTags.Contains);
                 double idleSeconds = (DateTime.UtcNow - lastProcessed)
                     .TotalSeconds;
-                if ((allKnownTagsFinished && idleSeconds >= 12) ||
+                bool batchQuiet = (allKnownTagsFinished && idleSeconds >= 12) ||
                     (expectedTags.Count == 0 &&
-                     (copied > 0 || skipped > 0) && idleSeconds >= 120))
+                     (copied > 0 || skipped > 0) && idleSeconds >= 120);
+                // Bounded additional cleanup window for file locks.
+                if (batchQuiet &&
+                    (pendingOriginalCleanup.Count == 0 || idleSeconds >= 75))
                     break;
 
                 // REV104: FileSystemWatcher is a wake hint, never a
@@ -2771,7 +2896,9 @@ internal static class NativeIsoDialogEnhancer
         finally { watcher?.Dispose(); }
 
         return new CopyReport(
-            copied, skipped, targetRoot, completedOutputs.ToArray());
+            copied, skipped, originalsDeleted,
+            pendingOriginalCleanup.Count + skipped,
+            targetRoot, completedOutputs.ToArray());
     }
 
     private static void EnsureMonitor()
@@ -2796,10 +2923,12 @@ internal static class NativeIsoDialogEnhancer
             "\nSPTC ISO STATUS" +
             "\nNative output: " + (_source ?? "(not detected)") +
             "\nCustom folder: " + (string.IsNullOrEmpty(_destination) ? "(empty)" : _destination) +
-            "\nCopy state: " + _copyState +
+            "\nCustom transfer state: " + _copyState +
             "\nResults dialog observed: " + _resultsSeen +
             (_lastCopyReport is null ? "" :
-                $"\nLast copy: {_lastCopyReport.Copied} succeeded, {_lastCopyReport.Skipped} skipped"));
+                $"\nLast custom transfer: {_lastCopyReport.Copied} saved, " +
+                $"{_lastCopyReport.OriginalsDeleted} originals deleted, " +
+                $"{_lastCopyReport.OriginalsRetained} originals retained"));
     }
 
     // Preserve the public command entry point but never rely on its
@@ -2850,7 +2979,7 @@ internal static class NativeIsoDialogEnhancer
                 selectedTags));
             EnsureMonitor();
             SafeLog(
-                "\nSPTC ISO: Monitoring completed DWGs for custom copy (background)." +
+                "\nSPTC REV113: Monitoring completed DWGs for verified custom transfer and source cleanup." +
                 " Custom destination overwrite=" + (_overwriteRequested ? "YES" : "NO") + ".");
         }
         catch (Exception ex)
