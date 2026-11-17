@@ -1376,8 +1376,13 @@ internal static class NativeIsoLineSelectOverlay
             // check while handling later clicks (the REV80-REV93 5/6
             // failure). Commit at most ONE missing route per 180ms caller
             // tick; return incomplete until the exact full set is stable.
-            foreach (int index in indices)
+            // REV108: in Autodesk the first checked result may be reset
+            // by native events for later rows. Commit in reverse verified
+            // ORIGINAL row order so the lowest-index selected route is
+            // validated LAST. Never use route strings or hardcoded names.
+            for (int position = indices.Count - 1; position >= 0; position--)
             {
+                int index = indices[position];
                 if (list.GetItemChecked(index)) continue;
                 if (index < 0 || index >= list.Items.Count ||
                     !list.GetItemText(list.Items[index]).Trim().Equals(
