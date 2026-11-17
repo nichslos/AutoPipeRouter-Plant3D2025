@@ -1566,13 +1566,14 @@ internal static class NativeIsoDialogEnhancer
                         string[] selectedBefore =
                             NativeIsoLineSelectOverlay.CaptureSelectedTags(native);
 
-                        // REV111: Active checkbox clicks update the durable
-                        // route-name ledger, not necessarily Autodesk's
-                        // underlying full-source checked list. The REV110
-                        // view-only Show All path could therefore lose a
-                        // newly checked active line and disable Create.
-                        // Keep the Active overlay visible while the existing
-                        // guarded native commit restores EXACT saved tags.
+                        // REV112: Show All is a VIEW change. REV111 waited for
+                        // native checkbox/Create recovery before closing the
+                        // Active presentation. When Autodesk reset a checked
+                        // route, the guarded timer timed out and trapped the
+                        // user in Show Active (often Create.Enabled=False).
+                        // Always reveal Autodesk's full source immediately;
+                        // reconcile by exact saved TAGS on the visible native
+                        // list, with the existing bounded recovery routine.
                         if (!showActive &&
                             ProjectFolderLinePicker.ActiveDwgView &&
                             NativeIsoLineSelectOverlay
@@ -1592,29 +1593,44 @@ internal static class NativeIsoDialogEnhancer
                                                            Enabled: false }
                                 : _nativeCreateButton is { IsDisposed: false,
                                                            Enabled: true };
+
+                            StopQuietShowAll();
+                            ProjectFolderLinePicker.ClearVisibleProjection();
+                            NativeIsoToolbarClickFilter.MarkAllLinesRestored(
+                                native);
+
                             if (exact && createReady)
                             {
-                                ProjectFolderLinePicker.ClearVisibleProjection();
-                                NativeIsoToolbarClickFilter.MarkAllLinesRestored(
+                                NativeIsoLineSelectOverlay.CancelScopeSwitch(
                                     native);
-                                NativeIsoLineSelectOverlay.CancelScopeSwitch(native);
                                 NativeIsoLineSelectOverlay.UpdateDisplayedCount();
                                 SafeLog(
-                                    "\nSPTC REV111: Active -> Show All fast path; " +
-                                    nativeChecked.Length + " native checked " +
-                                    "exactly matches saved routes. No native " +
+                                    "\nSPTC REV112: Show All immediate; " +
+                                    "native " + nativeChecked.Length + "/" +
+                                    saved.Count + " exact checked and " +
+                                    "Autodesk Create state valid. No native " +
                                     "checkbox replay or Project reload.");
                             }
                             else
                             {
-                                BeginQuietShowAll(native, selectedBefore);
+                                // REV112: recover only after the user's full
+                                // native list is visible. This avoids repeated
+                                // attempts to check hidden source rows while
+                                // the Active projection is on screen.
+                                // Create remains Autodesk-controlled; the
+                                // existing guarded Create preflight rejects
+                                // partial selections.
+                                NativeIsoLineSelectOverlay
+                                    .ScheduleModeChangeRecovery(
+                                        native, selectedBefore);
                                 SafeLog(
-                                    "\nSPTC REV111: Active -> Show All guarded " +
-                                    "native selection synchronization (" +
-                                    nativeChecked.Length + " checked, " +
-                                    selectedBefore.Length + " saved). Active " +
-                                    "overlay retained until actual native " +
-                                    "checkboxes and Create state settle.");
+                                    "\nSPTC REV112: Show All immediate (" +
+                                    nativeChecked.Length + " native checked, " +
+                                    saved.Count + " saved, Create.Enabled=" +
+                                    (_nativeCreateButton?.Enabled.ToString()
+                                        ?? "unknown") +
+                                    "); bounded native synchronization " +
+                                    "started on visible All Project list.");
                             }
                             return true;
                         }
