@@ -1492,6 +1492,87 @@ internal static class NativeIsoLineSelectOverlay
         finally { _restoringSelection = false; }
     }
 
+    // REV115: alternative to REV94's repeated simulated mouse clicks.
+    // Autodesk sometimes rolls back a just-clicked first route after
+    // filter-clear/SelectedIndexChanged (e.g. native 3/4 while the saved
+    // route ledger still reads 4/4). For the Create preflight ONLY, attempt
+    // one missing checked row through the ORIGINAL CheckedListBox's managed
+    // ItemCheck path, without synthetic mouse down/up events.
+    //
+    // No row indices or tags are hardcoded. Do not modify checked extras,
+    // incomplete lists, or a folder/active projection, and NEVER enable
+    // native Create manually. Caller must revalidate exact state on later
+    // timer ticks before invoking Autodesk Create.
+    public static bool TryCommitOneMissingNativeBatchWithoutMouse(
+        IntPtr dialog, IReadOnlyCollection<string> expectedTags,
+        out string repairedTag, out int checkedCount)
+    {
+        repairedTag = "";
+        checkedCount = 0;
+        if (dialog == IntPtr.Zero || dialog != _dialog ||
+            ProjectFolderLinePicker.HasVisibleProjection ||
+            !HasCompleteUnfilteredProjectSource(dialog) ||
+            expectedTags.Count == 0)
+            return false;
+
+        CheckedListBox? list = FindNativeCheckedList(dialog);
+        if (list is null || list.IsDisposed || list.Items.Count == 0)
+            return false;
+
+        var wanted = new HashSet<string>(expectedTags,
+            StringComparer.OrdinalIgnoreCase);
+        int missingIndex = -1, matched = 0;
+        for (int i = 0; i < list.Items.Count; i++)
+        {
+            string tag = list.GetItemText(list.Items[i]).Trim();
+            bool requested = wanted.Contains(tag);
+            bool checkedNow = list.GetItemChecked(i);
+            if (requested) matched++;
+            if (checkedNow) checkedCount++;
+            if (checkedNow && !requested)
+                return false; // unexpected native check: never mask it
+            if (requested && !checkedNow)
+            {
+                if (missingIndex >= 0)
+                    return false; // only ONE missing route per correction
+                missingIndex = i;
+            }
+        }
+        if (matched != wanted.Count || missingIndex < 0)
+            return false;
+
+        repairedTag = list.GetItemText(list.Items[missingIndex]).Trim();
+        _restoringSelection = true;
+        try
+        {
+            // Genuine CheckedListBox ItemCheck/SelectedIndexChanged events,
+            // with no Win32 mouse replay or repeated Create-state writes.
+            if (list.SelectedIndex == missingIndex)
+                list.ClearSelected();
+            list.SelectedIndex = missingIndex;
+            if (!list.GetItemChecked(missingIndex))
+                list.SetItemChecked(missingIndex, true);
+
+            checkedCount = 0;
+            for (int i = 0; i < list.Items.Count; i++)
+            {
+                string tag = list.GetItemText(list.Items[i]).Trim();
+                bool checkedNow = list.GetItemChecked(i);
+                if (checkedNow) checkedCount++;
+                if (checkedNow != wanted.Contains(tag))
+                    return false;
+            }
+            return checkedCount == wanted.Count;
+        }
+        catch (Exception ex)
+        {
+            WriteDiagnostic("REV115 single native ItemCheck repair: " +
+                ex.GetBaseException().Message);
+            return false;
+        }
+        finally { _restoringSelection = false; }
+    }
+
     public static string[] CaptureSelectedTags(IntPtr dialog)
     {
         if (dialog != _dialog || dialog == IntPtr.Zero)
