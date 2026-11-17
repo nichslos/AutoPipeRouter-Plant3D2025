@@ -1546,60 +1546,35 @@ internal static class NativeIsoDialogEnhancer
                         string[] selectedBefore =
                             NativeIsoLineSelectOverlay.CaptureSelectedTags(native);
 
-                        // REV100: Active in REV98+ is only a ONE-LINE
-                        // visual projection over the full Autodesk list.
-                        // When the original native 432 rows are still
-                        // complete and exactly match the saved checked tags,
-                        // Show All only needs to remove that visual overlay.
-                        // Do it BEFORE BeginScopeSwitch/refresh/checkbox
-                        // timers: otherwise a valid A-08 repeatedly blinks
-                        // and 5/6 batch validation may fail.
-                        if (!showActive &&
-                            ProjectFolderLinePicker.ActiveDwgView &&
-                            NativeIsoLineSelectOverlay
-                                .HasCompleteUnfilteredProjectSource(
-                                    native, allowActivePresentation: true) &&
-                            (selectedBefore.Length == 0 ||
-                             _nativeCreateButton is { IsDisposed: false,
-                                                      Enabled: true }))
-                        {
-                            string[] nativeChecked = NativeCheckedRouteNames(native);
-                            var selected = new HashSet<string>(selectedBefore,
-                                StringComparer.OrdinalIgnoreCase);
-                            if (nativeChecked.Length == selected.Count &&
-                                new HashSet<string>(nativeChecked,
-                                    StringComparer.OrdinalIgnoreCase)
-                                    .SetEquals(selected))
-                            {
-                                // No source rebuild, no native check event,
-                                // no recovery timer and no BeginUpdate.
-                                ProjectFolderLinePicker.ClearVisibleProjection();
-                                NativeIsoToolbarClickFilter.MarkAllLinesRestored(
-                                    native);
-                                NativeIsoLineSelectOverlay.UpdateDisplayedCount();
-                                SafeLog(
-                                    "\nSPTC REV106: instant Show All (" +
-                                    nativeChecked.Length + "/" + selected.Count +
-                                    " checked, native Create=" +
-                                    (_nativeCreateButton?.Enabled.ToString() ??
-                                     "unknown") +
-                                    "); visual Active projection removed only.");
-                                return true;
-                            }
-                        }
-
-                        // REV101: if the complete 432-row native source
-                        // exists but A-08 is temporarily 5/6 after another
-                        // manual search, repair it BEHIND the active single-
-                        // row presentation. Don't reveal a blinking native
-                        // checkbox or restart the whole Project data query.
+                        // REV110: Active -> All is PRESENTATION ONLY,
+                        // regardless of whether Autodesk's transient
+                        // checked rows happen to match the saved ledger.
+                        // Waiting for native Create eligibility here led
+                        // to timed recovery, blinking, and the user's
+                        // A-08 check being rejected after unchecking.
+                        // The Create preflight still demands exact N/N
+                        // checked native routes and real Create.Enabled.
                         if (!showActive &&
                             ProjectFolderLinePicker.ActiveDwgView &&
                             NativeIsoLineSelectOverlay
                                 .HasCompleteUnfilteredProjectSource(
                                     native, allowActivePresentation: true))
                         {
-                            BeginQuietShowAll(native, selectedBefore);
+                            string[] nativeChecked =
+                                NativeCheckedRouteNames(native);
+                            ProjectFolderLinePicker.ClearVisibleProjection();
+                            NativeIsoToolbarClickFilter.MarkAllLinesRestored(
+                                native);
+                            NativeIsoLineSelectOverlay.CancelScopeSwitch(
+                                native);
+                            NativeIsoLineSelectOverlay.UpdateDisplayedCount();
+                            SafeLog(
+                                "\nSPTC REV110: Active -> Show All, view " +
+                                "switch only (" + nativeChecked.Length +
+                                " native checked, " + selectedBefore.Length +
+                                " saved). No Project reload or repeated " +
+                                "native checkbox clicks. Create still " +
+                                "requires exact native preflight.");
                             return true;
                         }
 
