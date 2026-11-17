@@ -222,15 +222,6 @@ internal static class NativeIsoResultsOverlay
     private const string CustomFolderLabel =
         "Open drawing folder in Windows Explorer";
 
-    // REV114: only original Autodesk "File:" child result links for a
-    // route with verified custom output may be hidden from Results UI.
-    // Never hide error messages, route headings, or other status nodes.
-    private static bool IsNativeFileResult(string label) =>
-        label.TrimStart().StartsWith("File:",
-            StringComparison.OrdinalIgnoreCase);
-    private static bool IsOriginalFolderResult(string label) =>
-        label.Trim().Equals(CustomFolderLabel,
-            StringComparison.OrdinalIgnoreCase);
     private static string NativeLinkLabel(
         string path, bool openFolder, bool separator = false) =>
         separator ? "" : openFolder ? CustomFolderLabel : CustomLabel(path);
@@ -635,7 +626,8 @@ internal static class NativeIsoResultsOverlay
         }
         if (!changed)
         {
-            HideManagedNativeFileRows(desired.Keys);
+            // REV120: keep every Autodesk original File / folder
+            // result row visible beside the verified custom links.
             return;
         }
 
@@ -681,10 +673,9 @@ internal static class NativeIsoResultsOverlay
                 if (!parent.IsExpanded) parent.Expand();
             }
 
-            // REV114: remove ORIGINAL File: hyperlink ROWS from this
-            // transient Results TreeView after matching custom hyperlinks
-            // exist. The generated native DWG files are NOT modified here.
-            HideManagedNativeFileRows(desired.Keys);
+            // REV120: preserve Autodesk's original File: and Explorer
+            // rows and append SPTC Custom links only. No native rows
+            // removed, regardless of custom destination.
         }
         finally
         {
@@ -697,30 +688,6 @@ internal static class NativeIsoResultsOverlay
                     tree.TopNode = previousTop;
             }
             catch (Exception) { }
-        }
-    }
-
-    // UI-only hide for managed Autodesk Results. Never remove an original
-    // File: link unless that route already has SPTC custom result links.
-    private static void HideManagedNativeFileRows(
-        IEnumerable<TreeNode> customResultParents)
-    {
-        foreach (TreeNode parent in customResultParents)
-        {
-            if (parent.TreeView is null ||
-                !parent.Nodes.Cast<TreeNode>().Any(node =>
-                    node.Tag is CustomResultLink))
-                continue;
-            for (int i = parent.Nodes.Count - 1; i >= 0; i--)
-            {
-                TreeNode item = parent.Nodes[i];
-                if (item.Tag is CustomResultLink ||
-                    item.Nodes.Count != 0 ||
-                    !(IsNativeFileResult(item.Text) ||
-                      IsOriginalFolderResult(item.Text)))
-                    continue;
-                item.Remove();
-            }
         }
     }
 
@@ -1217,35 +1184,10 @@ internal static class NativeIsoResultsOverlay
             itemsChanged = true;
         }
 
-        // REV114: remove only Autodesk's red original "File:" hyperlinks
-        // from the temporary Results tree when a verified custom output
-        // was inserted for that same route. Keep native route parents,
-        // statuses, errors and the custom links in place.
-        // Do not touch the underlying DWGs; REV113 transfer safety applies.
-        foreach (var (parent, _) in required)
-        {
-            if (!_winLinks.Values.Any(link => link.Parent == parent &&
-                    !link.OpenFolder && !link.IsSeparator))
-                continue;
-
-            IntPtr child = WinNext(tree, TVGN_CHILD, parent);
-            for (int i = 0; child != IntPtr.Zero && i < 10000; i++)
-            {
-                IntPtr next = WinNext(tree, TVGN_NEXT, child);
-                if (!_winLinks.ContainsKey(child) &&
-                    (IsNativeFileResult(NativeItemText(tree, child)) ||
-                     IsOriginalFolderResult(NativeItemText(tree, child))))
-                {
-                    RECT? rect = NativeItemRect(tree, child, true);
-                    if (rect is not null && rect.Value.Left > 0)
-                        _nativeFileTextX[parent] = rect.Value.Left;
-                    if (SendNative(tree, TVM_DELETEITEM, IntPtr.Zero,
-                        child) != IntPtr.Zero)
-                        itemsChanged = true;
-                }
-                child = next;
-            }
-        }
+        // REV120: retain ALL Autodesk native result rows (File: and
+        // Open drawing folder in Windows Explorer). Show SPTC Custom
+        // links immediately after the originals without touching any
+        // native item handles, user files, or source directories.
 
         if (itemsChanged)
             DrawNativeCustomLabels(tree);
