@@ -799,7 +799,7 @@ internal static class NativeIsoDialogEnhancer
                 int readySamples = 0;
                 bool appliedOnce = false;
                 bool nudgedOnce = false;
-                int repairAttempts = 0;
+                bool alternateRepairAttempted = false;
                 string lastNativeSignature = "";
                 // REV80: one native selection write, not a 432-checkbox
                 // reconciliation repeated 35 times on the UI thread.
@@ -915,7 +915,7 @@ internal static class NativeIsoDialogEnhancer
                                 afterAppliedPolls = 0;
                                 readySamples = 0;
                                 nudgedOnce = false;
-                                repairAttempts = 0;
+                                alternateRepairAttempted = false;
                                 SafeLog(
                                     "\nSPTC REV108: native rows replaced " +
                                     "after checkbox commit; waiting for " +
@@ -962,39 +962,51 @@ internal static class NativeIsoDialogEnhancer
                                 .SetEquals(requested))
                         {
                             readySamples = 0;
-                            // REV81: Autodesk may asynchronously reset one
-                            // checked row after releasing the scope guard.
-                            // Reconcile exactly once, then verify on later
-                            // ticks; NEVER submit an incomplete batch.
+                            // REV115: repeated REV94 simulated clicks on
+                            // the same missing tag (e.g. 002) temporarily
+                            // produce Checked=True and then Autodesk resets
+                            // the item again, causing endless 3/4 -> 4/4
+                            // oscillation. Do not replay native mouse clicks.
+                            // Try exactly ONE original CheckedListBox managed
+                            // ItemCheck correction after a stable full-source
+                            // mismatch, then observe without further writes.
                             if (afterAppliedPolls > 5)
                             {
-                                if (++repairAttempts > 4)
+                                var found = new HashSet<string>(
+                                    verified, StringComparer.OrdinalIgnoreCase);
+                                string[] missing = requested
+                                    .Where(t => !found.Contains(t)).ToArray();
+                                if (!alternateRepairAttempted)
                                 {
-                                    var found = new HashSet<string>(
-                                        verified, StringComparer.OrdinalIgnoreCase);
-                                    string missingTags = string.Join(", ",
-                                        requested.Where(t => !found.Contains(t)));
-                                    Fail("Native checked selection unstable (" +
-                                        checkedCount + "/" + requested.Length +
-                                        "). Missing: " + missingTags + ".");
+                                    alternateRepairAttempted = true;
+                                    bool corrected = NativeIsoLineSelectOverlay
+                                        .TryCommitOneMissingNativeBatchWithoutMouse(
+                                            dialog, requested,
+                                            out string correctedTag,
+                                            out int correctedChecked);
+                                    SafeLog(
+                                        "\nSPTC REV115: guarded single native " +
+                                        "ItemCheck repair, route=" +
+                                        (correctedTag.Length == 0
+                                            ? "(none)" : correctedTag) +
+                                        ", result=" + corrected +
+                                        ", checked=" + correctedChecked +
+                                        "/" + requested.Length +
+                                        ", previouslyMissing=" +
+                                        string.Join(", ", missing) + ".");
+                                    // Whether Autodesk accepted the action
+                                    // or deferred it, do not force a second
+                                    // click in the same source epoch.
+                                    afterAppliedPolls = 0;
                                     return;
                                 }
-                                bool repaired = NativeIsoLineSelectOverlay
-                                    .TryApplySavedBatchToNative(dialog, requested,
-                                        out int repairMatched, out int repairChecked);
-                                SafeLog(
-                                    "\nSPTC REV82: guarded native batch repair #" +
-                                    repairAttempts + " " +
-                                    repairMatched + "/" + requested.Length +
-                                    ", checked=" + repairChecked +
-                                    ", applied=" + repaired + ".");
-                                if (!repaired || repairChecked != requested.Length)
-                                {
-                                    Fail("Native batch could not be repaired (" +
-                                        repairChecked + "/" + requested.Length + ").");
-                                    return;
-                                }
-                                afterAppliedPolls = 0;
+
+                                Fail("Native checked selection unstable (" +
+                                    checkedCount + "/" + requested.Length +
+                                    ") after one guarded non-mouse repair. " +
+                                    "Missing: " + string.Join(", ", missing) +
+                                    ". Native Create was not invoked.");
+                                return;
                             }
                             return;
                         }
@@ -1015,7 +1027,11 @@ internal static class NativeIsoDialogEnhancer
                             return;
                         }
 
-                        if (++readySamples < 2) return;
+                        // REV115: require the exact native batch and real
+                        // Create eligibility to persist across multiple
+                        // settled UI polls after any native correction.
+                        // Do not submit on an instant Checked=True snapshot.
+                        if (++readySamples < 6) return;
                         // REV82: end recovery guard at the last possible point,
                         // after two exact native 6/6 + enabled samples.
                         // No timer tick can intervene before native PerformClick.
