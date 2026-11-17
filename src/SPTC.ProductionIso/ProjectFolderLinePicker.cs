@@ -139,7 +139,18 @@ internal static class ProjectFolderLinePicker
             if (!HasVisibleProjection ||
                 _folderLineList is not { IsDisposed: false })
                 return null;
-            try { return VisibleEntries.Count(GetNativeChecked); }
+            try
+            {
+                // REV110: Active is a read-only projection. Its checkbox
+                // presentation follows the user's selected-tag ledger;
+                // Autodesk's native checkbox state is checked separately
+                // and must never be inferred from this visible tally.
+                if (_activeDwgView && _fullSourceActivePresentation)
+                    return VisibleEntries.Count(row =>
+                        NativeIsoLineSelectOverlay.IsSessionTagSelected(
+                            row.Tag));
+                return VisibleEntries.Count(GetNativeChecked);
+            }
             catch (Exception) { return null; }
         }
     }
@@ -1640,6 +1651,20 @@ internal static class ProjectFolderLinePicker
                     if (displayed.GetItemChecked(displayIndex) != desired)
                         return;
 
+                    if (_activeDwgView && _fullSourceActivePresentation)
+                    {
+                        // REV110: do NOT send a synthetic native checkbox
+                        // click from the Active read-only projection.
+                        // Native Autodesk's internal event can reject the
+                        // second A-08 check after an uncheck (requested=True,
+                        // actual=False), repeatedly resetting the visible
+                        // checkbox. Preserve the user's exact tag intent.
+                        NativeIsoLineSelectOverlay
+                            .RecordActiveProjectionSelection(
+                                new[] { nativeRow.Tag }, desired);
+                        return;
+                    }
+
                     // REV41: the REV39 programmatic SetItemChecked path
                     // updates the check icon but can leave Autodesk's native
                     // Create eligibility disabled for ONE folder line. Send
@@ -1759,6 +1784,14 @@ internal static class ProjectFolderLinePicker
         }
         finally { _updating = false; }
 
+        if (_activeDwgView && _fullSourceActivePresentation)
+        {
+            NativeIsoLineSelectOverlay.RecordActiveProjectionSelection(
+                rows.Skip(start).Take(end - start + 1)
+                    .Select(row => row.Tag), desired);
+            return;
+        }
+
         // Commit programmatic native items first, then a real native mouse
         // event on the LAST row that actually changes. This also covers
         // cases where the clicked endpoint was already checked.
@@ -1822,6 +1855,13 @@ internal static class ProjectFolderLinePicker
                 displayed.SetItemChecked(i, value);
         }
         finally { _updating = false; }
+
+        if (_activeDwgView && _fullSourceActivePresentation)
+        {
+            NativeIsoLineSelectOverlay.RecordActiveProjectionSelection(
+                targetRows.Select(row => row.Tag), value);
+            return true;
+        }
 
         // REV26: Same deferred native event path for Select All as for a
         // single row click; never send native mouse messages recursively from
