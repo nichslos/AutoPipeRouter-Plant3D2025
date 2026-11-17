@@ -1067,9 +1067,14 @@ internal static class ProjectFolderLinePicker
             // All Project native source, keep saved checks outside A-08.
             // Clearing them made Autodesk Create disabled despite Selected:6.
             // The existing folder projection keeps its original behavior.
-            if (actual != desired &&
-                (!preserveOtherCheckedNativeRoutes ||
-                 allowed.Contains(row.Tag)))
+            // REV109: a scope switch is VISUAL only. For Active view
+            // preserve every native checkbox (including selected lines
+            // outside the current DWG). The old path clicked a missing
+            // active check while entering the view and could start an
+            // Autodesk row/event reset cascade. Only an explicit user
+            // checkbox gesture or the verified Create preflight may
+            // synchronize the underlying original rows.
+            if (!preserveOtherCheckedNativeRoutes && actual != desired)
                 SetNativeChecked(row, desired, userAction: desired);
             if (allowed.Contains(row.Tag) && GetNativeChecked(row))
                 nativeExactChecked = true;
@@ -1514,7 +1519,17 @@ internal static class ProjectFolderLinePicker
             foreach (var entry in entries)
             {
                 int i = _folderLineList.Items.Add(entry.Tag);
-                _folderLineList.SetItemChecked(i, GetNativeChecked(entry));
+                // REV109: Active display should reflect the durable
+                // user-selection ledger even when Autodesk's native
+                // checked rows are temporarily lagging after a search.
+                // This is DISPLAY only; real Create still validates the
+                // exact underlying native checked set before submission.
+                bool visuallySelected =
+                    _activeDwgView && _fullSourceActivePresentation
+                        ? NativeIsoLineSelectOverlay.IsSessionTagSelected(
+                            entry.Tag)
+                        : GetNativeChecked(entry);
+                _folderLineList.SetItemChecked(i, visuallySelected);
             }
         }
         finally { _updating = false; }
