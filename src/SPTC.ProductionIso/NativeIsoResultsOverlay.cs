@@ -132,7 +132,9 @@ internal static class NativeIsoResultsOverlay
                 // far to the right of the visible blue hyperlink).
                 IntPtr item = HitVisibleCustomLabel(_tree, message.LParam);
                 IntPtr nativeRow = HitNativeItem(_tree, message.LParam);
-                if (item == IntPtr.Zero && _winLinks.ContainsKey(nativeRow))
+                if (item == IntPtr.Zero &&
+                    (_winLinks.ContainsKey(nativeRow) ||
+                     IsCustomRowWhitespace(_tree, message.LParam)))
                 {
                     message.Result = IntPtr.Zero;
                     return; // whitespace on custom row: never open a DWG
@@ -226,9 +228,19 @@ internal static class NativeIsoResultsOverlay
     private static bool IsNativeFileResult(string label) =>
         label.TrimStart().StartsWith("File:",
             StringComparison.OrdinalIgnoreCase);
+    private static bool IsOriginalFolderResult(string label) =>
+        label.Trim().Equals(CustomFolderLabel,
+            StringComparison.OrdinalIgnoreCase);
     private static string NativeLinkLabel(
         string path, bool openFolder, bool separator = false) =>
         separator ? "" : openFolder ? CustomFolderLabel : CustomLabel(path);
+    // Native Autodesk TreeView painting otherwise draws our Explorer
+    // text underneath its shifted SPTC underlined owner-drawn caption.
+    private static string NativeStorageLabel(
+        string path, bool openFolder, bool separator = false) =>
+        openFolder && !separator ? "\u200B" :
+        NativeLinkLabel(path, openFolder, separator);
+
     private static string CustomLinkTarget(string dwg, bool openFolder) =>
         openFolder ? Path.GetDirectoryName(dwg) ?? "" : dwg;
     private static readonly HashSet<string> ExpectedIsoTags =
@@ -704,7 +716,8 @@ internal static class NativeIsoResultsOverlay
                 TreeNode item = parent.Nodes[i];
                 if (item.Tag is CustomResultLink ||
                     item.Nodes.Count != 0 ||
-                    !IsNativeFileResult(item.Text))
+                    !(IsNativeFileResult(item.Text) ||
+                      IsOriginalFolderResult(item.Text)))
                     continue;
                 item.Remove();
             }
@@ -829,7 +842,7 @@ internal static class NativeIsoResultsOverlay
         try
         {
             text = Marshal.StringToHGlobalUni(
-                NativeLinkLabel(path, openFolder, separator));
+                NativeStorageLabel(path, openFolder, separator));
             var entry = new TVINSERTSTRUCTW
             {
                 hParent = parent,
@@ -999,7 +1012,9 @@ internal static class NativeIsoResultsOverlay
                     TargetOriginalToFirstCustomTopPx - measured, -5, 12);
             }
         }
-        return 8; // usual native top spacing ~17px => 25px target
+        // Without Autodesk's now-hidden native Explorer node, keep the
+        // custom text on its natural row rather than repainting 8px below.
+        return 0;
     }
 
     private static void DrawNativeCustomLabels(IntPtr tree)
@@ -1114,7 +1129,7 @@ internal static class NativeIsoResultsOverlay
         {
             string text = NativeItemText(tree, link.Item);
             bool sameItem = text.Equals(
-                NativeLinkLabel(link.Path, link.OpenFolder,
+                NativeStorageLabel(link.Path, link.OpenFolder,
                     link.IsSeparator),
                 StringComparison.Ordinal);
             bool expected = required.TryGetValue(link.Parent, out var paths) &&
@@ -1174,7 +1189,7 @@ internal static class NativeIsoResultsOverlay
                 .Where(item => item.Parent == parent).ToList())
             {
                 if (NativeItemText(tree, old.Item).Equals(
-                        NativeLinkLabel(old.Path, old.OpenFolder, old.IsSeparator),
+                        NativeStorageLabel(old.Path, old.OpenFolder, old.IsSeparator),
                         StringComparison.Ordinal))
                     SendNative(tree, TVM_DELETEITEM,
                         IntPtr.Zero, old.Item);
@@ -1218,7 +1233,8 @@ internal static class NativeIsoResultsOverlay
             {
                 IntPtr next = WinNext(tree, TVGN_NEXT, child);
                 if (!_winLinks.ContainsKey(child) &&
-                    IsNativeFileResult(NativeItemText(tree, child)))
+                    (IsNativeFileResult(NativeItemText(tree, child)) ||
+                     IsOriginalFolderResult(NativeItemText(tree, child))))
                 {
                     RECT? rect = NativeItemRect(tree, child, true);
                     if (rect is not null && rect.Value.Left > 0)
@@ -1233,6 +1249,64 @@ internal static class NativeIsoResultsOverlay
 
         if (itemsChanged)
             DrawNativeCustomLabels(tree);
+    }
+
+    // REV116: use the SAME Windows TreeView font as our drawn caption.
+    // Never use a full native row, its invisible storage placeholder,
+    // or extra GDI trailing padding as clickable link area.
+    private static int CustomGlyphWidth(IntPtr tree, NativeCustomLink link)
+    {
+        IntPtr hfont = SendNative(tree, WM_GETFONT,
+            IntPtr.Zero, IntPtr.Zero);
+        using Font? source = hfont == IntPtr.Zero
+            ? null : Font.FromHfont(hfont);
+        Font nativeFont = source ?? SystemFonts.MessageBoxFont;
+        using Font font = new Font(nativeFont.FontFamily,
+            nativeFont.SizeInPoints,
+            link.OpenFolder ? FontStyle.Regular | FontStyle.Underline
+                            : FontStyle.Regular,
+            GraphicsUnit.Point);
+        int width = TextRenderer.MeasureText(
+            NativeLinkLabel(link.Path, link.OpenFolder, link.IsSeparator),
+            font, new Size(int.MaxValue, 40),
+            TextFormatFlags.SingleLine |
+            TextFormatFlags.NoPrefix |
+            TextFormatFlags.NoPadding).Width;
+        return Math.Max(0, width - 2);
+    }
+
+    // The custom text can be visually offset from its native item row.
+    // Swallow any blank horizontal space on BOTH rectangles, regardless
+    // of TVM_HITTEST returning another native row, parent or IntPtr.Zero.
+    private static bool IsCustomRowWhitespace(IntPtr tree, IntPtr location)
+    {
+        long bits = location.ToInt64();
+        int x = unchecked((short)(bits & 0xFFFF));
+        int y = unchecked((short)((bits >> 16) & 0xFFFF));
+        var shifts = new Dictionary<IntPtr, int>();
+        foreach (NativeCustomLink link in _winLinks.Values)
+        {
+            if (!shifts.TryGetValue(link.Parent, out int shift))
+            {
+                shift = CustomGroupVerticalShiftPx(tree, link.Parent);
+                shifts[link.Parent] = shift;
+            }
+            Rectangle? visible = NativeCustomTextRectangle(
+                tree, link, shift);
+            RECT? native = NativeItemRect(tree, link.Item, false);
+            if (visible is null && native is null) continue;
+            int left = visible?.Left ?? native!.Value.Left;
+            int top = native?.Top ?? visible!.Value.Top;
+            int bottom = native?.Bottom ?? visible!.Value.Bottom;
+            if (visible is Rectangle area)
+            {
+                top = Math.Min(top, area.Top);
+                bottom = Math.Max(bottom, area.Bottom);
+            }
+            if (x >= left && y >= top && y < bottom)
+                return true;
+        }
+        return false;
     }
 
     private static IntPtr HitVisibleCustomLabel(
@@ -1265,15 +1339,9 @@ internal static class NativeIsoResultsOverlay
                 x < area.Left || x >= area.Right)
                 continue;
 
-            string label = NativeLinkLabel(
-                link.Path, link.OpenFolder, link.IsSeparator);
-            Size textSize = TextRenderer.MeasureText(
-                label, SystemFonts.MessageBoxFont,
-                new Size(int.MaxValue, Math.Max(area.Height, 20)),
-                TextFormatFlags.SingleLine |
-                TextFormatFlags.NoPrefix |
-                TextFormatFlags.NoPadding);
-            if (x < area.Left + Math.Min(area.Width, textSize.Width))
+            int glyphRight = area.Left +
+                Math.Min(area.Width, CustomGlyphWidth(tree, link));
+            if (x < glyphRight)
                 return link.Item;
         }
         return IntPtr.Zero;
@@ -1334,7 +1402,8 @@ internal static class NativeIsoResultsOverlay
                 TextFormatFlags.SingleLine |
                 TextFormatFlags.NoPrefix |
                 TextFormatFlags.NoPadding).Width;
-            int right = bounds.Left + Math.Min(bounds.Width, measuredWidth);
+            int right = bounds.Left +
+                Math.Max(0, Math.Min(bounds.Width, measuredWidth - 2));
             if (e.X < bounds.Left || e.X >= right ||
                 e.Y < bounds.Top || e.Y >= bounds.Bottom)
                 return;
@@ -1384,7 +1453,7 @@ internal static class NativeIsoResultsOverlay
         {
             foreach (var link in _winLinks.Values.ToList())
                 if (NativeItemText(_winTree, link.Item).Equals(
-                    NativeLinkLabel(link.Path, link.OpenFolder, link.IsSeparator),
+                    NativeStorageLabel(link.Path, link.OpenFolder, link.IsSeparator),
                     StringComparison.Ordinal))
                     SendNative(_winTree, TVM_DELETEITEM, IntPtr.Zero, link.Item);
         }
