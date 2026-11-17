@@ -701,6 +701,16 @@ internal static class NativeIsoDialogEnhancer
                     return;
                 }
 
+                // REV108: Remember whether the ORIGINAL Autodesk search
+                // was filtered before clearing it. TextChanged already
+                // initiates a native project-list rebuild; a second
+                // synchronous Project-icon click causes double refresh,
+                // selection rollback (e.g. 5/6 Missing:01A) and blinking.
+                bool nativeSearchWasFiltered =
+                    !NativeIsoLineSelectOverlay.IsNativeSearchBlank(dialog);
+                int knownNativeProjectRows =
+                    NativeIsoLineSelectOverlay.KnownProjectWideRowCount(dialog);
+                bool deferredProjectRefreshPending = false;
                 try
                 {
                     NativeIsoLineSelectOverlay.BeginScopeSwitch(dialog);
@@ -722,15 +732,25 @@ internal static class NativeIsoDialogEnhancer
                     // though all six were checked before the user clicked.
                     bool alreadyFull = NativeIsoLineSelectOverlay
                         .HasCompleteUnfilteredProjectSource(dialog);
+                    // If the user was in a manual search, clearing the
+                    // textbox has ALREADY told Autodesk to load all routes.
+                    // Do not also click the Project toolbar in the same UI
+                    // turn. A bounded delayed fallback remains below.
+                    deferredProjectRefreshPending =
+                        !alreadyFull && nativeSearchWasFiltered;
                     bool refreshed = !alreadyFull &&
+                        !deferredProjectRefreshPending &&
                         NativeIsoToolbarClickFilter
                             .TryRefreshNativeProjectList(dialog);
                     NativeIsoToolbarClickFilter.MarkAllLinesRestored(dialog);
                     SafeLog(
-                        "\nSPTC REV100: Create clicked with " +
+                        "\nSPTC REV108: Create preparing " +
                         requested.Length + " saved route(s); native " +
                         "source already complete=" + alreadyFull +
-                        ", refresh=" + refreshed + ".");
+                        ", searchClearInitiated=" + nativeSearchWasFiltered +
+                        ", immediateProjectRefresh=" + refreshed +
+                        ", deferredFallback=" +
+                        deferredProjectRefreshPending + ".");
                 }
                 catch (Exception ex)
                 {
@@ -742,6 +762,8 @@ internal static class NativeIsoDialogEnhancer
 
                 int polls = 0;
                 int stableSamples = 0;
+                int nativeRebuildRetries = 0;
+                bool deferredFallbackAttempted = false;
                 int matched = 0;
                 int checkedCount = 0;
                 int afterAppliedPolls = 0;
@@ -810,6 +832,35 @@ internal static class NativeIsoDialogEnhancer
                             return;
                         }
 
+                        // REV108: avoid both premature checkbox commits and
+                        // competing Autodesk list reloads. The text-filter
+                        // clear itself may take several UI turns to restore
+                        // the complete native project source.
+                        int currentNativeRows = NativeIsoLineSelectOverlay
+                            .NativeDisplayedCount(dialog) ?? 0;
+                        bool fullNativeSource = currentNativeRows > 0 &&
+                            (knownNativeProjectRows <= 0 ||
+                             currentNativeRows >= knownNativeProjectRows) &&
+                            NativeIsoLineSelectOverlay.IsNativeSearchBlank(dialog);
+
+                        if (deferredProjectRefreshPending && !fullNativeSource &&
+                            !deferredFallbackAttempted && polls >= 24)
+                        {
+                            deferredFallbackAttempted = true;
+                            bool fallback = NativeIsoToolbarClickFilter
+                                .TryRefreshNativeProjectList(dialog);
+                            SafeLog(
+                                "\nSPTC REV108: bounded Project fallback " +
+                                "after cleared search remained incomplete " +
+                                "(rows=" + currentNativeRows + "/" +
+                                knownNativeProjectRows + ", invoked=" +
+                                fallback + ").");
+                            stableSamples = 0;
+                            lastNativeSignature = "";
+                            return;
+                        }
+                        if (!fullNativeSource) return;
+
                         // Wait for the native original-list names to
                         // stabilize. No selection writes while list changes.
                         string nativeSignature = NativeIsoLineSelectOverlay
@@ -820,15 +871,36 @@ internal static class NativeIsoDialogEnhancer
                         {
                             if (appliedOnce)
                             {
-                                Fail("Autodesk line list changed after " +
-                                    "batch selection was prepared.");
-                                return;
+                                // REV108: Autodesk occasionally completes
+                                // a final native row swap AFTER our first
+                                // check commit. Retry only after the new
+                                // entire source settles; never submit a
+                                // partial checked batch or forge Create.
+                                if (++nativeRebuildRetries > 2)
+                                {
+                                    Fail("Autodesk rebuilt its checklist " +
+                                        "repeatedly during ISO preparation.");
+                                    return;
+                                }
+                                appliedOnce = false;
+                                afterAppliedPolls = 0;
+                                readySamples = 0;
+                                nudgedOnce = false;
+                                repairAttempts = 0;
+                                SafeLog(
+                                    "\nSPTC REV108: native rows replaced " +
+                                    "after checkbox commit; waiting for " +
+                                    "stable full-source rebuild #" +
+                                    nativeRebuildRetries + ".");
                             }
                             lastNativeSignature = nativeSignature;
                             stableSamples = 0;
                             return;
                         }
-                        if (++stableSamples < 2)
+                        // REV108: native names can stabilize before Autodesk
+                        // finishes deferred checked-state updates. Hold the
+                        // list read-only for ~1 second before FIRST commit.
+                        if (++stableSamples < 6)
                             return;
 
                         if (!appliedOnce)
@@ -865,9 +937,9 @@ internal static class NativeIsoDialogEnhancer
                             // checked row after releasing the scope guard.
                             // Reconcile exactly once, then verify on later
                             // ticks; NEVER submit an incomplete batch.
-                            if (afterAppliedPolls > 3)
+                            if (afterAppliedPolls > 5)
                             {
-                                if (++repairAttempts > 3)
+                                if (++repairAttempts > 4)
                                 {
                                     var found = new HashSet<string>(
                                         verified, StringComparer.OrdinalIgnoreCase);
