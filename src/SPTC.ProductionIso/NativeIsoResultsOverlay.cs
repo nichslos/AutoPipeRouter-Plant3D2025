@@ -126,9 +126,17 @@ internal static class NativeIsoResultsOverlay
                 // below their native TreeView row to achieve the requested
                 // 25px group gap. Hit-test the DRAWN text first, otherwise
                 // a click near a row boundary could open the next file.
+                // REV114: only the DRAWN link glyphs are clickable.
+                // REV113 fell back to the native TVM_HITTEST item, which
+                // covers the entire TreeView row (including blank space
+                // far to the right of the visible blue hyperlink).
                 IntPtr item = HitVisibleCustomLabel(_tree, message.LParam);
-                if (item == IntPtr.Zero)
-                    item = HitNativeItem(_tree, message.LParam);
+                IntPtr nativeRow = HitNativeItem(_tree, message.LParam);
+                if (item == IntPtr.Zero && _winLinks.ContainsKey(nativeRow))
+                {
+                    message.Result = IntPtr.Zero;
+                    return; // whitespace on custom row: never open a DWG
+                }
                 if (_winLinks.TryGetValue(item, out var link))
                 {
                     if (link.IsSeparator)
@@ -193,6 +201,9 @@ internal static class NativeIsoResultsOverlay
     private static IntPtr _winTree;
     private static NativeTreeHook? _winHook;
     private static readonly Dictionary<IntPtr, NativeCustomLink> _winLinks = new();
+    // REV114: retain the original File: text alignment after its UI row
+    // has been hidden. This is display-only; source DWGs are untouched.
+    private static readonly Dictionary<IntPtr, int> _nativeFileTextX = new();
     private static string _displaySignature = "";
     private static bool _missingTreeWarned;
     private static bool _nativePaintingWarned;
@@ -208,6 +219,13 @@ internal static class NativeIsoResultsOverlay
             ? "Custom (existing): " : "Custom: ") + path;
     private const string CustomFolderLabel =
         "Open drawing folder in Windows Explorer";
+
+    // REV114: only original Autodesk "File:" child result links for a
+    // route with verified custom output may be hidden from Results UI.
+    // Never hide error messages, route headings, or other status nodes.
+    private static bool IsNativeFileResult(string label) =>
+        label.TrimStart().StartsWith("File:",
+            StringComparison.OrdinalIgnoreCase);
     private static string NativeLinkLabel(
         string path, bool openFolder, bool separator = false) =>
         separator ? "" : openFolder ? CustomFolderLabel : CustomLabel(path);
@@ -603,7 +621,11 @@ internal static class NativeIsoResultsOverlay
                 }
             }
         }
-        if (!changed) return;
+        if (!changed)
+        {
+            HideManagedNativeFileRows(desired.Keys);
+            return;
+        }
 
         TreeNode? previousTop = tree.TopNode;
         tree.BeginUpdate();
@@ -646,6 +668,11 @@ internal static class NativeIsoResultsOverlay
                 }
                 if (!parent.IsExpanded) parent.Expand();
             }
+
+            // REV114: remove ORIGINAL File: hyperlink ROWS from this
+            // transient Results TreeView after matching custom hyperlinks
+            // exist. The generated native DWG files are NOT modified here.
+            HideManagedNativeFileRows(desired.Keys);
         }
         finally
         {
@@ -658,6 +685,29 @@ internal static class NativeIsoResultsOverlay
                     tree.TopNode = previousTop;
             }
             catch (Exception) { }
+        }
+    }
+
+    // UI-only hide for managed Autodesk Results. Never remove an original
+    // File: link unless that route already has SPTC custom result links.
+    private static void HideManagedNativeFileRows(
+        IEnumerable<TreeNode> customResultParents)
+    {
+        foreach (TreeNode parent in customResultParents)
+        {
+            if (parent.TreeView is null ||
+                !parent.Nodes.Cast<TreeNode>().Any(node =>
+                    node.Tag is CustomResultLink))
+                continue;
+            for (int i = parent.Nodes.Count - 1; i >= 0; i--)
+            {
+                TreeNode item = parent.Nodes[i];
+                if (item.Tag is CustomResultLink ||
+                    item.Nodes.Count != 0 ||
+                    !IsNativeFileResult(item.Text))
+                    continue;
+                item.Remove();
+            }
         }
     }
 
@@ -850,7 +900,8 @@ internal static class NativeIsoResultsOverlay
             full.Bottom <= 0 || full.Top >= client.Height)
             return null;
 
-        int x = ownText.Value.Left;
+        int x = _nativeFileTextX.TryGetValue(custom.Parent,
+            out int savedOriginalX) ? savedOriginalX : ownText.Value.Left;
         int textTopOffset = Math.Max(0, ownText.Value.Top - full.Top);
         int textHeight = ownText.Value.Height > 0
             ? ownText.Value.Height : full.Height;
@@ -867,6 +918,7 @@ internal static class NativeIsoResultsOverlay
                 {
                     // Same X offset as Autodesk's real clickable File link.
                     x = fileText.Value.Left;
+                    _nativeFileTextX[custom.Parent] = x;
                     if (fileRow is not null)
                     {
                         // Same Y offset/baseline and text-height as the
@@ -1150,6 +1202,35 @@ internal static class NativeIsoResultsOverlay
             itemsChanged = true;
         }
 
+        // REV114: remove only Autodesk's red original "File:" hyperlinks
+        // from the temporary Results tree when a verified custom output
+        // was inserted for that same route. Keep native route parents,
+        // statuses, errors and the custom links in place.
+        // Do not touch the underlying DWGs; REV113 transfer safety applies.
+        foreach (var (parent, _) in required)
+        {
+            if (!_winLinks.Values.Any(link => link.Parent == parent &&
+                    !link.OpenFolder && !link.IsSeparator))
+                continue;
+
+            IntPtr child = WinNext(tree, TVGN_CHILD, parent);
+            for (int i = 0; child != IntPtr.Zero && i < 10000; i++)
+            {
+                IntPtr next = WinNext(tree, TVGN_NEXT, child);
+                if (!_winLinks.ContainsKey(child) &&
+                    IsNativeFileResult(NativeItemText(tree, child)))
+                {
+                    RECT? rect = NativeItemRect(tree, child, true);
+                    if (rect is not null && rect.Value.Left > 0)
+                        _nativeFileTextX[parent] = rect.Value.Left;
+                    if (SendNative(tree, TVM_DELETEITEM, IntPtr.Zero,
+                        child) != IntPtr.Zero)
+                        itemsChanged = true;
+                }
+                child = next;
+            }
+        }
+
         if (itemsChanged)
             DrawNativeCustomLabels(tree);
     }
@@ -1236,6 +1317,29 @@ internal static class NativeIsoResultsOverlay
             e.Node.Tag is not CustomResultLink link ||
             link.IsSeparator)
             return;
+
+        // REV114 managed TreeView path: only text is an actual hyperlink.
+        // Clicking any blank space beyond the custom label is inert.
+        if (sender is TreeView nativeTree)
+        {
+            var hit = nativeTree.HitTest(e.Location);
+            if (!ReferenceEquals(hit.Node, e.Node) ||
+                (hit.Location & TreeViewHitTestLocations.Label) == 0)
+                return;
+            Rectangle bounds = e.Node.Bounds;
+            Font displayedFont = e.Node.NodeFont ?? nativeTree.Font;
+            int measuredWidth = TextRenderer.MeasureText(
+                e.Node.Text, displayedFont,
+                new Size(int.MaxValue, Math.Max(20, bounds.Height)),
+                TextFormatFlags.SingleLine |
+                TextFormatFlags.NoPrefix |
+                TextFormatFlags.NoPadding).Width;
+            int right = bounds.Left + Math.Min(bounds.Width, measuredWidth);
+            if (e.X < bounds.Left || e.X >= right ||
+                e.Y < bounds.Top || e.Y >= bounds.Bottom)
+                return;
+        }
+
         try
         {
             if (link.OpenFolder)
@@ -1285,6 +1389,7 @@ internal static class NativeIsoResultsOverlay
                     SendNative(_winTree, TVM_DELETEITEM, IntPtr.Zero, link.Item);
         }
         _winLinks.Clear();
+        _nativeFileTextX.Clear();
         try { _winHook?.ReleaseHandle(); } catch (Exception) { }
         _winHook = null;
         _winTree = IntPtr.Zero;
