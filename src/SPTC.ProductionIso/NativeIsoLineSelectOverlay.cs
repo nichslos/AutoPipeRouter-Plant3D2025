@@ -582,6 +582,7 @@ internal static class NativeIsoLineSelectOverlay
 
     private static void OnSearchFilterChanged(object? sender, EventArgs e)
     {
+        ExitActiveProjectionForManualSearch();
         // REV68: reject deferred click commits from a previous query.
         // Search is a view change, NOT an uncheck action.
         _selectionEpoch++;
@@ -881,6 +882,47 @@ internal static class NativeIsoLineSelectOverlay
     // a genuine user click to the original Autodesk row's existing index.
     public static bool IsSessionTagSelected(string tag) =>
         !string.IsNullOrWhiteSpace(tag) && SessionSelectedTags.Contains(tag);
+
+    // REV110: Active mode is a presentation over the full Autodesk source.
+    // User checkbox intent must be tracked by exact route NAME rather than
+    // by a transient native list index. Never forge Create.Enabled or send
+    // synthetic mouse clicks during a view-only checkbox interaction.
+    // The guarded native Create preparation validates/commits actual
+    // Autodesk checkboxes before permitting ISO generation.
+    public static void RecordActiveProjectionSelection(
+        IEnumerable<string> exactTags, bool checkedState)
+    {
+        if (_dialog == IntPtr.Zero ||
+            !ProjectFolderLinePicker.ActiveDwgView)
+            return;
+        foreach (string tag in exactTags)
+        {
+            if (string.IsNullOrWhiteSpace(tag)) continue;
+            if (checkedState) SessionSelectedTags.Add(tag);
+            else SessionSelectedTags.Remove(tag);
+        }
+        UpdateDisplayedCount();
+    }
+
+    // REV110: the user's own TextChanged event exits the Active overlay.
+    // Autodesk's original filter remains authoritative for the resulting
+    // manual search. We do not click Project or replay old selections here.
+    private static void ExitActiveProjectionForManualSearch()
+    {
+        if (_dialog == IntPtr.Zero ||
+            !ProjectFolderLinePicker.ActiveDwgView ||
+            _scopeSwitchPending)
+            return;
+        ProjectFolderLinePicker.ClearVisibleProjection();
+        NativeIsoToolbarClickFilter.MarkAllLinesRestored(_dialog);
+        _scopeSwitchPending = false;
+        _suspendPeriodicNativeWrites = false;
+        _lastNativeRowSignature = "";
+        _stableNativePolls = 0;
+        WriteDiagnostic("REV110: manual text search switched Active " +
+            "presentation to native filtered project view; " +
+            SessionSelectedTags.Count + " saved route(s) retained.");
+    }
 
     // Keep legacy single-tag exact-filter callback source-compatible.
     // REV105's normal Active path passes ALL verified physical line tags.
