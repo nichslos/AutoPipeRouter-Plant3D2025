@@ -1391,6 +1391,69 @@ internal static class NativeIsoDialogEnhancer
         int OriginalsRetained, string Destination,
         CustomCopyOutput[] Outputs);
 
+    // REV116: separate post-transfer SPTC completion notice. Autodesk's
+    // native Isometric Creation Complete balloon belongs to the Autodesk
+    // background generator, not this custom-directory transfer.
+    // We never suppress/delay native application notifications.
+    private static NotifyIcon? _customCompletionIcon;
+    private static System.Windows.Forms.Timer? _customCompletionDismiss;
+
+    private static void CloseCustomCompletionNotice()
+    {
+        try
+        {
+            _customCompletionDismiss?.Stop();
+            _customCompletionDismiss?.Dispose();
+            _customCompletionDismiss = null;
+            if (_customCompletionIcon is not null)
+            {
+                _customCompletionIcon.Visible = false;
+                _customCompletionIcon.Dispose();
+                _customCompletionIcon = null;
+            }
+        }
+        catch (Exception) { }
+    }
+
+    private static void NotifyCustomTransferFinished(CopyReport report)
+    {
+        CloseCustomCompletionNotice();
+        if (report.Copied == 0 && report.Skipped == 0)
+            return;
+        try
+        {
+            string caption = report.Copied > 0
+                ? "SPTC Custom ISO Ready"
+                : "SPTC Custom ISO Existing Files";
+            string detail = report.Copied + " DWG(s) delivered to custom " +
+                "folder; " + report.OriginalsDeleted +
+                " original ISO DWG(s) cleaned up.";
+            if (report.OriginalsRetained > 0)
+                detail += " " + report.OriginalsRetained +
+                    " original(s) retained for safety.";
+            var icon = new NotifyIcon
+            {
+                Icon = SystemIcons.Information,
+                Text = "SPTC Production Iso",
+                Visible = true
+            };
+            _customCompletionIcon = icon;
+            icon.ShowBalloonTip(7000, caption, detail,
+                report.OriginalsRetained > 0
+                    ? ToolTipIcon.Warning : ToolTipIcon.Info);
+            var dismiss = new System.Windows.Forms.Timer { Interval = 12000 };
+            _customCompletionDismiss = dismiss;
+            dismiss.Tick += (_, _) => CloseCustomCompletionNotice();
+            dismiss.Start();
+        }
+        catch (Exception ex)
+        {
+            CloseCustomCompletionNotice();
+            SafeLog("\nSPTC REV116: custom completion notice unavailable: " +
+                ex.GetBaseException().Message);
+        }
+    }
+
     public static void Launch(Document doc)
     {
         if (_copyTask is { IsCompleted: false })
@@ -1399,6 +1462,7 @@ internal static class NativeIsoDialogEnhancer
             return;
         }
         Detach();
+        CloseCustomCompletionNotice();
         // REV48: clear only the previous results links, not the approved
         // REV47 custom DWG copier or Autodesk's native results UI.
         NativeIsoResultsOverlay.Reset();
@@ -1531,6 +1595,11 @@ internal static class NativeIsoDialogEnhancer
                         $"{_lastCopyReport.OriginalsDeleted} verified original ISO DWG(s) deleted; " +
                         $"{_lastCopyReport.OriginalsRetained} original ISO DWG(s) retained " +
                         $"(skipped/locked/changed/unverified). Other project files unchanged.");
+                    // REV116: notify only AFTER the custom transfer worker
+                    // reported final outputs. This is a separate SPTC
+                    // notification; Autodesk's earlier native ISO creation
+                    // balloon is independent and left untouched.
+                    NotifyCustomTransferFinished(_lastCopyReport);
                 }
                 return;
             }
