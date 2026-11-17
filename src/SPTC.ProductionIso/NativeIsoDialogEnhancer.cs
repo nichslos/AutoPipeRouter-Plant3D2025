@@ -2526,7 +2526,7 @@ internal static class NativeIsoDialogEnhancer
         string source, string targetRoot, DateTime sinceUtc,
         bool overwriteExisting, IReadOnlyCollection<string> selectedTags)
     {
-        int copied = 0, skipped = 0, originalsDeleted = 0;
+        int copied = 0, skipped = 0, originalsDeleted = 0, unscopedRetained = 0;
         // Only a byte-verified, newly published custom ISO can enter the
         // deletion ledger. A skipped existing custom result is never a move.
         var pendingOriginalCleanup = new Dictionary<string,
@@ -2791,10 +2791,17 @@ internal static class NativeIsoDialogEnhancer
                                     throw new IOException(
                                         "Published custom ISO checksum mismatch.");
                             }
-                            pendingOriginalCleanup[file] = (
-                                published, version.Size, version.Modified,
-                                Convert.ToHexString(sourceHash),
-                                DateTime.UtcNow, DateTime.MinValue);
+                            // Do not ever remove files when Autodesk did
+                            // not supply a verified selected-route snapshot.
+                            // The legacy exporter can still copy by date in
+                            // this case, but deleting by date alone is unsafe.
+                            if (expectedTags.Count > 0)
+                                pendingOriginalCleanup[file] = (
+                                    published, version.Size, version.Modified,
+                                    Convert.ToHexString(sourceHash),
+                                    DateTime.UtcNow, DateTime.MinValue);
+                            else
+                                unscopedRetained++;
                             processedFiles.Add(file);
                             copied++;
                             lastProcessed = DateTime.UtcNow;
@@ -2897,7 +2904,7 @@ internal static class NativeIsoDialogEnhancer
 
         return new CopyReport(
             copied, skipped, originalsDeleted,
-            pendingOriginalCleanup.Count + skipped,
+            pendingOriginalCleanup.Count + skipped + unscopedRetained,
             targetRoot, completedOutputs.ToArray());
     }
 
