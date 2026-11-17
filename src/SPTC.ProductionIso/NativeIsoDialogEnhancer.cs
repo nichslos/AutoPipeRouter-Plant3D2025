@@ -605,6 +605,7 @@ internal static class NativeIsoDialogEnhancer
             }
         };
         timer.Start();
+        return true; // REV109: accepted guarded delayed Active projection.
     }
 
     private static void StopAutoCreate()
