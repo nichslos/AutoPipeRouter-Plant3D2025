@@ -2203,7 +2203,10 @@ internal static class NativeIsoDialogEnhancer
                 if (Control.FromHandle(handle) is TextBoxBase edit &&
                     !edit.IsDisposed && edit != _destinationBox &&
                     edit.IsHandleCreated && edit.Visible &&
-                    edit.Enabled && !edit.ReadOnly)
+                    edit.Enabled &&
+                    (!edit.ReadOnly ||
+                     edit.Text.Trim().Trim('"').Equals(destination,
+                         StringComparison.OrdinalIgnoreCase)))
                     textBoxes.Add(edit);
                 return true;
             }, IntPtr.Zero);
@@ -2257,9 +2260,11 @@ internal static class NativeIsoDialogEnhancer
                     StringComparison.OrdinalIgnoreCase))
             {
                 nativeEdit.Text = destination;
-                // Let WinForms run its normal validation/binding event.
-                // No Project Setup change or disk copy/delete here.
-                nativeEdit.Parent?.Validate();
+                // Let WinForms run normal validation/binding where the
+                // native parent is a ContainerControl. No Project Setup,
+                // disk copy or deletion operation takes place here.
+                if (nativeEdit.Parent is ContainerControl parent)
+                    parent.Validate();
             }
             if (!nativeEdit.Text.Trim().Trim('"').Equals(destination,
                     StringComparison.OrdinalIgnoreCase))
