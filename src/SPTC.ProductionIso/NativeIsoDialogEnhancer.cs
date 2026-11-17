@@ -450,7 +450,7 @@ internal static class NativeIsoDialogEnhancer
         _activeProjectProjectionSerial++;
     }
 
-    private static void BeginActiveProjectProjection(
+    private static bool BeginActiveProjectProjection(
         IntPtr dialog, IReadOnlyList<string> activeTags,
         string[] selectedBefore)
     {
@@ -460,16 +460,55 @@ internal static class NativeIsoDialogEnhancer
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
         if (exactTags.Length == 0)
-            return;
+            return false;
+
+        // REV109: displaying an Active-DWG filter is a READ-ONLY view
+        // operation. It must NEVER wait for or repeatedly repair checked
+        // routes selected elsewhere (e.g. "002"), which caused dozens
+        // of REV94 commits, continuous blinking and a hidden Active view.
+        // Native checkbox state is validated separately before Create.
+        // With the complete original source already loaded, render now.
+        int projectRows = NativeIsoLineSelectOverlay
+            .KnownProjectWideRowCount(dialog);
+        int sourceRows = NativeIsoLineSelectOverlay
+            .NativeDisplayedCount(dialog) ?? 0;
+        if (projectRows > 0 && sourceRows >= projectRows &&
+            NativeIsoLineSelectOverlay.IsNativeSearchBlank(dialog) &&
+            !ProjectFolderLinePicker.HasVisibleProjection)
+        {
+            try
+            {
+                if (ProjectFolderLinePicker.ShowExactActiveDwgTags(
+                    exactTags, _document,
+                    preserveOtherCheckedNativeRoutes: true))
+                {
+                    NativeIsoLineSelectOverlay.CompleteActiveProjectionScope(
+                        dialog, exactTags);
+                    SafeLog("\nSPTC REV109: instant read-only Active " +
+                        "projection of " +
+                        ProjectFolderLinePicker.VisibleLineCount + "/" +
+                        exactTags.Length + " physical route(s); " +
+                        sourceRows + " native rows untouched. " +
+                        "No route rechecks/checkbox replay.");
+                    return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                SafeLog("\nSPTC REV109: Active projection failed: " +
+                    ex.GetBaseException().Message);
+            }
+            NativeIsoLineSelectOverlay.CancelScopeSwitch(dialog);
+            return false;
+        }
+
         int serial = _activeProjectProjectionSerial;
         string[] expected = selectedBefore
             .Where(tag => !string.IsNullOrWhiteSpace(tag))
             .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-        var wanted = new HashSet<string>(expected,
-            StringComparer.OrdinalIgnoreCase);
         int knownRows = NativeIsoLineSelectOverlay
             .KnownProjectWideRowCount(dialog);
-        int ticks = 0, stable = 0, ready = 0;
+        int ticks = 0, stable = 0;
         string lastSignature = "";
         var timer = new System.Windows.Forms.Timer { Interval = 180 };
         _activeProjectProjectionTimer = timer;
@@ -500,9 +539,9 @@ internal static class NativeIsoDialogEnhancer
 
             if (++ticks > 100)
             {
-                Stop("Could not confirm full project source and exact " +
-                    "saved checked routes. Active view not changed; " +
-                    "Autodesk Create was not forced.", abortScope: true);
+                Stop("Could not confirm full native project source; " +
+                    "Active view not changed. Native Create was not forced.",
+                    abortScope: true);
                 return;
             }
 
@@ -528,47 +567,15 @@ internal static class NativeIsoDialogEnhancer
                 {
                     lastSignature = signature;
                     stable = 0;
-                    ready = 0;
                     return;
                 }
                 if (++stable < 3) return;
 
-                // Ensure exact global selection is committed in native
-                // Autodesk's full list, not just in the "Selected: N" label.
-                if (expected.Length > 0)
-                {
-                    bool applied = NativeIsoLineSelectOverlay
-                        .TryApplySavedBatchToNative(dialog, expected,
-                            out int matched, out int checkedCount);
-                    if (!applied || matched != expected.Length ||
-                        checkedCount != expected.Length)
-                        return;
-                }
-
+                // REV109: never synthesize a native checkbox event while
+                // the user is only switching the Active VIEW. Older logic
+                // tried to restore an unrelated checked route on every
+                // 180ms tick and blocked the Active list indefinitely.
                 string[] checkedNative = NativeCheckedRouteNames(dialog);
-                var checkedSet = new HashSet<string>(
-                    checkedNative, StringComparer.OrdinalIgnoreCase);
-                if (checkedNative.Length != expected.Length ||
-                    !checkedSet.SetEquals(wanted))
-                {
-                    ready = 0;
-                    return;
-                }
-
-                // REV98: avoid presenting a misleading checked Active route
-                // with grey Autodesk Create. Require native Create to be
-                // genuinely eligible in the complete project source for
-                // two separate UI ticks before switching presentation.
-                // No artificial enabling, proxy button or ISO submission.
-                if (expected.Length > 0 &&
-                    _nativeCreateButton is not { IsDisposed: false,
-                                                Enabled: true })
-                {
-                    ready = 0;
-                    return;
-                }
-                if (++ready < 2) return;
-
                 if (!ProjectFolderLinePicker.ShowExactActiveDwgTags(
                     exactTags, _document,
                     preserveOtherCheckedNativeRoutes: true))
@@ -581,14 +588,14 @@ internal static class NativeIsoDialogEnhancer
                 NativeIsoLineSelectOverlay.CompleteActiveProjectionScope(
                     dialog, exactTags);
                 SafeLog(
-                    "\nSPTC REV105: Active view showing " +
+                    "\nSPTC REV109: delayed read-only Active view showing " +
                     ProjectFolderLinePicker.VisibleLineCount + "/" +
                     exactTags.Length + " physical route(s) over complete " +
-                    count + "-row Autodesk source; native checked=" +
-                    checkedNative.Length + "/" + expected.Length +
-                    ", Create.Enabled=" +
+                    count + "-row native source; native checked=" +
+                    checkedNative.Length + ", saved selections=" +
+                    expected.Length + ", Create.Enabled=" +
                     (_nativeCreateButton?.Enabled.ToString() ?? "unknown") +
-                    ". No native substring search/reindex performed.");
+                    ". No native checkbox writes or route reindexing.");
                 Stop();
             }
             catch (Exception ex)
@@ -1751,9 +1758,8 @@ internal static class NativeIsoDialogEnhancer
                             " exact Active DWG tag(s) (refresh=" +
                             projectRefresh + "): " +
                             string.Join(", ", physicalTags));
-                        BeginActiveProjectProjection(
+                        return BeginActiveProjectProjection(
                             native, physicalTags, selectedBefore);
-                        return true;
                     });
 
                 }
