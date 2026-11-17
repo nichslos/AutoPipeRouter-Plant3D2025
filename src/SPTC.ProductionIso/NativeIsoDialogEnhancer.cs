@@ -2167,15 +2167,49 @@ internal static class NativeIsoDialogEnhancer
         return source;
     }
 
-    // REV118: fail closed when the native Save Isos to editor cannot be
-    // positively located. Never change Project Setup, style files, or an
-    // unrelated textbox by guessing its position/index.
+    // REV119: the native Autodesk Save Isos to field can be a READ-ONLY
+    // Windows Forms TextBox, ComboBox, or a plain Win32 EDIT child.
+    // REV118 incorrectly required an editable TextBoxBase AND a visible
+    // Save Isos to label, rejecting a valid source control on Plant3D 2025.
+    // Match the EXISTING native output path (captured before any changes),
+    // not a hardcoded HWND/index, and never modify an ambiguous field.
+    private static bool SameOutputDirectory(string first, string second)
+    {
+        if (string.IsNullOrWhiteSpace(first) ||
+            string.IsNullOrWhiteSpace(second))
+            return false;
+        try
+        {
+            string a = Path.GetFullPath(first.Trim().Trim('"'))
+                .TrimEnd(Path.DirectorySeparatorChar,
+                    Path.AltDirectorySeparatorChar);
+            string b = Path.GetFullPath(second.Trim().Trim('"'))
+                .TrimEnd(Path.DirectorySeparatorChar,
+                    Path.AltDirectorySeparatorChar);
+            return string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception)
+        {
+            return string.Equals(first.Trim().Trim('"'),
+                second.Trim().Trim('"'),
+                StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    [DllImport("user32.dll", EntryPoint = "SendMessageW",
+        CharSet = CharSet.Unicode)]
+    private static extern IntPtr SendMessageNativeText(
+        IntPtr hwnd, uint message, IntPtr wParam,
+        [MarshalAs(UnmanagedType.LPWStr)] string text);
+
+    private const uint WM_SETTEXT_NATIVE = 0x000C;
+
     private static bool TryPrepareNativeCustomOutput(
         IntPtr dialog, out string issue)
     {
         issue = "";
         if (string.IsNullOrWhiteSpace(_destination))
-            return true; // absolutely no changes in original-only mode
+            return true; // blank custom: preserve original Autodesk output
 
         try
         {
@@ -2186,102 +2220,146 @@ internal static class NativeIsoDialogEnhancer
                     destination + ". Select an existing folder.";
                 return false;
             }
+            string original = _source ?? ReadSourcePath(dialog) ?? "";
 
-            // The output field is adjacent to Autodesk's own "Save Isos
-            // to" label. Identify it by both native source text and that
-            // label's screen position; never use a fixed control index.
-            var labels = new List<WinRect>();
-            var textBoxes = new List<TextBoxBase>();
-            EnumChildWindows(dialog, (handle, _) =>
+            var labelRects = new List<WinRect>();
+            var candidates = new List<(
+                IntPtr Handle, TextBoxBase? Text, ComboBox? Combo,
+                bool NativeEdit, int Score)>();
+            int textFields = 0;
+            int sourceMatches = 0;
+
+            // Two-pass scan: first locate the optional native label, then
+            // identify the actual path control. A label is NOT required:
+            // the verified original native folder is a stronger identifier.
+            EnumChildWindows(dialog, (hwnd, _) =>
             {
-                string caption = WindowText(handle).Replace("&", "").Trim();
-                if (caption.StartsWith("Save Isos to",
+                string label = WindowText(hwnd).Replace("&", "").Trim();
+                if (label.StartsWith("Save Isos to",
                         StringComparison.OrdinalIgnoreCase) &&
-                    GetWindowRect(handle, out WinRect labelBounds))
-                    labels.Add(labelBounds);
-
-                if (Control.FromHandle(handle) is TextBoxBase edit &&
-                    !edit.IsDisposed && edit != _destinationBox &&
-                    edit.IsHandleCreated && edit.Visible &&
-                    edit.Enabled &&
-                    (!edit.ReadOnly ||
-                     edit.Text.Trim().Trim('"').Equals(destination,
-                         StringComparison.OrdinalIgnoreCase)))
-                    textBoxes.Add(edit);
+                    GetWindowRect(hwnd, out WinRect bounds))
+                    labelRects.Add(bounds);
                 return true;
             }, IntPtr.Zero);
 
-            TextBoxBase? nativeEdit = null;
-            int bestScore = 0;
-            bool ambiguous = false;
-            foreach (TextBoxBase edit in textBoxes)
+            EnumChildWindows(dialog, (hwnd, _) =>
             {
-                string value = edit.Text.Trim().Trim('"');
-                bool sameSource = !string.IsNullOrWhiteSpace(_source) &&
-                    value.Equals(_source.Trim().Trim('"'),
-                        StringComparison.OrdinalIgnoreCase);
-                bool sameDestination = value.Equals(destination,
-                    StringComparison.OrdinalIgnoreCase);
+                Control? control = Control.FromHandle(hwnd);
+                TextBoxBase? edit = control as TextBoxBase;
+                ComboBox? combo = control as ComboBox;
+                bool rawEdit = false;
+                if (edit is null && combo is null && control is null)
+                {
+                    var nativeClass = new StringBuilder(256);
+                    if (GetClassName(hwnd, nativeClass, nativeClass.Capacity) > 0)
+                    {
+                        string className = nativeClass.ToString();
+                        rawEdit = className.Equals("Edit",
+                                StringComparison.OrdinalIgnoreCase) ||
+                            className.StartsWith("WindowsForms10.EDIT.",
+                                StringComparison.OrdinalIgnoreCase);
+                    }
+                }
+                if ((edit is null && combo is null && !rawEdit) ||
+                    (control is { IsDisposed: true }))
+                    return true;
+
+                textFields++;
+                string text = edit?.Text ?? combo?.Text ??
+                    WindowText(hwnd);
+                bool sameOriginal = SameOutputDirectory(text, original);
+                bool sameDestination = SameOutputDirectory(text, destination);
                 bool nearLabel = false;
-                if (GetWindowRect(edit.Handle, out WinRect bounds))
-                {
-                    nearLabel = labels.Any(label =>
-                        Math.Abs((bounds.Top + bounds.Bottom) / 2 -
-                                 (label.Top + label.Bottom) / 2) <= 28 &&
-                        bounds.Left >= label.Left - 10 &&
-                        bounds.Left < label.Right + 900);
-                }
-                if (!sameSource && !nearLabel && !sameDestination)
-                    continue;
-                // Native source path + label is stronger than either
-                // signal alone. Ignore unrelated editable/search fields.
-                int score = (sameSource ? 100 : 0) +
-                    (nearLabel ? 60 : 0) + (sameDestination ? 40 : 0);
-                if (score > bestScore)
-                {
-                    bestScore = score;
-                    nativeEdit = edit;
-                    ambiguous = false;
-                }
-                else if (score == bestScore)
-                    ambiguous = true;
-            }
-            if (nativeEdit is null || ambiguous)
+                if (GetWindowRect(hwnd, out WinRect rect))
+                    nearLabel = labelRects.Any(label =>
+                        Math.Abs((rect.Top + rect.Bottom) / 2 -
+                                 (label.Top + label.Bottom) / 2) <= 30 &&
+                        rect.Left >= label.Left - 10 &&
+                        rect.Left <= label.Right + 950);
+                if (sameOriginal) sourceMatches++;
+                // Never select a search/Revision textbox just because
+                // it's close to the Output Settings group. Require an
+                // actual native output path or the exact destination.
+                if (!sameOriginal && !sameDestination)
+                    return true;
+
+                int score = (sameOriginal ? 200 : 0) +
+                    (sameDestination ? 150 : 0) +
+                    (nearLabel ? 40 : 0);
+                candidates.Add((hwnd, edit, combo, rawEdit, score));
+                return true;
+            }, IntPtr.Zero);
+
+            var ordered = candidates.OrderByDescending(c => c.Score)
+                .ToArray();
+            SafeLog("\nSPTC REV119: native output probe: " +
+                textFields + " input control(s), " +
+                sourceMatches + " native-path match(es), " +
+                labelRects.Count + " Save Isos to label(s), " +
+                ordered.Length + " eligible candidate(s).");
+
+            if (ordered.Length == 0 ||
+                (ordered.Length > 1 &&
+                 ordered[0].Score == ordered[1].Score))
             {
-                issue = "SPTC could not uniquely identify the editable " +
-                    "Autodesk 'Save Isos to' field. ISO Create was blocked " +
-                    "to prevent generating to the wrong folder. " +
-                    "Use Autodesk's own Save Isos to Browse button " +
-                    "to select the desired output folder.";
+                issue = "Cannot uniquely locate Autodesk's native " +
+                    "'Save Isos to' output control. Matching native " +
+                    "path controls: " + sourceMatches +
+                    ". No ISO was submitted. The field may be a " +
+                    "custom owner-drawn control; use the native Browse " +
+                    "button to select the same folder and retry.";
                 return false;
             }
 
-            if (!nativeEdit.Text.Trim().Trim('"').Equals(destination,
-                    StringComparison.OrdinalIgnoreCase))
+            var match = ordered[0];
+            string Before() => match.Text?.Text ?? match.Combo?.Text ??
+                WindowText(match.Handle);
+            if (!SameOutputDirectory(Before(), destination))
             {
-                nativeEdit.Text = destination;
-                // Let WinForms run normal validation/binding where the
-                // native parent is a ContainerControl. No Project Setup,
-                // disk copy or deletion operation takes place here.
-                if (nativeEdit.Parent is ContainerControl parent)
-                    parent.Validate();
+                if (match.Text is { } textBox)
+                {
+                    // Text property is writable even when ReadOnly=true.
+                    // This raises WinForms TextChanged so Autodesk's own
+                    // binding can update. No native project style edits.
+                    textBox.Text = destination;
+                    if (textBox.Parent is ContainerControl parent)
+                        parent.Validate();
+                }
+                else if (match.Combo is { } combo)
+                {
+                    if (combo.DropDownStyle == ComboBoxStyle.DropDownList)
+                    {
+                        issue = "Native ISO output is a selection-only list. " +
+                            "Use Autodesk's own Save Isos to Browse button.";
+                        return false;
+                    }
+                    combo.Text = destination;
+                    if (combo.Parent is ContainerControl parent)
+                        parent.Validate();
+                }
+                else if (match.NativeEdit)
+                {
+                    SendMessageNativeText(match.Handle,
+                        WM_SETTEXT_NATIVE, IntPtr.Zero, destination);
+                }
             }
-            if (!nativeEdit.Text.Trim().Trim('"').Equals(destination,
-                    StringComparison.OrdinalIgnoreCase))
+            if (!SameOutputDirectory(Before(), destination))
             {
-                issue = "Autodesk rejected the Custom Save Location. " +
-                    "ISO Create was blocked.";
+                issue = "Autodesk's native Save Isos to control did not " +
+                    "accept the custom folder. Create was blocked; no " +
+                    "original DWGs were deleted.";
                 return false;
             }
+
             _directCustomOutputAccepted = true;
-            SafeLog("\nSPTC REV118: native Save Isos to confirmed: " +
-                destination + "; generating directly in custom folder. " +
-                "Original ISO DWGs are not copied or deleted.");
+            SafeLog("\nSPTC REV119: native Save Isos to path " +
+                "confirmed: " + destination +
+                "; direct Autodesk output selected. No copy/delete.");
             return true;
         }
         catch (Exception ex)
         {
-            issue = "Could not set Autodesk native Save Isos to: " +
+            issue = "Could not prepare native Save Isos to: " +
                 ex.GetBaseException().Message;
             return false;
         }
