@@ -47,6 +47,10 @@ internal static class NativeIsoDialogEnhancer
     // dimensions change. It never queries PnP databases or project files.
     private static System.Windows.Forms.Timer? _layoutWatch;
     private static System.Windows.Forms.Timer? _activeFilterVerify;
+    // REV126: bounded deferred Selected Only projection after Autodesk
+    // has restored its FULL native list from a manual text filter.
+    private static System.Windows.Forms.Timer? _showSelectedTimer;
+    private static int _showSelectedSerial;
     // REV98: retain the full Autodesk project source while only
     // projecting the exact Active DWG tag. Prevents losing Create
     // eligibility when returning from another manually searched route.
@@ -331,6 +335,104 @@ internal static class NativeIsoDialogEnhancer
             "\n\nSwitch to Show All Project, verify every " +
             "required checkbox and that Create is enabled, then click " +
             "Create again. No ISO was started by this click.";
+        return true;
+    }
+
+    // REV126: mode #3 MUST display the exact checked route ledger, not
+    // toggle Current Drawing / All Project. Unlike Autodesk's native
+    // list rebuild, this presentation never changes native selections.
+    private static void StopSelectedModeTimer()
+    {
+        _showSelectedSerial++;
+        try { _showSelectedTimer?.Stop(); _showSelectedTimer?.Dispose(); }
+        catch (Exception) { }
+        _showSelectedTimer = null;
+    }
+
+    private static bool ShowSelectedLinesMode(IntPtr dialog)
+    {
+        if (_document is null || !IsWindow(dialog)) return false;
+        StopSelectedModeTimer();
+        StopActiveProjectProjection();
+        StopQuietShowAll();
+
+        // Save the GLOBAL selected tags before clearing any filter.
+        string[] selected = NativeIsoLineSelectOverlay
+            .CaptureSelectedTags(dialog);
+        NativeIsoLineSelectOverlay.EndProjectRedrawBatch();
+        NativeIsoExactLineFilter.End(restore: true);
+        ProjectFolderLinePicker.ClearVisibleProjection();
+        if (!ActiveDwgTags.ClearOneTag(dialog, _document))
+        {
+            SafeLog("\nSPTC REV126: Could not clear the previous native " +
+                "filter for Selected Only. Kept original list.");
+            return false;
+        }
+
+        if (NativeIsoLineSelectOverlay
+            .HasCompleteUnfilteredProjectSource(dialog))
+        {
+            bool projected = ProjectFolderLinePicker
+                .ShowOnlySelectedLineNumbers(selected, _document);
+            if (projected)
+                NativeIsoLineSelectOverlay.UpdateDisplayedCount();
+            return projected;
+        }
+
+        // Autodesk can asynchronously rebuild its original list after
+        // manual search. Do NOT project stale row indices. Restore the
+        // project source, reconcile saved exact selections, and wait for
+        // a stable source before drawing the selected-only view.
+        NativeIsoToolbarClickFilter.TryRefreshNativeProjectList(dialog);
+        NativeIsoLineSelectOverlay.ScheduleModeChangeRecovery(
+            dialog, selected);
+
+        int token = _showSelectedSerial;
+        int ticks = 0;
+        int stable = 0;
+        var timer = new System.Windows.Forms.Timer { Interval = 180 };
+        _showSelectedTimer = timer;
+        timer.Tick += (_, _) =>
+        {
+            if (token != _showSelectedSerial ||
+                _native != dialog || !IsWindow(dialog))
+            {
+                try { timer.Stop(); timer.Dispose(); } catch { }
+                return;
+            }
+            if (++ticks > 48)
+            {
+                StopSelectedModeTimer();
+                SafeLog("\nSPTC REV126: Selected Only not projected: " +
+                    "Autodesk project rows did not stabilize. " +
+                    "Unfiltered native list retained, no selection changed.");
+                return;
+            }
+            if (!NativeIsoLineSelectOverlay
+                    .HasCompleteUnfilteredProjectSource(dialog))
+            {
+                stable = 0;
+                return;
+            }
+            string[] checkedTags = NativeCheckedRouteNames(dialog);
+            bool allReady =
+                new HashSet<string>(checkedTags,
+                    StringComparer.OrdinalIgnoreCase).SetEquals(selected);
+            if (!allReady)
+            {
+                stable = 0;
+                return;
+            }
+            if (++stable < 2) return;
+            StopSelectedModeTimer();
+            if (ProjectFolderLinePicker.ShowOnlySelectedLineNumbers(
+                    selected, _document))
+                NativeIsoLineSelectOverlay.UpdateDisplayedCount();
+        };
+        timer.Start();
+        SafeLog("\nSPTC REV126: Selected Only queued after native " +
+            "project-list/checkbox reconciliation (" + selected.Length +
+            " saved routes).");
         return true;
     }
 
@@ -1676,11 +1778,18 @@ internal static class NativeIsoDialogEnhancer
                     // native Create button. Instead filter the ORIGINAL
                     // Autodesk line list using its own Filter textbox.
                     // The native row stays click/checkbox/validation-capable.
-                    NativeIsoToolbarClickFilter.Attach(native, showActive =>
+                    NativeIsoToolbarClickFilter.Attach(native, mode =>
                     {
                         if (_document is null) return false;
+                        if (mode < 1 || mode > 3) return false;
                         if (_quietShowAllTimer is not null)
                             return false; // ignore repeat clicks mid-validation
+                        StopSelectedModeTimer();
+                        if (mode == 3)
+                            return ShowSelectedLinesMode(native);
+                        // Icons #1 and #2 are explicit scope selection,
+                        // never a binary toggle that treats #3 as Active.
+                        bool showActive = mode == 1;
 
                         // REV98: cancel any unfinished Active projection on
                         // a new user-selected scope, and capture the full
@@ -2230,9 +2339,9 @@ internal static class NativeIsoDialogEnhancer
 
             ProjectFolderLinePicker.Attach(dialog, _document);
             NativeIsoLineSelectOverlay.Attach(dialog);
-            // REV44: remove Autodesk's startup search hint without clearing
-            // actual line filters or user-entered search text.
-            ActiveDwgTags.ClearInitialSearchHint(dialog);
+            // REV126: retain Autodesk's original gray native search cue
+            // "Filter (eg. *52PW*)". Never replace it with real filter text,
+            // and never alter the user's typed search query here.
             // REV20: avoid REV18's eager scan. Folder metadata/line numbers
             // are queried only AFTER the user chooses a folder.
             // Widen native Display lines through a draggable splitter when
@@ -2258,10 +2367,8 @@ internal static class NativeIsoDialogEnhancer
                         _lastDialogClientSize = size;
                         NativeIsoLinePaneResizer.Refresh();
                         PositionOverlay(dialog);
-                        // Native controls may finalize the cue banner after
-                        // initial attachment. Recheck only the known default
-                        // prompt on the first layout/update; user text is safe.
-                        ActiveDwgTags.ClearInitialSearchHint(dialog);
+                        // REV126: leave the native search cue banner and
+                        // user-entered filter text completely untouched.
                     }
                 }
             };
@@ -2439,6 +2546,7 @@ internal static class NativeIsoDialogEnhancer
     {
         StopQuietShowAll();
         StopActiveProjectProjection();
+        StopSelectedModeTimer();
         _watch?.Stop();
         _watch?.Dispose();
         _watch = null;
