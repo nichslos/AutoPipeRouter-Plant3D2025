@@ -2,7 +2,7 @@ name: Build SPTC Production Iso DLL
 
 on:
   push:
-    branches: [main, feature/sptc-production-iso-rev125-native-notification-probe-20261119]
+    branches: [main, feature/sptc-production-iso-rev126-five-filter-controls-20261119]
     paths:
       - 'src/SPTC.ProductionIso/**'
       - '.github/workflows/build-production-iso.yml'
