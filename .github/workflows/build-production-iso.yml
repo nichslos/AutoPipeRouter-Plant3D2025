@@ -2,7 +2,7 @@ name: Build SPTC Production Iso DLL
 
 on:
   push:
-    branches: [main, feature/sptc-production-iso-rev122-auto-stop-no-duplicate-toast-20261119]
+    branches: [main, feature/sptc-production-iso-rev123-results-font-render-20261119]
     paths:
       - 'src/SPTC.ProductionIso/**'
       - '.github/workflows/build-production-iso.yml'
