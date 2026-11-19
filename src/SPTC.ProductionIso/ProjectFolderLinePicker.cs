@@ -1019,7 +1019,8 @@ internal static class ProjectFolderLinePicker
         IReadOnlyList<string> actualTags, Document? doc,
         bool preserveOtherCheckedNativeRoutes = false)
     {
-        if (_dialog == IntPtr.Zero || actualTags.Count == 0)
+        if (_dialog == IntPtr.Zero ||
+            (actualTags.Count == 0 && !preserveOtherCheckedNativeRoutes))
             return false;
 
         ClearVisibleProjection();
@@ -1037,7 +1038,7 @@ internal static class ProjectFolderLinePicker
         // EVERY exact native-eligible route instead of rejecting the
         // entire active DWG because one physical tag is unavailable.
         // Do not fabricate missing rows or silently select them for ISO.
-        if (matches.Count == 0)
+        if (matches.Count == 0 && actualTags.Count > 0)
         {
             doc?.Editor.WriteMessage(
                 "\nSPTC REV105: None of the " + allowed.Count +
@@ -1128,6 +1129,25 @@ internal static class ProjectFolderLinePicker
             "checked=" + nativeExactChecked + ": " +
             string.Join(", ", actualTags));
         return true;
+    }
+
+    // REV126: toolbar #3 is a selected-only PRESENTATION of the
+    // genuine Autodesk project list. Unlike Active Drawing (#1), its
+    // allowed route tags come from the session's saved checked ledger.
+    // Do not rewrite checked native source rows or the Create button.
+    // An empty selection correctly displays an empty selected-only list.
+    public static bool ShowOnlySelectedLineNumbers(
+        IReadOnlyList<string> selectedTags, Document? doc)
+    {
+        if (ShowExactActiveDwgTags(selectedTags, doc,
+                preserveOtherCheckedNativeRoutes: true))
+        {
+            doc?.Editor.WriteMessage(
+                "\nSPTC REV126: Show Selected only: " +
+                selectedTags.Count + " saved exact route(s).");
+            return true;
+        }
+        return false;
     }
 
     // REV108: force the native-parented Active checked list to be visible
