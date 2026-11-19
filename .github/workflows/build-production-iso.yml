@@ -2,7 +2,7 @@ name: Build SPTC Production Iso DLL
 
 on:
   push:
-    branches: [main, feature/sptc-production-iso-rev120-copy-preserve-all-results-20261117]
+    branches: [main, feature/sptc-production-iso-rev121-verified-custom-completion-20261119]
     paths:
       - 'src/SPTC.ProductionIso/**'
       - '.github/workflows/build-production-iso.yml'
