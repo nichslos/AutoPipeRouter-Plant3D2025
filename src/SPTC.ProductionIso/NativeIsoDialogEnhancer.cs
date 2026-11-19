@@ -1389,7 +1389,9 @@ internal static class NativeIsoDialogEnhancer
     private sealed record CopyReport(
         int Copied, int Skipped, int OriginalsDeleted,
         int OriginalsRetained, string Destination,
-        CustomCopyOutput[] Outputs);
+        CustomCopyOutput[] Outputs,
+        bool AllCustomFilesVerified, string[] MissingRoutes,
+        string[] UnprocessedNativeFiles);
 
     // REV116: separate post-transfer SPTC completion notice. Autodesk's
     // native Isometric Creation Complete balloon belongs to the Autodesk
@@ -1418,16 +1420,24 @@ internal static class NativeIsoDialogEnhancer
     private static void NotifyCustomTransferFinished(CopyReport report)
     {
         CloseCustomCompletionNotice();
-        if (report.Copied == 0 && report.Skipped == 0)
-            return;
         try
         {
-            string caption = report.Copied > 0
+            // REV121: do not display "Ready" merely because one DWG per
+            // selected route was copied. Multiple split-sheet DWGs can
+            // arrive later, or an existing file may have been SKIPPED.
+            // Only a settled, exhaustive native-vs-custom batch is Ready.
+            string caption = report.AllCustomFilesVerified
                 ? "SPTC Custom ISO Ready"
-                : "SPTC Custom ISO Existing Files";
-            string detail = report.Copied + " DWG(s) verified in custom " +
-                "folder. Autodesk native originals retained for " +
-                "Results/open compatibility.";
+                : "SPTC Custom ISO Incomplete";
+            string detail = report.AllCustomFilesVerified
+                ? report.Copied +
+                    " DWG(s) copied and verified in custom folder. " +
+                    "Native original DWGs retained."
+                : report.Copied + " copied; " +
+                    report.Skipped + " existing/skipped; " +
+                    report.MissingRoutes.Length + " missing route(s); " +
+                    report.UnprocessedNativeFiles.Length +
+                    " pending source DWG(s). Review SPTC_ISOSTATUS.";
             var icon = new NotifyIcon
             {
                 Icon = SystemIcons.Information,
@@ -1436,7 +1446,8 @@ internal static class NativeIsoDialogEnhancer
             };
             _customCompletionIcon = icon;
             icon.ShowBalloonTip(7000, caption, detail,
-                ToolTipIcon.Info);
+                report.AllCustomFilesVerified
+                    ? ToolTipIcon.Info : ToolTipIcon.Warning);
             var dismiss = new System.Windows.Forms.Timer { Interval = 12000 };
             _customCompletionDismiss = dismiss;
             dismiss.Tick += (_, _) => CloseCustomCompletionNotice();
@@ -1445,7 +1456,7 @@ internal static class NativeIsoDialogEnhancer
         catch (Exception ex)
         {
             CloseCustomCompletionNotice();
-            SafeLog("\nSPTC REV116: custom completion notice unavailable: " +
+            SafeLog("\nSPTC REV121: completion notice unavailable: " +
                 ex.GetBaseException().Message);
         }
     }
@@ -1585,15 +1596,18 @@ internal static class NativeIsoDialogEnhancer
                 else
                 {
                     _lastCopyReport = finished.Result;
-                    _copyState = "Completed";
+                    _copyState = _lastCopyReport.AllCustomFilesVerified
+                        ? "Custom transfer verified — complete"
+                        : "Custom transfer incomplete";
                     SafeLog(
-                        $"\nSPTC REV117: {_lastCopyReport.Copied} DWG(s) verified in custom location {_lastCopyReport.Destination}; " +
-                        $"{_lastCopyReport.OriginalsRetained} original native ISO DWG(s) intentionally retained " +
-                        "for Autodesk deferred Results/open references. No source DWG deletion.");
-                    // REV116: notify only AFTER the custom transfer worker
-                    // reported final outputs. This is a separate SPTC
-                    // notification; Autodesk's earlier native ISO creation
-                    // balloon is independent and left untouched.
+                        $"\nSPTC REV121: {_lastCopyReport.Copied} DWG(s) copied to {_lastCopyReport.Destination}; " +
+                        $"skipped={_lastCopyReport.Skipped}, verifiedComplete={_lastCopyReport.AllCustomFilesVerified}, " +
+                        $"missingRoutes={string.Join(", ", _lastCopyReport.MissingRoutes)}, " +
+                        $"pendingNativeDWGs={string.Join(", ", _lastCopyReport.UnprocessedNativeFiles)}. " +
+                        "Original native DWGs preserved.");
+                    // SPTC only announces transfer completion after the
+                    // copy task has checked the final source/destination
+                    // set. Autodesk's earlier native balloon is independent.
                     NotifyCustomTransferFinished(_lastCopyReport);
                 }
                 return;
@@ -2610,6 +2624,38 @@ internal static class NativeIsoDialogEnhancer
                 .FirstOrDefault();
             if (matched != null) completedTags.Add(matched);
         }
+
+        // REV121: check every matching, newly generated native DWG rather
+        // than relying on a single completed sheet per route. Read source
+        // file names only; never delete native or custom content.
+        string[] PendingCurrentNativeDWGs()
+        {
+            if (!Directory.Exists(source))
+                return new[] { "(native output folder unavailable)" };
+            return Directory.EnumerateFiles(
+                    source, "*.dwg", SearchOption.TopDirectoryOnly)
+                .Where(file => !processedFiles.Contains(file) &&
+                    MatchesCurrentIsoBatch(
+                        Path.GetFileName(file), selectedTags))
+                .Where(file =>
+                {
+                    try
+                    {
+                        var info = new FileInfo(file);
+                        return info.Exists &&
+                            info.LastWriteTimeUtc >=
+                                sinceUtc.AddSeconds(-10);
+                    }
+                    catch (IOException) { return true; }
+                    catch (UnauthorizedAccessException) { return true; }
+                })
+                .Select(Path.GetFileName)
+                .Where(name => name != null)
+                .Select(name => name!)
+                .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+        }
+
         long lastNativeChangeTicks = start.Ticks;
         // REV104: cap SOURCE directory enumeration to one sweep per
         // three seconds even if Autodesk emits dozens of FileSystemWatcher
@@ -2886,13 +2932,32 @@ internal static class NativeIsoDialogEnhancer
                     expectedTags.All(completedTags.Contains);
                 double idleSeconds = (DateTime.UtcNow - lastProcessed)
                     .TotalSeconds;
-                bool batchQuiet = (allKnownTagsFinished && idleSeconds >= 12) ||
+                // REV121: the early native Autodesk success balloon is
+                // not a custom-copy readiness signal. Require the entire
+                // native DWG directory to settle for a bounded 20 seconds
+                // and inspect every recent source sheet before announcing
+                // a verified custom batch. Never change native notifications.
+                double sourceQuietSeconds = (DateTime.UtcNow -
+                    new DateTime(System.Threading.Interlocked.Read(
+                        ref lastNativeChangeTicks),
+                        DateTimeKind.Utc)).TotalSeconds;
+                bool batchQuiet = (allKnownTagsFinished &&
+                        idleSeconds >= 20 && sourceQuietSeconds >= 20) ||
                     (expectedTags.Count == 0 &&
-                     (copied > 0 || skipped > 0) && idleSeconds >= 120);
-                // REV117: the custom publish process alone determines
-                // readiness; do not delay for unsafe source deletion.
+                     (copied > 0 || skipped > 0) && idleSeconds >= 120 &&
+                     sourceQuietSeconds >= 20);
                 if (batchQuiet)
-                    break;
+                {
+                    try
+                    {
+                        if (PendingCurrentNativeDWGs().Length == 0 &&
+                            completedOutputs.All(item =>
+                                File.Exists(item.Path)))
+                            break;
+                    }
+                    catch (IOException) { }
+                    catch (UnauthorizedAccessException) { }
+                }
 
                 // REV104: FileSystemWatcher is a wake hint, never a
                 // request to hammer the SMB source once per notification.
@@ -2904,9 +2969,37 @@ internal static class NativeIsoDialogEnhancer
         }
         finally { watcher?.Dispose(); }
 
+        string[] missingRoutes = expectedTags
+            .Where(tag => !completedTags.Contains(tag))
+            .OrderBy(tag => tag, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        string[] pendingNative;
+        try { pendingNative = PendingCurrentNativeDWGs(); }
+        catch (Exception ex) when (ex is IOException ||
+                                   ex is UnauthorizedAccessException)
+        {
+            pendingNative = new[] { "(native source scan unavailable)" };
+        }
+
+        // REV121: "Ready" must mean every selected route has a custom
+        // result, every relevant source DWG was handled, no old custom
+        // DWG was substituted for a newly generated one, all output paths
+        // exist, and Autodesk's source directory remained quiet.
+        bool sourceSettled = (DateTime.UtcNow -
+            new DateTime(System.Threading.Interlocked.Read(
+                ref lastNativeChangeTicks),
+                DateTimeKind.Utc)).TotalSeconds >= 20;
+        bool verifiedComplete = expectedTags.Count > 0 &&
+            missingRoutes.Length == 0 &&
+            pendingNative.Length == 0 &&
+            skipped == 0 && copied > 0 &&
+            sourceSettled &&
+            completedOutputs.All(item => File.Exists(item.Path));
+
         return new CopyReport(
             copied, skipped, 0, copied + skipped,
-            targetRoot, completedOutputs.ToArray());
+            targetRoot, completedOutputs.ToArray(),
+            verifiedComplete, missingRoutes, pendingNative);
     }
 
     private static void EnsureMonitor()
@@ -2934,9 +3027,12 @@ internal static class NativeIsoDialogEnhancer
             "\nCustom transfer state: " + _copyState +
             "\nResults dialog observed: " + _resultsSeen +
             (_lastCopyReport is null ? "" :
-                $"\nLast custom transfer: {_lastCopyReport.Copied} saved, " +
-                $"{_lastCopyReport.OriginalsDeleted} originals deleted, " +
-                $"{_lastCopyReport.OriginalsRetained} originals retained"));
+                $"\nLast custom transfer: {_lastCopyReport.Copied} copied, " +
+                $"{_lastCopyReport.Skipped} existing/skipped, " +
+                $"verified complete={_lastCopyReport.AllCustomFilesVerified}, " +
+                $"missing routes={string.Join(", ", _lastCopyReport.MissingRoutes)}, " +
+                $"pending native DWGs={string.Join(", ", _lastCopyReport.UnprocessedNativeFiles)}; " +
+                "originals retained"));
     }
 
     // Preserve the public command entry point but never rely on its
