@@ -211,6 +211,11 @@ internal static class NativeIsoResultsOverlay
     private static bool _nativePaintingWarned;
     private static System.Windows.Forms.Timer? _timer;
     private static string _customFolder = "";
+    // REV124: original rows are only hidden AFTER the custom batch
+    // watcher ends, and then only for groups where EVERY native sheet
+    // has a newly byte-verified custom counterpart. Incomplete routes
+    // keep native links to expose the failure rather than faking success.
+    private static bool _transferFinalized;
     private static readonly List<string> CopiedPaths = new();
     // A skipped, pre-existing custom DWG is still a clickable destination,
     // but must not be misrepresented as a newly generated copy.
@@ -249,6 +254,7 @@ internal static class NativeIsoResultsOverlay
         DetachTree();
         _dialog = IntPtr.Zero;
         _customFolder = "";
+        _transferFinalized = false;
         CopiedPaths.Clear();
         ExistingCustomPaths.Clear();
         ExpectedIsoTags.Clear();
@@ -369,6 +375,84 @@ internal static class NativeIsoResultsOverlay
         {
             Diagnostic("REV107 deferred custom Results refresh: " +
                 ex.GetBaseException().Message);
+        }
+    }
+
+    // REV124: this is called on AutoCAD's UI thread only AFTER the
+    // custom copier finishes (successful or incomplete). Never delete
+    // source files from disk. This updates only Autodesk's transient
+    // Results TreeView links for independently verified routes.
+    public static void FinalizeCustomTransferView()
+    {
+        if (string.IsNullOrWhiteSpace(_customFolder)) return;
+        _transferFinalized = true;
+        _displaySignature = "";
+        try { RefreshNativeResults(); }
+        catch (Exception ex)
+        {
+            Diagnostic("REV124 Results finalization will retry: " +
+                ex.GetBaseException().Message);
+        }
+    }
+
+    private static bool IsNativeFileRow(string value) =>
+        value.TrimStart().StartsWith("File:",
+            StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsNativeExplorerRow(string value) =>
+        value.Trim().Equals(CustomFolderLabel,
+            StringComparison.OrdinalIgnoreCase);
+
+    private static string NativeResultFilename(string label)
+    {
+        string raw = label.TrimStart().Substring(5).Trim().Trim('"');
+        string name = Path.GetFileName(raw);
+        // Native collision numbering (2) is normalized for customs
+        // by the existing CustomDestinationName helper.
+        string stem = Path.GetFileNameWithoutExtension(name);
+        int open = stem.LastIndexOf(" (", StringComparison.Ordinal);
+        if (open > 0 && stem.EndsWith(")", StringComparison.Ordinal) &&
+            int.TryParse(stem.Substring(open + 2,
+                stem.Length - open - 3), out int seq) && seq > 0)
+            return stem.Substring(0, open) + Path.GetExtension(name);
+        return name;
+    }
+
+    private static bool HasVerifiedCustomForEveryNativeFile(
+        IEnumerable<string> nativeLabels, IEnumerable<string> customPaths)
+    {
+        if (!_transferFinalized) return false;
+        string[] nativeNames = nativeLabels
+            .Where(IsNativeFileRow).Select(NativeResultFilename)
+            .ToArray();
+        string[] published = customPaths.Where(path =>
+            !ExistingCustomPaths.Contains(path) && File.Exists(path))
+            .Select(Path.GetFileName).ToArray();
+        if (nativeNames.Length == 0 ||
+            published.Length < nativeNames.Length) return false;
+        return nativeNames.All(name => published.Any(p =>
+            string.Equals(p, name, StringComparison.OrdinalIgnoreCase)));
+    }
+
+    private static void HideVerifiedManagedOriginalRows(
+        IDictionary<TreeNode, List<string>> desired)
+    {
+        if (!_transferFinalized) return;
+        foreach (var (parent, paths) in desired)
+        {
+            if (parent.TreeView is null ||
+                !parent.Nodes.Cast<TreeNode>().Any(node =>
+                    node.Tag is CustomResultLink)) continue;
+            TreeNode[] originals = parent.Nodes.Cast<TreeNode>()
+                .Where(node => node.Tag is not CustomResultLink &&
+                    node.Nodes.Count == 0).ToArray();
+            if (!HasVerifiedCustomForEveryNativeFile(
+                    originals.Select(node => node.Text), paths))
+                continue;
+            foreach (TreeNode child in originals)
+                if (IsNativeFileRow(child.Text) ||
+                    IsNativeExplorerRow(child.Text))
+                    child.Remove(); // transient UI-only; source DWGs intact
         }
     }
 
@@ -629,8 +713,7 @@ internal static class NativeIsoResultsOverlay
         }
         if (!changed)
         {
-            // REV120: keep every Autodesk original File / folder
-            // result row visible beside the verified custom links.
+            HideVerifiedManagedOriginalRows(desired);
             return;
         }
 
@@ -676,9 +759,10 @@ internal static class NativeIsoResultsOverlay
                 if (!parent.IsExpanded) parent.Expand();
             }
 
-            // REV120: preserve Autodesk's original File: and Explorer
-            // rows and append SPTC Custom links only. No native rows
-            // removed, regardless of custom destination.
+            // REV124: only after byte-verified custom transfer ends,
+            // hide matching native result rows. Missing/old custom
+            // sources keep original links so users can diagnose them.
+            HideVerifiedManagedOriginalRows(desired);
         }
         finally
         {
@@ -1140,10 +1224,48 @@ internal static class NativeIsoResultsOverlay
             itemsChanged = true;
         }
 
-        // REV120: retain ALL Autodesk native result rows (File: and
-        // Open drawing folder in Windows Explorer). Show SPTC Custom
-        // links immediately after the originals without touching any
-        // native item handles, user files, or source directories.
+        // REV124: remove only transient Autodesk native File / Explorer
+        // child ROWS for route groups whose ENTIRE current set of native
+        // result filenames was successfully published to custom storage.
+        // If a sheet (such as S-011-03-1) is missing, retain its native
+        // error/diagnostic links and do not claim custom success.
+        if (_transferFinalized)
+        {
+            foreach (var (parent, paths) in required)
+            {
+                if (!_winLinks.Values.Any(link =>
+                        link.Parent == parent && !link.OpenFolder))
+                    continue;
+                var originals = new List<(IntPtr Item, string Label)>();
+                IntPtr child = WinNext(tree, TVGN_CHILD, parent);
+                for (int i = 0;
+                    child != IntPtr.Zero && i < 10000; i++)
+                {
+                    if (!_winLinks.ContainsKey(child))
+                    {
+                        string label = NativeItemText(tree, child);
+                        if (IsNativeFileRow(label) ||
+                            IsNativeExplorerRow(label))
+                            originals.Add((child, label));
+                    }
+                    child = WinNext(tree, TVGN_NEXT, child);
+                }
+
+                if (!HasVerifiedCustomForEveryNativeFile(
+                        originals.Select(item => item.Label), paths))
+                    continue;
+                foreach (var item in originals)
+                {
+                    RECT? rect = NativeItemRect(tree, item.Item, true);
+                    if (rect is not null && rect.Value.Left > 0 &&
+                        IsNativeFileRow(item.Label))
+                        _nativeFileTextX[parent] = rect.Value.Left;
+                    if (SendNative(tree, TVM_DELETEITEM, IntPtr.Zero,
+                        item.Item) != IntPtr.Zero)
+                        itemsChanged = true;
+                }
+            }
+        }
 
         if (itemsChanged)
             DrawNativeCustomLabels(tree);
