@@ -225,12 +225,15 @@ internal static class NativeIsoResultsOverlay
     private static string NativeLinkLabel(
         string path, bool openFolder, bool separator = false) =>
         separator ? "" : openFolder ? CustomFolderLabel : CustomLabel(path);
-    // Native Autodesk TreeView painting otherwise draws our Explorer
-    // text underneath its shifted SPTC underlined owner-drawn caption.
+    // REV123: insert invisible placeholder text for ALL custom links.
+    // Previously only the Explorer row used an invisible placeholder;
+    // Autodesk could also paint a second copy of visible Custom DWG
+    // captions underneath our owner-drawn pass, thickening their glyphs.
+    // Every link remains a real native TreeView item; its actual text
+    // is painted ONCE by DrawNativeCustomLabels and click-tested there.
     private static string NativeStorageLabel(
         string path, bool openFolder, bool separator = false) =>
-        openFolder && !separator ? "\u200B" :
-        NativeLinkLabel(path, openFolder, separator);
+        separator ? "" : "\u200B";
 
     private static string CustomLinkTarget(string dwg, bool openFolder) =>
         openFolder ? Path.GetDirectoryName(dwg) ?? "" : dwg;
@@ -914,19 +917,13 @@ internal static class NativeIsoResultsOverlay
             sibling = WinNext(tree, TVGN_NEXT, sibling);
         }
 
-        // REV61: shift BOTH custom rows half a space (~3 px) back to
-        // the left relative to REV60, and lower their visible glyphs
-        // by 2 px to visually match the native hyperlink row spacing.
-        // Never move the actual TreeView rows or touch the native list.
+        // REV123: native hyperlink baseline and item-row clipping
+        // are authoritative. NEVER paint 2+ pixels into the next row.
+        // This also ensures the same hit rectangle as the rendered text.
         x = Math.Max(0, x + 3);
-        // REV103: move the ENTIRE Custom-link group visually by the same
-        // small pixel offset; preserve exact top-to-top spacing between
-        // individual Custom files and their Explorer link.
-        int y = Math.Max(0, full.Top + textTopOffset + 2 +
-            verticalShiftPx);
+        int y = Math.Max(full.Top, full.Top + textTopOffset);
         int bottom = Math.Min(client.Height,
-            Math.Min(full.Bottom + Math.Max(0, verticalShiftPx),
-                y + Math.Max(1, textHeight)));
+            Math.Min(full.Bottom, y + Math.Max(1, textHeight)));
         int right = client.Width - 5;
         if (x >= right || y >= bottom)
             return null;
@@ -934,55 +931,14 @@ internal static class NativeIsoResultsOverlay
         return new Rectangle(x, y, right - x, bottom - y);
     }
 
-    // REV103: Windows TreeView rows have a global ItemHeight, not a
-    // per-node millimeter/point setting. Avoid another full blank row.
-    // Instead measure the text top of the original Autodesk Explorer
-    // link and the first injected Custom link, then move all injected
-    // group labels by the SAME pixel delta to target 20px top-to-top.
-    // Does not move native tree items or alter their individual spacing.
-    private const int TargetOriginalToFirstCustomTopPx = 25;
-
-    private static int CustomGroupVerticalShiftPx(IntPtr tree, IntPtr parent)
-    {
-        IntPtr originalExplorer = IntPtr.Zero;
-        NativeCustomLink? firstCustom = null;
-
-        IntPtr sibling = WinNext(tree, TVGN_CHILD, parent);
-        for (int i = 0; sibling != IntPtr.Zero && i < 400; i++)
-        {
-            if (_winLinks.TryGetValue(sibling, out var link))
-            {
-                if (!link.OpenFolder && !link.IsSeparator &&
-                    firstCustom is null)
-                    firstCustom = link;
-            }
-            else if (NativeItemText(tree, sibling).Equals(
-                         CustomFolderLabel,
-                         StringComparison.OrdinalIgnoreCase))
-                originalExplorer = sibling;
-            sibling = WinNext(tree, TVGN_NEXT, sibling);
-        }
-
-        if (originalExplorer != IntPtr.Zero && firstCustom is not null)
-        {
-            RECT? original = NativeItemRect(tree, originalExplorer, true);
-            Rectangle? custom = NativeCustomTextRectangle(
-                tree, firstCustom);
-            if (original is not null && custom is not null)
-            {
-                int measured = custom.Value.Top - original.Value.Top;
-                // REV105: target exactly 25px TEXT-TOP to TEXT-TOP
-                // between the original Explorer link and first Custom.
-                // Native row height remains unchanged for individual
-                // links; the adjustment is bounded for high-DPI themes.
-                return Math.Clamp(
-                    TargetOriginalToFirstCustomTopPx - measured, -5, 12);
-            }
-        }
-        // Without Autodesk's now-hidden native Explorer node, keep the
-        // custom text on its natural row rather than repainting 8px below.
-        return 0;
-    }
+    // REV123: an offset beyond the TreeView item's own row is unsafe:
+    // the next native WM_PAINT erases only row bounds, leaving stray
+    // glyph pixels/underlines outside the row from previous repaint passes.
+    // That produces the visibly heavier/ghosted Explorer hyperlinks.
+    // Keep custom text entirely inside its own real TreeView row and
+    // preserve the native row rhythm; no manual vertical group offsets.
+    private static int CustomGroupVerticalShiftPx(
+        IntPtr tree, IntPtr parent) => 0;
 
     private static void DrawNativeCustomLabels(IntPtr tree)
     {
