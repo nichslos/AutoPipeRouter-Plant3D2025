@@ -1393,73 +1393,11 @@ internal static class NativeIsoDialogEnhancer
         bool AllCustomFilesVerified, string[] MissingRoutes,
         string[] UnprocessedNativeFiles);
 
-    // REV116: separate post-transfer SPTC completion notice. Autodesk's
-    // native Isometric Creation Complete balloon belongs to the Autodesk
-    // background generator, not this custom-directory transfer.
-    // We never suppress/delay native application notifications.
-    private static NotifyIcon? _customCompletionIcon;
-    private static System.Windows.Forms.Timer? _customCompletionDismiss;
-
-    private static void CloseCustomCompletionNotice()
-    {
-        try
-        {
-            _customCompletionDismiss?.Stop();
-            _customCompletionDismiss?.Dispose();
-            _customCompletionDismiss = null;
-            if (_customCompletionIcon is not null)
-            {
-                _customCompletionIcon.Visible = false;
-                _customCompletionIcon.Dispose();
-                _customCompletionIcon = null;
-            }
-        }
-        catch (Exception) { }
-    }
-
-    private static void NotifyCustomTransferFinished(CopyReport report)
-    {
-        CloseCustomCompletionNotice();
-        try
-        {
-            // REV121: do not display "Ready" merely because one DWG per
-            // selected route was copied. Multiple split-sheet DWGs can
-            // arrive later, or an existing file may have been SKIPPED.
-            // Only a settled, exhaustive native-vs-custom batch is Ready.
-            string caption = report.AllCustomFilesVerified
-                ? "SPTC Custom ISO Ready"
-                : "SPTC Custom ISO Incomplete";
-            string detail = report.AllCustomFilesVerified
-                ? report.Copied +
-                    " DWG(s) copied and verified in custom folder. " +
-                    "Native original DWGs retained."
-                : report.Copied + " copied; " +
-                    report.Skipped + " existing/skipped; " +
-                    report.MissingRoutes.Length + " missing route(s); " +
-                    report.UnprocessedNativeFiles.Length +
-                    " pending source DWG(s). Review SPTC_ISOSTATUS.";
-            var icon = new NotifyIcon
-            {
-                Icon = SystemIcons.Information,
-                Text = "SPTC Production Iso",
-                Visible = true
-            };
-            _customCompletionIcon = icon;
-            icon.ShowBalloonTip(7000, caption, detail,
-                report.AllCustomFilesVerified
-                    ? ToolTipIcon.Info : ToolTipIcon.Warning);
-            var dismiss = new System.Windows.Forms.Timer { Interval = 12000 };
-            _customCompletionDismiss = dismiss;
-            dismiss.Tick += (_, _) => CloseCustomCompletionNotice();
-            dismiss.Start();
-        }
-        catch (Exception ex)
-        {
-            CloseCustomCompletionNotice();
-            SafeLog("\nSPTC REV121: completion notice unavailable: " +
-                ex.GetBaseException().Message);
-        }
-    }
+    // REV122: Autodesk owns the existing Isometric Creation Complete
+    // notification. We do not issue a second SPTC taskbar balloon.
+    // Custom-copy readiness is tracked independently in the status log;
+    // on completion the copy worker and timer are released automatically.
+    // The original Autodesk balloon timing is not overridden.
 
     public static void Launch(Document doc)
     {
@@ -1469,7 +1407,6 @@ internal static class NativeIsoDialogEnhancer
             return;
         }
         Detach();
-        CloseCustomCompletionNotice();
         // REV48: clear only the previous results links, not the approved
         // REV47 custom DWG copier or Autodesk's native results UI.
         NativeIsoResultsOverlay.Reset();
@@ -1582,33 +1519,36 @@ internal static class NativeIsoDialogEnhancer
                         }
                     }
                 }
+                // REV122: Detach closes this UI watch timer. The async
+                // copier already disposed its FileSystemWatcher in
+                // CopyFilesAsync.finally, and _copyTask is now null.
+                // A new SPTC_PRODISO run is no longer blocked.
                 Detach();
                 if (finished.IsFaulted)
                 {
-                    _copyState = "Error: " + finished.Exception?.GetBaseException().Message;
-                    SafeLog("\nSPTC ISO export: " + _copyState);
+                    _copyState = "Custom transfer failed — watcher stopped";
+                    SafeLog("\nSPTC REV122: " + _copyState + ": " +
+                        finished.Exception?.GetBaseException().Message);
                 }
                 else if (finished.IsCanceled)
                 {
-                    _copyState = "Canceled";
-                    SafeLog("\nSPTC ISO export canceled.");
+                    _copyState = "Custom transfer canceled — watcher stopped";
+                    SafeLog("\nSPTC REV122: " + _copyState);
                 }
                 else
                 {
                     _lastCopyReport = finished.Result;
                     _copyState = _lastCopyReport.AllCustomFilesVerified
-                        ? "Custom transfer verified — complete"
-                        : "Custom transfer incomplete";
+                        ? "Custom transfer verified — watcher stopped"
+                        : "Custom transfer incomplete — watcher stopped";
                     SafeLog(
-                        $"\nSPTC REV121: {_lastCopyReport.Copied} DWG(s) copied to {_lastCopyReport.Destination}; " +
+                        $"\nSPTC REV122: {_lastCopyReport.Copied} DWG(s) copied to {_lastCopyReport.Destination}; " +
                         $"skipped={_lastCopyReport.Skipped}, verifiedComplete={_lastCopyReport.AllCustomFilesVerified}, " +
                         $"missingRoutes={string.Join(", ", _lastCopyReport.MissingRoutes)}, " +
                         $"pendingNativeDWGs={string.Join(", ", _lastCopyReport.UnprocessedNativeFiles)}. " +
-                        "Original native DWGs preserved.");
-                    // SPTC only announces transfer completion after the
-                    // copy task has checked the final source/destination
-                    // set. Autodesk's earlier native balloon is independent.
-                    NotifyCustomTransferFinished(_lastCopyReport);
+                        "Original native DWGs preserved. " +
+                        "Custom ISO watcher automatically stopped; next SPTC_PRODISO is ready. " +
+                        "No separate SPTC completion notification.");
                 }
                 return;
             }
