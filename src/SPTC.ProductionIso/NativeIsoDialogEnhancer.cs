@@ -106,6 +106,15 @@ internal static class NativeIsoDialogEnhancer
     // that Autodesk won't generate another late split sheet in this run.
     private static volatile bool _resultsSeen;
     private static DateTime _nativeClosedAt;
+    // REV125: diagnostic-only observation of Autodesk's existing status
+    // tray notice. Never hide, replay, delay, or replace it. In particular,
+    // do NOT change TRAYNOTIFY; it controls OTHER Autodesk notifications.
+    private static DateTime _nativePopupObservedAt;
+    private static DateTime _resultsFirstObservedAt;
+    private static DateTime _customFirstCopiedAt;
+    private static DateTime _customBatchVerifiedAt;
+    private static DateTime _lastPopupProbeAt;
+    private static string _nativePopupWindowType = "(not detected)";
     // REV64: native dialog close is NOT proof that the user clicked Create.
     // Cancel and top-right X must never start a 10-minute background scan.
     private static bool _createRequested;
@@ -1431,6 +1440,12 @@ internal static class NativeIsoDialogEnhancer
         _nativeSeen = false;
         _resultsSeen = false;
         _nativeClosedAt = DateTime.MinValue;
+        _nativePopupObservedAt = DateTime.MinValue;
+        _resultsFirstObservedAt = DateTime.MinValue;
+        _customFirstCopiedAt = DateTime.MinValue;
+        _customBatchVerifiedAt = DateTime.MinValue;
+        _lastPopupProbeAt = DateTime.MinValue;
+        _nativePopupWindowType = "(not detected)";
         _createRequested = false;
         _batchPreparationFailed = false;
         // REV09: discover active DWG line-group tags but do not filter
@@ -1473,10 +1488,64 @@ internal static class NativeIsoDialogEnhancer
         return result;
     }
 
+    // REV125: observation only. The Autodesk ISO completion balloon may
+    // be a native/custom window whose title isn't exposed via Win32;
+    // absence of a match MUST NOT be interpreted as proof it did not
+    // appear. We inspect only top-level windows owned by this AutoCAD
+    // process, at most once each 1.5 seconds while custom copying.
+    private static void ProbeNativeIsoCompletionBalloon()
+    {
+        if (string.IsNullOrWhiteSpace(_destination) ||
+            !_createRequested || _nativePopupObservedAt != DateTime.MinValue ||
+            _nativeClosedAt == DateTime.MinValue ||
+            (DateTime.UtcNow - _lastPopupProbeAt).TotalMilliseconds < 1500)
+            return;
+        _lastPopupProbeAt = DateTime.UtcNow;
+        try
+        {
+            uint processId = (uint)Process.GetCurrentProcess().Id;
+            string? kind = null;
+            EnumWindows((hwnd, _) =>
+            {
+                GetWindowThreadProcessId(hwnd, out uint owner);
+                if (owner != processId) return true;
+                string caption = WindowText(hwnd);
+                if (caption.Contains("Isometric Creation Complete",
+                        StringComparison.OrdinalIgnoreCase) ||
+                    caption.Contains("All isometrics created successfully",
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    var className = new StringBuilder(128);
+                    GetClassName(hwnd, className, className.Capacity);
+                    kind = className.ToString();
+                    return false;
+                }
+                return true;
+            }, IntPtr.Zero);
+            if (kind is null) return;
+            _nativePopupObservedAt = DateTime.UtcNow;
+            _nativePopupWindowType = kind;
+            SafeLog("\nSPTC REV125: native ISO completion balloon " +
+                "observed (read-only), windowClass=" + kind +
+                ", customTransferPending=" +
+                (_copyTask is { IsCompleted: false }) + ".");
+        }
+        catch (Exception ex)
+        {
+            SafeLog("\nSPTC REV125: native balloon observation unavailable: " +
+                ex.GetBaseException().Message);
+        }
+    }
+
+    private static string EventClock(DateTime value) =>
+        value == DateTime.MinValue ? "(not observed)" :
+        value.ToLocalTime().ToString("HH:mm:ss.fff");
+
     private static void OnTick(object? sender, EventArgs e)
     {
         try
         {
+            ProbeNativeIsoCompletionBalloon();
             // REV33: the user sees each destination DWG as soon as its
             // atomic copy finishes; the batch watcher may remain alive to
             // collect the rest of a multi-line Production Iso job.
@@ -1491,6 +1560,8 @@ internal static class NativeIsoDialogEnhancer
                     : savedName;
                 string resultPath = Path.Combine(_destination, actualName);
                 NativeIsoResultsOverlay.ReportCopied(resultPath, existing);
+                if (!existing && _customFirstCopiedAt == DateTime.MinValue)
+                    _customFirstCopiedAt = DateTime.UtcNow;
                 _copyState = (existing ? "Existing " : "Custom saved ") +
                     actualName + "; monitoring remaining ISOs";
                 SafeLog(
@@ -1547,6 +1618,8 @@ internal static class NativeIsoDialogEnhancer
                 else
                 {
                     _lastCopyReport = finished.Result;
+                    if (_lastCopyReport.AllCustomFilesVerified)
+                        _customBatchVerifiedAt = DateTime.UtcNow;
                     _copyState = _lastCopyReport.AllCustomFilesVerified
                         ? "Custom transfer verified — watcher stopped"
                         : "Custom transfer incomplete — watcher stopped";
@@ -1557,7 +1630,16 @@ internal static class NativeIsoDialogEnhancer
                         $"pendingNativeDWGs={string.Join(", ", _lastCopyReport.UnprocessedNativeFiles)}. " +
                         "Original native DWGs preserved; only verified Results rows hide original links. " +
                         "Custom ISO watcher stopped; next SPTC_PRODISO is ready. " +
-                        "Autodesk controls native completion notification.");
+                        "Autodesk controls native completion notification." +
+                        "\nSPTC REV125 timeline: nativePopup=" +
+                        EventClock(_nativePopupObservedAt) +
+                        ", resultsObserved=" +
+                        EventClock(_resultsFirstObservedAt) +
+                        ", firstCustomCopy=" +
+                        EventClock(_customFirstCopiedAt) +
+                        ", verifiedBatch=" +
+                        EventClock(_customBatchVerifiedAt) +
+                        ". No native notification settings changed.");
                 }
                 return;
             }
@@ -1925,6 +2007,8 @@ internal static class NativeIsoDialogEnhancer
             if (results != IntPtr.Zero)
             {
                 _resultsSeen = true;
+                if (_resultsFirstObservedAt == DateTime.MinValue)
+                    _resultsFirstObservedAt = DateTime.UtcNow;
                 if (!string.IsNullOrWhiteSpace(_destination))
                     NativeIsoResultsOverlay.BeginSession(_destination);
                 if (_copyTask is null &&
@@ -2992,6 +3076,15 @@ internal static class NativeIsoDialogEnhancer
             "\nCustom folder: " + (string.IsNullOrEmpty(_destination) ? "(empty)" : _destination) +
             "\nCustom transfer state: " + _copyState +
             "\nResults dialog observed: " + _resultsSeen +
+            "\nREV125 native completion notice: " +
+                EventClock(_nativePopupObservedAt) +
+                ", window class=" + _nativePopupWindowType +
+            "\nFirst native Results dialog: " +
+                EventClock(_resultsFirstObservedAt) +
+            "\nFirst new custom DWG: " +
+                EventClock(_customFirstCopiedAt) +
+            "\nFull custom verification: " +
+                EventClock(_customBatchVerifiedAt) +
             (_lastCopyReport is null ? "" :
                 $"\nLast custom transfer: {_lastCopyReport.Copied} copied, " +
                 $"{_lastCopyReport.Skipped} existing/skipped, " +
