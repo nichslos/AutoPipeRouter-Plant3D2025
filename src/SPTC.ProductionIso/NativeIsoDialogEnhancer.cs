@@ -101,7 +101,10 @@ internal static class NativeIsoDialogEnhancer
     private static string _copyState = "Not started";
     private static CopyReport? _lastCopyReport;
     private static bool _nativeSeen;
-    private static bool _resultsSeen;
+    // Written by the UI watcher, read by the background file watcher.
+    // A completed native Results dialog is the first reliable signal
+    // that Autodesk won't generate another late split sheet in this run.
+    private static volatile bool _resultsSeen;
     private static DateTime _nativeClosedAt;
     // REV64: native dialog close is NOT proof that the user clicked Create.
     // Cancel and top-right X must never start a 10-minute background scan.
@@ -1523,6 +1526,12 @@ internal static class NativeIsoDialogEnhancer
                 // copier already disposed its FileSystemWatcher in
                 // CopyFilesAsync.finally, and _copyTask is now null.
                 // A new SPTC_PRODISO run is no longer blocked.
+                // REV124: only after the worker has finished staging,
+                // hashing, and publishing its custom files may the
+                // Results UI hide original links for fully copied routes.
+                // This is a UI-only operation, not disk deletion.
+                if (finished.Status == TaskStatus.RanToCompletion)
+                    NativeIsoResultsOverlay.FinalizeCustomTransferView();
                 Detach();
                 if (finished.IsFaulted)
                 {
@@ -1542,13 +1551,13 @@ internal static class NativeIsoDialogEnhancer
                         ? "Custom transfer verified — watcher stopped"
                         : "Custom transfer incomplete — watcher stopped";
                     SafeLog(
-                        $"\nSPTC REV122: {_lastCopyReport.Copied} DWG(s) copied to {_lastCopyReport.Destination}; " +
+                        $"\nSPTC REV124: {_lastCopyReport.Copied} DWG(s) copied to {_lastCopyReport.Destination}; " +
                         $"skipped={_lastCopyReport.Skipped}, verifiedComplete={_lastCopyReport.AllCustomFilesVerified}, " +
                         $"missingRoutes={string.Join(", ", _lastCopyReport.MissingRoutes)}, " +
                         $"pendingNativeDWGs={string.Join(", ", _lastCopyReport.UnprocessedNativeFiles)}. " +
-                        "Original native DWGs preserved. " +
-                        "Custom ISO watcher automatically stopped; next SPTC_PRODISO is ready. " +
-                        "No separate SPTC completion notification.");
+                        "Original native DWGs preserved; only verified Results rows hide original links. " +
+                        "Custom ISO watcher stopped; next SPTC_PRODISO is ready. " +
+                        "Autodesk controls native completion notification.");
                 }
                 return;
             }
@@ -2897,6 +2906,23 @@ internal static class NativeIsoDialogEnhancer
                     }
                     catch (IOException) { }
                     catch (UnauthorizedAccessException) { }
+                }
+
+                // REV124: the Results window reports that the Autodesk
+                // generation job ended. If a selected route DID NOT
+                // generate its new DWGs, waiting the whole ten-minute
+                // horizon cannot fix the missing native source. After
+                // 45 seconds of both source and destination silence,
+                // release the monitor and report an INCOMPLETE batch.
+                // This is explicitly NOT a successful ISO completion.
+                if (_resultsSeen && sourceQuietSeconds >= 45 &&
+                    idleSeconds >= 45)
+                {
+                    SafeLog("\nSPTC REV124: Autodesk Results observed, " +
+                        "but current native DWGs are missing or incomplete; " +
+                        "stopping custom watcher after settled source. " +
+                        "Original source files preserved.");
+                    break;
                 }
 
                 // REV104: FileSystemWatcher is a wake hint, never a
