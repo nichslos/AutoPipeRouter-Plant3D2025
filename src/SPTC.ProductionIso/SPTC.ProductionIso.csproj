@@ -5,10 +5,10 @@
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <OutputType>Library</OutputType>
     <AssemblyName>SPTC.ProductionIso</AssemblyName>
-    <Version>1.0.121</Version>
-    <AssemblyVersion>1.0.121.0</AssemblyVersion>
-    <FileVersion>1.0.121.0</FileVersion>
-    <InformationalVersion>REV121</InformationalVersion>
+    <Version>1.0.122</Version>
+    <AssemblyVersion>1.0.122.0</AssemblyVersion>
+    <FileVersion>1.0.122.0</FileVersion>
+    <InformationalVersion>REV122</InformationalVersion>
     <RootNamespace>SPTC.ProductionIso</RootNamespace>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
