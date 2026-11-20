@@ -2035,6 +2035,11 @@ internal static class NativeIsoDialogEnhancer
 
                 }
 
+                // REV127: redraw the original light-gray Filter hint
+                // after Current / Project / Selected mode changes.
+                // Never replace a nonempty user-entered search.
+                ActiveDwgTags.RestoreOriginalSearchCue(native);
+
                 // Keep native overwrite state synchronized; reading one
                 // checkbox is small, no PnP/database or file operations.
                 CaptureNativeOverwrite(native);
@@ -2338,10 +2343,13 @@ internal static class NativeIsoDialogEnhancer
             _overlay.Show();
 
             ProjectFolderLinePicker.Attach(dialog, _document);
+            // REV127: convert Autodesk's initial Filter hint (if stored
+            // as black literal Text) into the original light-gray Windows
+            // cue BEFORE hooking checkbox/search selection monitoring.
+            ActiveDwgTags.RestoreOriginalSearchCue(dialog);
             NativeIsoLineSelectOverlay.Attach(dialog);
-            // REV126: retain Autodesk's original gray native search cue
-            // "Filter (eg. *52PW*)". Never replace it with real filter text,
-            // and never alter the user's typed search query here.
+            // Cue text is presentation only; real manual searches still
+            // filter automatically through Autodesk's native input.
             // REV20: avoid REV18's eager scan. Folder metadata/line numbers
             // are queried only AFTER the user chooses a folder.
             // Widen native Display lines through a draggable splitter when
@@ -2367,8 +2375,10 @@ internal static class NativeIsoDialogEnhancer
                         _lastDialogClientSize = size;
                         NativeIsoLinePaneResizer.Refresh();
                         PositionOverlay(dialog);
-                        // REV126: leave the native search cue banner and
-                        // user-entered filter text completely untouched.
+                        // REV127: Autodesk can recreate the filter edit
+                        // after resizing. Reapply cue without touching
+                        // an actual nonempty user search.
+                        ActiveDwgTags.RestoreOriginalSearchCue(dialog);
                     }
                 }
             };
