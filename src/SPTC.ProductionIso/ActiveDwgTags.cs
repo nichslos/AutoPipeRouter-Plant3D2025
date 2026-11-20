@@ -356,7 +356,6 @@ internal static class ActiveDwgTags
         _nativeCueEdit = null;
         _nativeCueHandle = IntPtr.Zero;
         _nativeCueDialog = IntPtr.Zero;
-        _nativeCueBusy = false;
     }
 
     private static void OnOriginalCueEnter(object? sender, EventArgs e)
