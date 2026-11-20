@@ -1726,7 +1726,11 @@ internal static class ProjectFolderLinePicker
             }
         };
         _lineHost.Controls.Add(_folderLineList);
-        if (entries.Count == 0)
+        // REV127: toolbar #3 ("Show only selected Line Numbers") must
+        // display an EMPTY checklist when nothing is selected — never
+        // show the unrelated yellow "No verified line numbers in this
+        // folder" label. Keep that notice for actual folder filtering.
+        if (entries.Count == 0 && !_activeDwgView)
         {
             var notice = new Label
             {
