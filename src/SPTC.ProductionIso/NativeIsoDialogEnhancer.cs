@@ -2532,6 +2532,9 @@ internal static class NativeIsoDialogEnhancer
         // REV43: release native search masking handlers when this ISO dialog
         // closes, so reopening starts with Autodesk's normal empty filter.
         ActiveDwgTags.ResetAutoFilterDisplay();
+        // REV128: detach gray-placeholder observers with the native ISO
+        // dialog; no stale TextChanged/Enter handlers on subsequent runs.
+        ActiveDwgTags.ResetOriginalSearchCueTracking();
         CancelFilterVerification();
         try { _layoutWatch?.Stop(); } catch { }
         try { _layoutWatch?.Dispose(); } catch { }
