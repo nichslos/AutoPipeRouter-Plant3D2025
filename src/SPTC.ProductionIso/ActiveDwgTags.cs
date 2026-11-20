@@ -333,57 +333,139 @@ internal static class ActiveDwgTags
         return found;
     }
 
-    // REV127: Autodesk's default prompt must be a LIGHT-GRAY CUE, not
-    // real black search text. The REV44 clear routine removed the native
-    // banner, while REV126 stopped restoring it after scope changes.
-    // Apply this only to the identified native Display lines Filter edit.
-    // Never clear or overwrite a genuine manually typed search query,
-    // or the internal Active-DWG filter tag.
+    // REV128: the Autodesk search bar has two possible implementations:
+    // (1) its default hint is the ACTUAL edit.Text, or
+    // (2) edit.Text is empty and the control draws a Windows cue banner.
+    // REV127 enabled a cue banner even while (1) was in use, painting a
+    // second copy ON TOP of the native hint. Select exactly ONE renderer.
+    // This is presentation-only: actual user searches and native filters
+    // are never replaced or delayed.
     private const string OriginalSearchCue = "Filter (eg. *52PW*)";
+    private static TextBoxBase? _nativeCueEdit;
+    private static IntPtr _nativeCueHandle = IntPtr.Zero;
+    private static IntPtr _nativeCueDialog = IntPtr.Zero;
+    private static bool _nativeCueBusy;
+
+    public static void ResetOriginalSearchCueTracking()
+    {
+        if (_nativeCueEdit is { IsDisposed: false } edit)
+        {
+            edit.Enter -= OnOriginalCueEnter;
+            edit.TextChanged -= OnOriginalCueTextChanged;
+        }
+        _nativeCueEdit = null;
+        _nativeCueHandle = IntPtr.Zero;
+        _nativeCueDialog = IntPtr.Zero;
+        _nativeCueBusy = false;
+    }
+
+    private static void OnOriginalCueEnter(object? sender, EventArgs e)
+    {
+        // Autodesk sometimes exposes the visible hint as literal Text.
+        // Clear that fake query only when the user explicitly focuses
+        // the search edit; from then on the real search is editable.
+        if (sender is TextBoxBase edit &&
+            ReferenceEquals(edit, _nativeCueEdit) &&
+            IsStartupSearchHint(edit.Text))
+        {
+            edit.ForeColor = SystemColors.WindowText;
+            edit.Clear();
+        }
+    }
+
+    private static void OnOriginalCueTextChanged(object? sender, EventArgs e)
+    {
+        if (_nativeCueBusy || sender is not TextBoxBase edit ||
+            !ReferenceEquals(edit, _nativeCueEdit))
+            return;
+        // Update appearance immediately while typing; do not leave a
+        // manually typed query in gray until the next 1-second UI poll.
+        if (!IsStartupSearchHint(edit.Text) &&
+            edit.ForeColor == SystemColors.GrayText &&
+            !(_autoFilterMasked && ReferenceEquals(edit, _autoFilterEdit)))
+            edit.ForeColor = SystemColors.WindowText;
+        RestoreOriginalSearchCue(_nativeCueDialog);
+    }
 
     public static void RestoreOriginalSearchCue(IntPtr dialog)
     {
         if (dialog == IntPtr.Zero) return;
         IntPtr hwnd = FindNativeFilterInput(dialog);
-        if (hwnd == IntPtr.Zero) return;
+        if (hwnd == IntPtr.Zero || _nativeCueBusy) return;
 
         try
         {
+            _nativeCueBusy = true;
             Control? control = Control.FromHandle(hwnd);
+            TextBoxBase? edit = control as TextBoxBase;
 
-            // The original Autodesk prompt can be stored as literal
-            // Text on initial load. Convert ONLY that known hint into a
-            // proper Windows cue banner; never gray out a real query.
-            if (control is TextBoxBase edit)
+            if (_nativeCueHandle != hwnd ||
+                !ReferenceEquals(edit, _nativeCueEdit) ||
+                _nativeCueDialog != dialog)
             {
-                if (IsStartupSearchHint(edit.Text))
-                    edit.Clear();
-                if (control is TextBox box &&
-                    box.PlaceholderText != OriginalSearchCue)
-                    box.PlaceholderText = OriginalSearchCue;
+                ResetOriginalSearchCueTracking();
+                _nativeCueHandle = hwnd;
+                _nativeCueDialog = dialog;
+                _nativeCueEdit = edit;
+                if (edit != null)
+                {
+                    edit.Enter += OnOriginalCueEnter;
+                    edit.TextChanged += OnOriginalCueTextChanged;
+                }
             }
+
+            string actualText;
+            if (edit != null)
+                actualText = edit.Text;
             else
             {
-                var nativeValue = new StringBuilder(256);
-                GetWindowText(hwnd, nativeValue, nativeValue.Capacity);
-                if (IsStartupSearchHint(nativeValue.ToString()))
-                    SetWindowText(hwnd, "");
+                var value = new StringBuilder(256);
+                GetWindowText(hwnd, value, value.Capacity);
+                actualText = value.ToString();
             }
 
-            // Standard Windows cue banners are automatically drawn in
-            // subdued placeholder gray and disappear while typing.
-            // Unlike edit.ForeColor, this never changes real search text.
-            SendMessageText(hwnd, EM_SETCUEBANNER,
-                IntPtr.Zero, OriginalSearchCue);
+            bool literalHint = IsStartupSearchHint(actualText);
+            bool empty = string.IsNullOrEmpty(actualText);
+
+            // ONE cue pathway only. TextBox.PlaceholderText maps to
+            // EM_SETCUEBANNER; sending both was redundant in REV127.
+            // When Autodesk provides the hint as real text, disable the
+            // second overlay entirely and color that literal hint gray.
+            string cue = empty ? OriginalSearchCue : string.Empty;
+            if (control is TextBox box)
+            {
+                if (!string.Equals(box.PlaceholderText, cue,
+                        StringComparison.Ordinal))
+                    box.PlaceholderText = cue;
+            }
+            else
+                SendMessageText(hwnd, EM_SETCUEBANNER,
+                    IntPtr.Zero, cue);
+
+            if (edit != null)
+            {
+                // Do not unhide REV43's internal active-scope query.
+                bool hiddenActiveQuery = _autoFilterMasked &&
+                    ReferenceEquals(edit, _autoFilterEdit) &&
+                    actualText.Trim().Equals(_autoFilterQuery,
+                        StringComparison.OrdinalIgnoreCase);
+                Color target = literalHint && !edit.Focused
+                    ? SystemColors.GrayText
+                    : hiddenActiveQuery && !edit.Focused
+                        ? edit.BackColor
+                        : SystemColors.WindowText;
+                if (edit.ForeColor != target)
+                    edit.ForeColor = target;
+            }
         }
         catch (Exception)
         {
-            // Unsupported Autodesk control: never break native filtering.
+            // Unknown Autodesk native control: preserve its actual input.
         }
+        finally { _nativeCueBusy = false; }
     }
 
-    // Retained for compatibility with legacy callers: restoring the
-    // ORIGINAL gray hint is now correct; do not blank the native banner.
+    // Legacy callers get the SAME idempotent, single-renderer behavior.
     public static void ClearInitialSearchHint(IntPtr dialog) =>
         RestoreOriginalSearchCue(dialog);
 
@@ -456,7 +538,9 @@ internal static class ActiveDwgTags
             ReferenceEquals(edit, _autoFilterEdit) &&
             edit.Text.Trim().Equals(_autoFilterQuery,
                 StringComparison.OrdinalIgnoreCase) && !edit.Focused
-            ? edit.BackColor : SystemColors.WindowText;
+            ? edit.BackColor
+            : IsStartupSearchHint(edit.Text) && !edit.Focused
+                ? SystemColors.GrayText : SystemColors.WindowText;
         if (edit.ForeColor != intended)
             edit.ForeColor = intended;
     }
